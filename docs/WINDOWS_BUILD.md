@@ -1,13 +1,12 @@
 # AirDAW: Windows build and first-run guide
 
-Goal of this first Windows session: confirm that AirDAW builds, that the engine tests pass on your machine,
-and that your Black Lion Revolution 2x2 runs through ASIO at low latency. Nothing here has been run on
-Windows yet, so expect to fix a few small things; Claude Code on your PC is the fastest way to do that
-(see "Using Claude Code" at the end).
+How to build AirDAW on Windows, check that the engine tests pass, and get a Black Lion Revolution 2x2 (or another
+interface) running through ASIO at low latency. AirDAW builds and runs on Windows 11 with Visual Studio 2022 Build Tools;
+Claude Code on your PC is the fastest way to fix anything that breaks (see "Using Claude Code" at the end).
 
 ## 1. Install the tools (one time)
 
-1. **Visual Studio 2022 Community** (free): https://visualstudio.microsoft.com/downloads/
+1. **Visual Studio 2022 Community** or newer (free): https://visualstudio.microsoft.com/downloads/
    In the installer choose the workload **Desktop development with C++**. It includes the compiler, the Windows SDK,
    CMake and Ninja. (Build Tools only is fine too.)
 2. **Git for Windows**: https://git-scm.com/download/win
@@ -21,8 +20,11 @@ Windows yet, so expect to fix a few small things; Claude Code on your PC is the 
 
 ## 2. Get the source
 
-Unzip `airdaw-source.zip` to `C:\dev\airdaw` (or `git clone` it if you pushed it to GitHub with `--recursive`).
-The zip does not contain the big libraries, so fetch them (PowerShell):
+Clone it with the libraries (PowerShell):
+
+    git clone --recursive https://github.com/pablopavel/AirDAW C:\dev\airdaw
+
+From a zip without the libraries, fetch them instead:
 
     cd C:\dev\airdaw
     git clone --depth 1 https://github.com/juce-framework/JUCE third_party/JUCE
@@ -57,18 +59,19 @@ The program is `build\AirDAW_artefacts\Release\AirDAW.exe`.
 
 Run `AirDAW.exe` and work down this list. Note what works and what does not.
 
-1. **Device:** in the device list choose type **ASIO** and device **Black Lion Revolution 2x2**.
-   Set sample rate **96000** and buffer **64** (try 128 if you hear crackles).
-   Check the status line at the top: driver, kHz, buffer, "round-trip ~ x ms", DSP %.
+1. **Device:** click the rate / latency / DSP readouts at the top right (or **Project > Audio settings**). Choose type
+   **ASIO** and device **Black Lion Audio Driver** (that is the Revolution 2x2's ASIO driver name).
+   Set sample rate **96000** and buffer **64** (try 128 if you hear crackles). The readouts show rate, buffer, latency
+   and DSP %, and the footer shows the device. AirDAW remembers the device for the next launch.
    If ASIO is missing from the type list, the SDK path was not applied (re-run the cmake configure step).
-2. **Output:** tick **Test tone on track 1**. You should hear a clean 440 Hz tone and see the meter move.
-3. **Input and recording:** plug a mic or instrument into input 1, tick **Arm 1**, press **Rec**, talk or play for a
-   few seconds, press **Stop**. Look in `Documents\AirDAW\Untitled\audio\`: you should find
+2. **Output:** in Audio settings tick **Test tone on track 1**. You should hear a clean 440 Hz tone and see the meter move.
+3. **Input and recording:** plug a mic or instrument into input 1, press **R** on track 1 (it picks In 1), press **Rec**,
+   play for a few seconds, press **Stop**. Look in `Documents\AirDAW\Untitled\audio\`: you should find
    `TRACK_1_take001.wav`. Press **|<** then **Play** to hear it back.
-4. **Save and auto-save:** press **Save As...**, save a session; tick **Auto-save every** and pick an interval;
-   check that an `autosave` folder appears next to your session after the interval passes.
+4. **Save and auto-save:** **Project > Save As...** creates a project folder; turn on **Auto-save every** in Audio settings
+   and check that an `autosave` folder appears in the project after the interval.
 5. **Hit Record Meter:** download the VST3 from https://github.com/airwindows/Meter/releases, press
-   **Hit Record Meter...**, select the `.vst3` file. Its window should open and react to audio.
+   **Load Hit Record Meter...** in the meter dock, select the `.vst3` file. Its display should react to audio.
 6. **Latency reality check (optional but valuable):** connect output 1 to input 1 with a cable, record a click,
    and measure the offset in any audio editor. That is your true round trip.
 
@@ -85,7 +88,13 @@ Run `AirDAW.exe` and work down this list. Note what works and what does not.
 - **Linker error mentioning `RuntimeLibrary` / `MT_StaticRelease` vs `MD_DynamicRelease`:** delete the `build` folder
   and configure again; all targets are meant to use the static runtime.
 - **ASIO device missing or fails to open:** close other programs using the interface, confirm the Black Lion control
-  panel shows the same sample rate, and try 128 or 256 samples.
+  panel shows the same sample rate, and try 128 or 256 samples. The device is listed as **Black Lion Audio Driver**.
+- **AirDAW is slow to open, then has no audio** (footer: "AUDIO DEVICE NOT ANSWERING", log: "Can't create i/o buffers"):
+  the interface's driver is stuck, typically after a USB hiccup such as plugging another device into the same hub.
+  Close every audio program, unplug the interface (or switch it off) for 10 seconds, plug it back in, and choose it under
+  Audio. If that does not help, restart Windows. Plug MIDI controllers into a different USB port than the interface.
+- **Something odd at startup, with devices or MIDI:** AirDAW writes `%APPDATA%\AirDAW\AirDAW.log` at every launch (how
+  long the audio device took to open, errors, MIDI controllers switched on). Include it when reporting a problem.
 - **Crackles at low buffer sizes:** try raising the buffer first; then tell us the DSP% shown.
 - **VST3 will not load:** note the message shown in the notice line; some plugins need 64-bit builds and the
   correct folder structure (the whole `.vst3` folder or file must be selected).

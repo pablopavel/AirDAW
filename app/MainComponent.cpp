@@ -1052,6 +1052,7 @@ void MainComponent::runScenario(const juce::String& name) {
   if (name == "add") { inserts_.show(0, 3); }
   if (name == "display") toggleDisplayPanel();
   if (name == "plugins") togglePluginsPanel();
+  if (name == "plugins-check") { togglePluginsPanel(); pluginsPanel_.check(); }  // test hook: a real check against GitHub
   if (name == "settings") showAudioSettings();
   if (name == "plugins-install") {  // test hook: a local feed with a different build, check + install (no network)
     const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw-test-feed");
@@ -1160,7 +1161,7 @@ void MainComponent::runScenario(const juce::String& name) {
 void MainComponent::takeSnapshot(const juce::File& png, const juce::String& scenario) {
   juce::Timer::callAfterDelay(1500, [this, png, scenario] {
     runScenario(scenario);
-    juce::Timer::callAfterDelay(scenario == "export" || scenario == "plugins-install" ? 12000 : 1500, [this, png] {  // an export needs time to finish
+    juce::Timer::callAfterDelay(scenario == "export" || scenario == "plugins-install" || scenario == "plugins-check" ? 12000 : 1500, [this, png] {  // an export needs time to finish
       juce::Component* top = getTopLevelComponent();
       if (pluginInfo_ && pluginInfo_->isVisible()) top = pluginInfo_.get();  // "info" scenario: picture the About window
       if (midiWindow_ && midiWindow_->isVisible()) top = midiWindow_.get();

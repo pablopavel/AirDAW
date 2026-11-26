@@ -33,9 +33,12 @@ Last updated: 2026-11-26
 - [ ] A plugin knob mapping is saved with the project and comes back after reopening it.
 - [ ] Mappings survive a restart of AirDAW; the Mappings window can change a mapping's mode and remove it.
 
-## Plugins panel (after the first plugin-library release exists)
-- [ ] Plugins > Check now finds the release (up to date, or an update).
-- [ ] Install update, restart AirDAW: the panel shows the new build; Roll back returns to the previous one.
+## Plugins panel
+The first plugin-library release exists (airwindows-2026.11.22-91b3343, the same build as the built-in copy), and a
+check from AirDAW against GitHub answers "up to date". Installing can only be tried once Airwindows publishes something
+newer (the workflow checks every Monday).
+- [ ] When Plugins shows an amber dot / "Update available": Install update, restart AirDAW, the panel shows the new build.
+- [ ] Roll back, restart: the previous build is back.
 
 ## Audio device
 - [ ] If the interface drops out (USB), AirDAW reconnects by itself; if the driver is stuck, the footer says so and the window stays responsive.
