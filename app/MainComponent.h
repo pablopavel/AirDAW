@@ -2,6 +2,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <memory>
 #include "AudioBridge.h"
+#include "PluginWindow.h"
 
 class MainComponent : public juce::Component, private juce::Timer {
  public:
@@ -18,6 +19,9 @@ class MainComponent : public juce::Component, private juce::Timer {
   void applyAutoSaveSettings();
   void checkRecovery();
   void collectTakes();
+  void chooseMeterPlugin();
+  void openMeterEditor();
+  void loadMeter(const juce::File& vst3);
   juce::File sessionFolder() const;
   juce::String sessionName() const;
   void note(const juce::String& s) { notice_ = s; noticeUntil_ = juce::Time::getMillisecondCounter() + 6000; }
@@ -28,6 +32,8 @@ class MainComponent : public juce::Component, private juce::Timer {
   juce::TextButton rtz_{"|<"}, play_{"Play"}, stop_{"Stop"}, rec_{"Rec"};
   juce::ToggleButton arm1_{"Arm 1 (in 1)"}, arm2_{"Arm 2 (in 2)"}, tone_{"Test tone on track 1"};
   juce::TextButton save_{"Save"}, saveAs_{"Save As..."}, open_{"Open..."}, new_{"New"};
+  juce::TextButton meter_{"Hit Record Meter..."}, meterEd_{"Meter window"};
+  std::unique_ptr<PluginWindow> meterWindow_;
   juce::ToggleButton autoSave_{"Auto-save every"};
   juce::ComboBox autoEvery_;
   juce::Label status_, pos_, notice_label_;

@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include "airdaw/fx_host.h"
+#include "airdaw/insert.h"
 #include "airdaw/spsc.h"
 #include "airdaw/transport.h"
 #include "airdaw/disk_writer.h"
@@ -42,7 +43,7 @@ struct Channel {
   std::atomic<bool> armed{false};
   std::atomic<int> inputL{-1}, inputR{-1};  // hardware input index, -1 none
   Meter meter;
-  std::array<FxInstance*, kMaxInserts> insert{};  // audio-thread-owned pointers
+  std::array<InsertProcessor*, kMaxInserts> insert{};  // audio-thread-owned pointers
   std::atomic<const Take*> take{nullptr};         // active take for playback
   bool recActive = false;                          // audio thread only
   float smoothGain = 1.f, smoothTrim = 1.f;       // audio thread only
@@ -61,8 +62,13 @@ class Engine {
 
   // --- UI thread ---
   // channelId: 0..23 tracks, 100..103 buses, 200 master.
-  bool setInsert(int channelId, int slot, const std::string& effect);  // empty = remove
-  FxInstance* insertAt(int channelId, int slot);  // UI-side view (owned by the engine)
+  bool setInsert(int channelId, int slot, const std::string& effect);  // Airwindows by name; empty = remove
+  // Installs a ready-made insert (e.g. a hosted VST3). The engine takes ownership.
+  bool setInsertProcessor(int channelId, int slot, std::unique_ptr<InsertProcessor> p);
+  // Used by session loading for ids that are not Airwindows names ("vst3:...").
+  void setInsertFactory(InsertFactory f) { factory_ = std::move(f); }
+  InsertFactory& insertFactory() { return factory_; }
+  InsertProcessor* insertAt(int channelId, int slot);  // UI-side view (owned by the engine)
   void collectGarbage();                           // frees retired inserts
 
   // --- transport & recording (UI thread) ---
@@ -84,10 +90,11 @@ class Engine {
   void process(const float* const* in, int nIn, float* const* out, int nOut, int n);
 
   // Fixed latency the engine adds (0: all Airwindows inserts are zero-latency).
+  // Latency the engine adds. Hosted plugins that report latency are NOT yet delay-compensated.
   int latencySamples() const { return 0; }
 
  private:
-  struct Cmd { int channelId; int slot; FxInstance* fx; };
+  struct Cmd { int channelId; int slot; InsertProcessor* fx; };
   Channel* resolve(int id);
   void applyCommands();
   void runChain(Channel& c, float* l, float* r, int n);
@@ -101,10 +108,11 @@ class Engine {
   std::array<Channel, kNumBuses> buses_;
   Channel master_;
   // UI-side ownership map (what the UI believes is installed).
-  std::array<std::array<std::unique_ptr<FxInstance>, kMaxInserts>, kMaxTracks + kNumBuses + 1> owned_;
-  std::vector<std::unique_ptr<FxInstance>> retiring_;  // removed, awaiting return from audio thread
+  std::array<std::array<std::unique_ptr<InsertProcessor>, kMaxInserts>, kMaxTracks + kNumBuses + 1> owned_;
+  std::vector<std::unique_ptr<InsertProcessor>> retiring_;
+  InsertFactory factory_;  // removed, awaiting return from audio thread
   Spsc<Cmd, 1024> toAudio_;
-  Spsc<FxInstance*, 1024> fromAudio_;
+  Spsc<InsertProcessor*, 1024> fromAudio_;
 
   std::array<std::vector<float>, 2> busBuf_[kNumBuses];
   std::array<std::vector<float>, 2> masterBuf_;

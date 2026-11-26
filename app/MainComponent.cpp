@@ -1,4 +1,7 @@
 #include "MainComponent.h"
+#include "Vst3Insert.h"
+
+static constexpr int kMeterSlot = 7;  // last master insert slot: the meter listens to the final mix
 
 static juce::String timeText(double sec) {
   int ms = (int)std::fmod(sec * 1000.0, 1000.0), s = (int)sec % 60, m = ((int)sec / 60) % 60, h = (int)sec / 3600;
@@ -11,13 +14,18 @@ MainComponent::MainComponent() {
   opt.folderName = "AirDAW";
   props_ = std::make_unique<juce::PropertiesFile>(opt);
 
+  bridge_.setInsertFactory([](const std::string& id, double sr) -> std::unique_ptr<airdaw::InsertProcessor> {
+    if (id.rfind("vst3:", 0) != 0) return nullptr;
+    juce::String err;
+    return Vst3Insert::load(juce::File(juce::String(id.substr(5))), sr, err);
+  });
   juce::String err = devices_.initialiseWithDefaultDevices(2, 2);  // Black Lion Revolution 2x2 is 2-in/2-out
   if (err.isNotEmpty()) juce::Logger::writeToLog("Audio init: " + err);
   devices_.addAudioCallback(&bridge_);
 
   selector_ = std::make_unique<juce::AudioDeviceSelectorComponent>(devices_, 0, 2, 0, 2, false, false, true, false);
   for (juce::Component* c : std::initializer_list<juce::Component*>{selector_.get(), &rtz_, &play_, &stop_, &rec_, &arm1_, &arm2_, &tone_,
-       &save_, &saveAs_, &open_, &new_, &autoSave_, &autoEvery_, &status_, &pos_, &notice_label_})
+       &save_, &saveAs_, &open_, &new_, &meter_, &meterEd_, &autoSave_, &autoEvery_, &status_, &pos_, &notice_label_})
     addAndMakeVisible(*c);
 
   rtz_.onClick = [this] { if (auto* e = bridge_.engine()) e->transport().seek(0); };
@@ -35,6 +43,8 @@ MainComponent::MainComponent() {
   arm2_.onClick = [this] { if (auto* e = bridge_.engine()) { e->track(1).inputL = 1; e->track(1).stereo = false; e->track(1).armed = arm2_.getToggleState(); } };
   tone_.onClick = [this] { bridge_.testTone = tone_.getToggleState(); };
 
+  meter_.onClick = [this] { chooseMeterPlugin(); };
+  meterEd_.onClick = [this] { openMeterEditor(); };
   new_.onClick = [this] { newSession(); };
   open_.onClick = [this] { openSession(); };
   save_.onClick = [this] { saveSession(false); };
@@ -60,6 +70,7 @@ MainComponent::MainComponent() {
 }
 
 MainComponent::~MainComponent() {
+  meterWindow_.reset();
   devices_.removeAudioCallback(&bridge_);
   props_->saveIfNeeded();
 }
@@ -148,6 +159,36 @@ void MainComponent::checkRecovery() {
       });
 }
 
+void MainComponent::chooseMeterPlugin() {
+  // The Airwindows Hit Record Meter is a separate VST3 (not part of Consolidated); the user picks the file once.
+  auto start = juce::File(props_->getValue("meterPath", juce::File::getSpecialLocation(juce::File::userHomeDirectory).getFullPathName()));
+  chooser_ = std::make_shared<juce::FileChooser>("Select the Hit Record Meter .vst3", start.getParentDirectory(), "*.vst3");
+  chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles |
+                        juce::FileBrowserComponent::canSelectDirectories,  // some platforms ship VST3 as a bundle folder
+      [this](const juce::FileChooser& c) { auto f = c.getResult(); if (f != juce::File()) loadMeter(f); });
+}
+
+void MainComponent::loadMeter(const juce::File& vst3) {
+  auto* e = bridge_.engine(); if (!e) return;
+  juce::String err;
+  auto ins = Vst3Insert::load(vst3, e->sampleRate(), err);
+  if (!ins) { note("Meter load failed: " + err); return; }
+  props_->setValue("meterPath", vst3.getFullPathName()); props_->saveIfNeeded();
+  if (!e->setInsertProcessor(200, kMeterSlot, std::move(ins))) { note("Could not install the meter"); return; }
+  note("Meter loaded on master insert " + juce::String(kMeterSlot + 1));
+  openMeterEditor();
+}
+
+void MainComponent::openMeterEditor() {
+  auto* e = bridge_.engine(); if (!e) return;
+  auto* v = dynamic_cast<Vst3Insert*>(e->insertAt(200, kMeterSlot));
+  if (!v) { note("No meter loaded yet"); return; }
+  meterWindow_.reset();
+  meterWindow_ = std::make_unique<PluginWindow>(v->plugin(), [this] {
+    juce::MessageManager::callAsync([this] { meterWindow_.reset(); });  // never delete a window inside its own callback
+  });
+}
+
 void MainComponent::collectTakes() {
   auto* e = bridge_.engine(); if (!e) return;
   for (auto& t : e->pollFinishedTakes()) {
@@ -161,6 +202,7 @@ void MainComponent::timerCallback() {
   auto* e = bridge_.engine();
   if (e && e != autoEngine_) {  // first run, or the engine was rebuilt for a new sample rate
     autoEngine_ = e;
+    meterWindow_.reset();  // the engine (and its hosted plugins) was rebuilt
     autoSaver_ = std::make_unique<airdaw::AutoSaver>(*e);
     setSessionFile(sessionFile_);
     applyAutoSaveSettings();
@@ -210,6 +252,7 @@ void MainComponent::resized() {
   tone_.setBounds(r.removeFromTop(26));
   row = r.removeFromTop(34);
   for (auto* b : {&new_, &open_, &save_, &saveAs_}) b->setBounds(row.removeFromLeft(90).reduced(2));
+  meter_.setBounds(row.removeFromLeft(150).reduced(2)); meterEd_.setBounds(row.removeFromLeft(110).reduced(2));
   row.removeFromLeft(10);
   autoSave_.setBounds(row.removeFromLeft(140)); autoEvery_.setBounds(row.removeFromLeft(90).reduced(0, 4));
   notice_label_.setBounds(r.removeFromTop(26));

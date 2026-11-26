@@ -19,12 +19,16 @@ class AudioBridge : public juce::AudioIODeviceCallback {
   // Built-in test signal into track 1 so the output path can be checked with no inputs connected.
   std::atomic<bool> testTone{false};
 
+  // How sessions recreate hosted plugins (VST3). Applied to the current and every future engine.
+  void setInsertFactory(airdaw::InsertFactory f) { factory_ = std::move(f); if (owned_) owned_->setInsertFactory(factory_); }
+
   void audioDeviceAboutToStart(juce::AudioIODevice* d) override {
     // Called with audio stopped. Rebuild the engine if the device runs at a new sample rate.
     const double sr = d->getCurrentSampleRate();
     if (!owned_ || owned_->sampleRate() != sr) {
       // New sample rate: carry the session over into a fresh engine (inserts are created per rate).
       auto fresh = std::make_unique<airdaw::Engine>(sr);
+      fresh->setInsertFactory(factory_);
       if (owned_) {
         auto tmp = (std::filesystem::temp_directory_path() / "airdaw_rate_change.airdaw").string();
         if (airdaw::saveSession(*owned_, tmp).ok) airdaw::loadSession(*fresh, tmp);
@@ -64,6 +68,7 @@ class AudioBridge : public juce::AudioIODeviceCallback {
   double sampleRate() const { return sr_; }
 
  private:
+  airdaw::InsertFactory factory_;
   std::unique_ptr<airdaw::Engine> owned_;
   std::atomic<airdaw::Engine*> engine_{nullptr};
   std::vector<float> tone_;

@@ -19,8 +19,9 @@ App shell (app/): JUCE window with device selector (ASIO/WASAPI/JACK/ALSA), live
 Recording (core/): lock-free disk writer, 32-bit float WAV, transport with punch in/out and loop-pass takes (each loop pass = own take file), take playback; tests verify bit-exact audio and sample-accurate punch/loop points.
 Sessions (core/): JSON `.airdaw` files (mixer, insert parameters, takes, loop/punch), atomic save with `.bak`; timed auto-save (30 s to 1 h, rolling copies, skips while recording, skips if unchanged, crash-recovery prompt at startup). Tested headless.
 App window: transport, arm 1-2, session New/Open/Save, auto-save toggle + interval. Syntax-checked against JUCE only (no linking or running here).
-Next: VST3 hosting (Hit Record Meter), multithreaded engine, GUI port of the mockup, mixer controls in the app.
+VST3 hosting (app/Vst3Insert.h, PluginWindow.h): any VST3 can sit in an insert slot (stereo in/out, state saved in sessions); the app has a "Hit Record Meter..." button that loads it into master insert 8 and opens its own GUI. Engine side tested with a stand-in plugin; the JUCE hosting code is syntax-checked only (no real VST3 available here).
+Next: multithreaded engine, GUI port of the mockup, mixer controls in the app.
 
 ## Decisions
-- Hit Record Meter is not part of Consolidated; it is hosted as a VST3 via JUCE plugin hosting (user supplies the .vst3 from airwindows.com).
+- Hit Record Meter is not part of Consolidated; it is hosted as a VST3 via JUCE plugin hosting (download from github.com/airwindows/Meter/releases: VST3 for Windows/Linux/Mac; then use the app's Hit Record Meter button).
 - Single-threaded engine hit ~96% of a core at 108 inserts, 96 kHz, 64-sample blocks on a slow test box: multithreading is planned.

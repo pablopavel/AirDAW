@@ -195,6 +195,26 @@ int main() {
     as.configure({false, 30, 3}); e.track(0).gainDb = -1.f; CHECK(as.tick(1000).empty() && as.tick(2000).empty(), "disabled saves nothing");
     std::printf("autosave: interval, change detection, recording guard, rotation, recovery OK\n"); }
 
+  // 16. Non-Airwindows inserts (stand-in for hosted VST3): process, session round trip via factory
+  { struct Gain2 : InsertProcessor {  // doubles the signal; state blob = its own setting
+      std::string n = "TestGain"; std::vector<FxParamInfo> ps{{"Amount", "", 0.5f}}; std::atomic<float> v{0.5f}; bool bp = false; std::string st;
+      const std::string& name() const override { return n; }
+      std::string sessionId() const override { return "test:gain"; }
+      int numParams() const override { return 1; } const std::vector<FxParamInfo>& params() const override { return ps; }
+      void setParam(int, float x) override { v = x; } float getParam(int) const override { return v; }
+      std::string paramDisplay(int) override { return "x"; } void setBypass(bool b) override { bp = b; } bool bypassed() const override { return bp; }
+      std::string saveState() override { return "state-" + std::to_string(int(v * 100)); }
+      void loadState(const std::string& s) override { st = s; v = std::stoi(s.substr(6)) / 100.f; }
+      void process(float* l, float* r, int n) override { for (int i = 0; i < n; ++i) { l[i] *= 2 * v; r[i] *= 2 * v; } } };
+    auto dir = tmpDir(); Engine a(SR); a.setInsertFactory([](const std::string& id, double) -> std::unique_ptr<InsertProcessor> { return id == "test:gain" ? std::make_unique<Gain2>() : nullptr; });
+    a.track(0).inputL = 0; a.track(0).pan = -1.f; auto g = std::make_unique<Gain2>(); g->v = 0.25f; a.setInsertProcessor(0, 0, std::move(g));
+    long k = 0; auto out = stream(a, k, 400); CHECK(std::fabs(out[300] - sigAt(300) * 0.5f) < 1e-6f, "hosted insert processes audio");
+    CHECK(saveSession(a, dir + "/h.airdaw").ok, "save hosted");
+    Engine b(SR); b.setInsertFactory(a.insertFactory()); auto lr = loadSession(b, dir + "/h.airdaw");
+    CHECK(lr.ok && lr.warnings.empty() && b.insertAt(0, 0) && std::fabs(b.insertAt(0, 0)->getParam(0) - 0.25f) < 1e-6f, "hosted insert restored from state blob");
+    Engine c(SR); auto lr2 = loadSession(c, dir + "/h.airdaw"); CHECK(lr2.ok && !lr2.warnings.empty(), "no factory -> warning only");
+    std::printf("hosted-insert interface: processing, state blob, factory restore OK\n"); }
+
   // 9. Load benchmark: 24 tracks x 4 inserts + 4 buses x 2 + master x 2, 96 kHz, 64-sample blocks
   { Engine e(SR);
     const char* chain[4] = {"Console7Channel", "Density2", "ToTape8", "Pressure5"};

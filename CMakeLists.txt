@@ -32,10 +32,10 @@ set(AIRDAW_ASIO_SDK "" CACHE PATH "Path to the Steinberg ASIO SDK (GPLv3 option)
 if(AIRDAW_BUILD_APP)
   add_subdirectory(third_party/JUCE EXCLUDE_FROM_ALL)
   juce_add_gui_app(AirDAW PRODUCT_NAME "AirDAW" COMPANY_NAME "trashmannightcrawler")
-  target_sources(AirDAW PRIVATE app/Main.cpp app/MainComponent.cpp app/MainComponent.h app/AudioBridge.h)
+  target_sources(AirDAW PRIVATE app/Main.cpp app/MainComponent.cpp app/MainComponent.h app/AudioBridge.h app/Vst3Insert.h app/PluginWindow.h)
   target_include_directories(AirDAW PRIVATE app)
   target_compile_definitions(AirDAW PRIVATE
-    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_APPLICATION_NAME_STRING="AirDAW" JUCE_APPLICATION_VERSION_STRING="0.1.0")
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_VST=0 JUCE_PLUGINHOST_LADSPA=0 JUCE_PLUGINHOST_LV2=0 JUCE_PLUGINHOST_AU=0 JUCE_APPLICATION_NAME_STRING="AirDAW" JUCE_APPLICATION_VERSION_STRING="0.1.0")
   if(WIN32)
     target_compile_definitions(AirDAW PRIVATE JUCE_WASAPI=1 JUCE_DIRECTSOUND=0)
     if(AIRDAW_ASIO_SDK)
@@ -52,7 +52,7 @@ if(AIRDAW_BUILD_APP)
     endif()
   endif()
   target_link_libraries(AirDAW PRIVATE airdaw_core
-    juce::juce_audio_basics juce::juce_audio_devices juce::juce_audio_utils
+    juce::juce_audio_basics juce::juce_audio_devices juce::juce_audio_processors juce::juce_audio_utils
     juce::juce_gui_basics juce::juce_events juce::juce_core
     juce::juce_recommended_config_flags)
 endif()

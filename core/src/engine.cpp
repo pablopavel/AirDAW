@@ -58,28 +58,33 @@ static int ownedIndex(int id) {
   return kMaxTracks + kNumBuses;  // master
 }
 
-bool Engine::setInsert(int channelId, int slot, const std::string& effect) {
+bool Engine::setInsertProcessor(int channelId, int slot, std::unique_ptr<InsertProcessor> fresh) {
   if (!resolve(channelId) || slot < 0 || slot >= kMaxInserts) return false;
-  std::unique_ptr<FxInstance> fresh;
-  if (!effect.empty()) {
-    fresh = FxInstance::create(effect, sr_);
-    if (!fresh) return false;
-  }
   auto& own = owned_[ownedIndex(channelId)][slot];
-  FxInstance* raw = fresh.get();
+  InsertProcessor* raw = fresh.get();
   if (!toAudio_.push({channelId, slot, raw})) return false;  // queue full: nothing changed
   if (own) retiring_.push_back(std::move(own));
   own = std::move(fresh);
   return true;
 }
 
-FxInstance* Engine::insertAt(int channelId, int slot) {
+bool Engine::setInsert(int channelId, int slot, const std::string& effect) {
+  if (!resolve(channelId) || slot < 0 || slot >= kMaxInserts) return false;
+  std::unique_ptr<InsertProcessor> fresh;
+  if (!effect.empty()) {
+    fresh = FxInstance::create(effect, sr_);
+    if (!fresh) return false;
+  }
+  return setInsertProcessor(channelId, slot, std::move(fresh));
+}
+
+InsertProcessor* Engine::insertAt(int channelId, int slot) {
   if (!resolve(channelId) || slot < 0 || slot >= kMaxInserts) return nullptr;
   return owned_[ownedIndex(channelId)][slot].get();
 }
 
 void Engine::collectGarbage() {
-  FxInstance* p;
+  InsertProcessor* p;
   while (fromAudio_.pop(p)) {
     retiring_.erase(std::remove_if(retiring_.begin(), retiring_.end(),
                                    [p](const auto& u) { return u.get() == p; }),
@@ -92,7 +97,7 @@ void Engine::applyCommands() {
   while (toAudio_.pop(c)) {
     Channel* ch = resolve(c.channelId);
     if (!ch) continue;
-    FxInstance* old = ch->insert[c.slot];
+    InsertProcessor* old = ch->insert[c.slot];
     ch->insert[c.slot] = c.fx;
     if (old) fromAudio_.push(old);
   }

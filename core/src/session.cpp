@@ -45,9 +45,11 @@ std::string sessionToJson(Engine& e, const std::string& baseDir) {
     JVal ins = JVal::arr();
     for (int s = 0; s < kMaxInserts; ++s)
       if (auto* fx = e.insertAt(id, s)) {
-        JVal f = JVal::obj(); f.set("slot", JVal::num(s)).set("effect", JVal::str(fx->name())).set("bypass", JVal::boolean(fx->bypassed()));
+        JVal f = JVal::obj(); f.set("slot", JVal::num(s)).set("effect", JVal::str(fx->sessionId())).set("bypass", JVal::boolean(fx->bypassed()));
         JVal ps = JVal::arr(); for (int p = 0; p < fx->numParams(); ++p) ps.push(JVal::num(fx->getParam(p)));
-        f.set("params", ps); ins.push(f);
+        f.set("params", ps);
+        std::string st = fx->saveState(); if (!st.empty()) f.set("state", JVal::str(st));
+        ins.push(f);
       }
     j.set("inserts", ins);
     if (id < kMaxTracks) {
@@ -106,10 +108,17 @@ SessionResult loadSession(Engine& e, const std::string& path) {
     c.inputL = (int)j.num("inputL", -1); c.inputR = (int)j.num("inputR", -1);
     if (auto* ins = j.get("inserts")) for (auto& f : ins->a) {
       int slot = (int)f.num("slot", -1); std::string name = f.text("effect");
-      if (!e.setInsert(id, slot, name)) { r.warnings.push_back("plugin '" + name + "' on " + c.name + " could not be loaded"); continue; }
+      bool made;
+      if (name.find(':') != std::string::npos) {  // hosted plugin, e.g. "vst3:/path/Meter.vst3"
+        std::unique_ptr<InsertProcessor> p = e.insertFactory() ? e.insertFactory()(name, e.sampleRate()) : nullptr;
+        made = p && e.setInsertProcessor(id, slot, std::move(p));
+      } else made = e.setInsert(id, slot, name);
+      if (!made) { r.warnings.push_back("plugin '" + name + "' on " + c.name + " could not be loaded"); continue; }
       if (auto* fx = e.insertAt(id, slot)) {
         fx->setBypass(f.flag("bypass", false));
-        if (auto* ps = f.get("params")) for (size_t p = 0; p < ps->a.size() && (int)p < fx->numParams(); ++p) fx->setParam((int)p, (float)ps->a[p].n);
+        std::string st = f.text("state");
+        if (!st.empty()) fx->loadState(st);
+        else if (auto* ps = f.get("params")) for (size_t p = 0; p < ps->a.size() && (int)p < fx->numParams(); ++p) fx->setParam((int)p, (float)ps->a[p].n);
       }
     }
     if (id < kMaxTracks) {
