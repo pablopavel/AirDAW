@@ -3,64 +3,97 @@
 #include <memory>
 #include "AudioBridge.h"
 #include "PluginWindow.h"
+#include "ui/AirLookAndFeel.h"
+#include "ui/AppCtx.h"
+#include "ui/Deck.h"
+#include "ui/DisplayPanel.h"
+#include "ui/InsertPanel.h"
+#include "ui/MeterDock.h"
+#include "ui/Mixer.h"
+#include "ui/Overview.h"
+#include "ui/SettingsWindow.h"
 
-class MainComponent : public juce::Component, private juce::Timer {
+// The AirDAW main window (layout and look from docs/airdaw-v4.html):
+// deck | song overview | insert panel (when open) | mixer | meter dock | footer.
+class MainComponent : public juce::Component, private juce::Timer, private juce::ChangeListener, private juce::KeyListener {
  public:
-  MainComponent();
+  explicit MainComponent(bool snapshotMode = false);
   ~MainComponent() override;
   void paint(juce::Graphics&) override;
   void resized() override;
+
+  // Test hook: set up a named UI state, save a PNG of the window, quit. Not used in normal runs.
+  void takeSnapshot(const juce::File& png, const juce::String& scenario);
+
  private:
+  // --- app logic (projects, recording, devices) ---
   void timerCallback() override;
+  void changeListenerCallback(juce::ChangeBroadcaster*) override;
+  bool keyPressed(const juce::KeyPress&, juce::Component*) override;
+  void transport(ui::TransportKeys::Key k);
+  void showProjectMenu();
   void newSession();
   void openSession();
   void saveSession(bool saveAs);
   void saveProjectAs(const juce::File& chosen);
-  static juce::File projectsRoot();   // Documents/AirDAW
-  static juce::File scratchFolder();  // Documents/AirDAW/Untitled (unsaved session)
   void setSessionFile(const juce::File& f);
   void applyAutoSaveSettings();
   void checkRecovery();
   void collectTakes();
   void chooseMeterPlugin();
-  void openMeterEditor();
-  void loadMeter(const juce::File& vst3);
-  bool audioRunning() const { return audioRunning_; }
-  bool requireAudio(const char* what);  // shows why `what` cannot work when no audio is running
+  void loadMeter(const juce::File& vst3, bool quiet = false);
+  void openPluginWindow(int channelId, int slot);
   void updateDeviceStatus();
-  void syncMetronomeControls();
-  void applyMetronome();
+  bool requireAudio(const char* what);
+  void toggleDisplayPanel();
+  void showAudioSettings();
+  void applyTheme();
+  void note(const juce::String& s, bool warn = false);
+  void runScenario(const juce::String& name);
   juce::File sessionFolder() const;
   juce::String sessionName() const;
-  void note(const juce::String& s) { notice_ = s; noticeUntil_ = juce::Time::getMillisecondCounter() + 6000; }
+  static juce::File projectsRoot();   // Documents/AirDAW
+  static juce::File scratchFolder();  // Documents/AirDAW/Untitled (unsaved session)
+  static std::unique_ptr<juce::PropertiesFile> makeProps();
 
+  const bool snapshotMode_;
   juce::AudioDeviceManager devices_;
   AudioBridge bridge_;
-  std::unique_ptr<juce::AudioDeviceSelectorComponent> selector_;
-  juce::TextButton rtz_{"|<"}, play_{"Play"}, stop_{"Stop"}, rec_{"Rec"};
-  juce::ToggleButton arm1_{"Arm 1 (in 1)"}, arm2_{"Arm 2 (in 2)"}, tone_{"Test tone on track 1"};
-  juce::TextButton save_{"Save"}, saveAs_{"Save As..."}, open_{"Open..."}, new_{"New"};
-  juce::TextButton meter_{"Hit Record Meter..."}, meterEd_{"Meter window"};
-  std::unique_ptr<PluginWindow> meterWindow_;
-  juce::ToggleButton autoSave_{"Auto-save every"};
-  juce::ComboBox autoEvery_;
-  juce::Label lastAutoSave_;
-  juce::ToggleButton metro_{"Metronome"};
-  juce::Slider bpm_{juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft}, clickLevel_{juce::Slider::LinearHorizontal, juce::Slider::NoTextBox};
-  juce::ComboBox beats_, countIn_;
-  juce::Label bpmLabel_{{}, "BPM"}, levelLabel_{{}, "Click"};
-  juce::Label status_, pos_, notice_label_;
-  bool audioRunning_ = false;
-  juce::uint32 lastCallbacks_ = 0; double lastCallbackSeen_ = 0;
-  juce::String initError_;  // error from opening the device at startup, if any
-  juce::String notice_; juce::uint32 noticeUntil_ = 0;
+  std::unique_ptr<juce::PropertiesFile> props_ = makeProps();
+  ui::AirLookAndFeel lnf_;
+  ui::AppCtx ctx_{bridge_, devices_, *props_};
+  ui::PresetStore presets_{props_->getFile().getParentDirectory().getChildFile("presets")};
 
-  juce::File sessionFile_;                         // empty = unsaved "Untitled"
+  ui::Deck deck_{ctx_};
+  ui::Overview overview_{ctx_};
+  ui::InsertPanel inserts_{ctx_, presets_};
+  ui::Mixer mixer_{ctx_};
+  ui::MeterDock dock_{ctx_};
+  ui::DisplayPanel display_;
+  struct Splitter : juce::Component, juce::SettableTooltipClient {
+    std::function<void(int)> onDrag; int start = 0; std::function<int()> current;
+    void paint(juce::Graphics&) override;
+    void mouseDown(const juce::MouseEvent&) override { start = current ? current() : 0; }
+    void mouseDrag(const juce::MouseEvent& e) override { if (onDrag) onDrag(start - e.getDistanceFromDragStartY()); }
+    void mouseEnter(const juce::MouseEvent&) override { repaint(); }
+    void mouseExit(const juce::MouseEvent&) override { repaint(); }
+  } splitter_;
+  std::unique_ptr<ui::SettingsWindow> settings_;
+  std::unique_ptr<PluginWindow> pluginWindow_;
+  std::unique_ptr<juce::TooltipWindow> tooltips_;
+
+  int dockHeight_ = 330;
+  bool dockShown_ = true;
+  juce::File sessionFile_;  // empty = unsaved "Untitled"
   std::unique_ptr<airdaw::AutoSaver> autoSaver_;
   airdaw::Engine* autoEngine_ = nullptr;
-  std::unique_ptr<juce::PropertiesFile> props_;
   std::shared_ptr<juce::FileChooser> chooser_;
-  bool recoveryChecked_ = false;
-  float meterL_ = 0, meterR_ = 0;
+  bool recoveryChecked_ = false, audioRunning_ = false;
+  bool autoOn_ = false; int autoId_ = 3;
+  juce::String lastAutoSave_, initError_, status_, notice_;
+  bool noticeWarn_ = false;
+  juce::uint32 noticeUntil_ = 0, lastCallbacks_ = 0;
+  double lastCallbackSeen_ = 0;
+  int tick_ = 0;
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

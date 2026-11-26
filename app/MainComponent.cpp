@@ -2,147 +2,318 @@
 #include "Vst3Insert.h"
 #include <map>
 
+using ui::T;
 static constexpr int kMeterSlot = 7;  // last master insert slot: the meter listens to the final mix
+static constexpr int kTrimW = 30, kRailH = 14, kFooterH = 26, kOverviewH = 100, kMixerMin = 480;
 
-static juce::String timeText(double sec) {
-  int ms = (int)std::fmod(sec * 1000.0, 1000.0), s = (int)sec % 60, m = ((int)sec / 60) % 60, h = (int)sec / 3600;
-  return juce::String::formatted("%02d:%02d:%02d.%03d", h, m, s, ms);
-}
-
-MainComponent::MainComponent() {
+std::unique_ptr<juce::PropertiesFile> MainComponent::makeProps() {
   juce::PropertiesFile::Options opt;
   opt.applicationName = "AirDAW"; opt.filenameSuffix = ".settings"; opt.osxLibrarySubFolder = "Application Support";
   opt.folderName = "AirDAW";
-  props_ = std::make_unique<juce::PropertiesFile>(opt);
+  return std::make_unique<juce::PropertiesFile>(opt);
+}
+
+MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
+  T().load(*props_);
+  lnf_.refreshColours();
+  juce::LookAndFeel::setDefaultLookAndFeel(&lnf_);
+  juce::Desktop::getInstance().setGlobalScaleFactor(T().scalePct / 100.f);
+  T().addChangeListener(this);
+  tooltips_ = std::make_unique<juce::TooltipWindow>(this, 600);
 
   bridge_.setInsertFactory([](const std::string& id, double sr) -> std::unique_ptr<airdaw::InsertProcessor> {
     if (id.rfind("vst3:", 0) != 0) return nullptr;
     juce::String err;
     return Vst3Insert::load(juce::File(juce::String(id.substr(5))), sr, err);
   });
-  juce::String err = devices_.initialiseWithDefaultDevices(2, 2);  // Black Lion Revolution 2x2 is 2-in/2-out
+  // Reopen the last audio device (e.g. ASIO) unless taking a test snapshot.
+  std::unique_ptr<juce::XmlElement> saved = snapshotMode_ ? nullptr : props_->getXmlValue("audioDevice");
+  juce::String err = devices_.initialise(2, 2, saved.get(), true);  // Black Lion Revolution 2x2 is 2-in/2-out
   if (err.isNotEmpty()) { juce::Logger::writeToLog("Audio init: " + err); initError_ = err; }
   devices_.addAudioCallback(&bridge_);
+  devices_.addChangeListener(this);
 
-  selector_ = std::make_unique<juce::AudioDeviceSelectorComponent>(devices_, 0, 2, 0, 2, false, false, true, false);
-  for (juce::Component* c : std::initializer_list<juce::Component*>{selector_.get(), &rtz_, &play_, &stop_, &rec_, &arm1_, &arm2_, &tone_,
-       &save_, &saveAs_, &open_, &new_, &meter_, &meterEd_, &autoSave_, &autoEvery_, &status_, &pos_, &notice_label_,
-       &metro_, &bpmLabel_, &bpm_, &beats_, &countIn_, &levelLabel_, &clickLevel_, &lastAutoSave_})
-    addAndMakeVisible(*c);
-
-  rtz_.onClick = [this] { if (auto* e = bridge_.engine()) e->transport().seek(0); };
-  play_.onClick = [this] { if (!requireAudio("Play")) return; if (auto* e = bridge_.engine()) e->transport().play(); };
-  stop_.onClick = [this] {
-    if (auto* e = bridge_.engine()) { e->transport().stop(); e->flushRecording(); collectTakes(); }
+  ctx_.note = [this](const juce::String& s) { note(s); };
+  ctx_.requireAudio = [this](const char* w) { return requireAudio(w); };
+  ctx_.showInserts = [this](int ch, int slot) {
+    if (inserts_.isVisible() && inserts_.channel() == ch && slot < 0) { inserts_.close(); return; }
+    inserts_.show(ch, slot);
   };
-  rec_.onClick = [this] {
-    if (!requireAudio("Recording")) return;
-    auto* e = bridge_.engine(); if (!e) return;
-    if (!e->track(0).armed.load() && !e->track(1).armed.load()) note("No track is armed: tick Arm 1 or Arm 2 to record a take");
-    auto dir = sessionFolder().getChildFile("audio"); dir.createDirectory();
-    e->startRecording(dir.getFullPathName().toStdString());
+  ctx_.isCardOpen = [this](int ch, int slot) { return inserts_.isOpen(ch, slot); };
+  ctx_.layoutChanged = [this] { resized(); };
+  ctx_.openPluginWindow = [this](int ch, int slot) { openPluginWindow(ch, slot); };
+
+  deck_.onTransport = [this](ui::TransportKeys::Key k) { transport(k); };
+  deck_.onProject = [this] { showProjectMenu(); };
+  deck_.onAudio = [this] { showAudioSettings(); };
+  deck_.onDisplay = [this] { toggleDisplayPanel(); };
+  deck_.onMeters = [this] { dockShown_ = !dockShown_; props_->setValue("dockShown", dockShown_); resized(); };
+  deck_.onFull = [this] {
+    auto& d = juce::Desktop::getInstance();
+    d.setKioskModeComponent(d.getKioskModeComponent() ? nullptr : getTopLevelComponent(), false);
   };
-  rec_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff6a1a1a));
-  arm1_.onClick = [this] { if (auto* e = bridge_.engine()) { e->track(0).inputL = 0; e->track(0).stereo = false; e->track(0).armed = arm1_.getToggleState(); } };
-  arm2_.onClick = [this] { if (auto* e = bridge_.engine()) { e->track(1).inputL = 1; e->track(1).stereo = false; e->track(1).armed = arm2_.getToggleState(); } };
-  tone_.onClick = [this] { bridge_.testTone = tone_.getToggleState(); if (tone_.getToggleState()) requireAudio("Test tone"); };
+  dock_.onLoadMeter = [this] { chooseMeterPlugin(); };
+  inserts_.setVisible(false);
+  splitter_.current = [this] { return dockHeight_; };
+  splitter_.onDrag = [this](int h) { dockHeight_ = juce::jlimit(150, 900, h); props_->setValue("dockHeight", dockHeight_); resized(); };
+  splitter_.setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+  splitter_.setTooltip("Drag to resize the meter section");
+  display_.setVisible(false);
+  for (juce::Component* c : std::initializer_list<juce::Component*>{&deck_, &overview_, &inserts_, &mixer_, &splitter_, &dock_})
+    addAndMakeVisible(c);
+  addChildComponent(display_);
+  inserts_.setVisible(false);
 
-  // Metronome: settings live in the engine (and the session); these controls just mirror them.
-  bpm_.setRange(20.0, 400.0, 0.5); bpm_.setValue(120.0, juce::dontSendNotification);
-  bpm_.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 52, 22);
-  clickLevel_.setRange(-40.0, 0.0, 0.5); clickLevel_.setValue(-6.0, juce::dontSendNotification);
-  clickLevel_.setTextValueSuffix(" dB"); clickLevel_.setPopupDisplayEnabled(true, true, this);
-  for (int b = 1; b <= 12; ++b) beats_.addItem(juce::String(b) + "/4", b);
-  beats_.setSelectedId(4, juce::dontSendNotification);
-  countIn_.addItem("No count-in", 1); countIn_.addItem("Count-in 1 bar", 2); countIn_.addItem("Count-in 2 bars", 3);
-  countIn_.setSelectedId(1, juce::dontSendNotification);
-  metro_.onClick = [this] { applyMetronome(); if (metro_.getToggleState()) requireAudio("Metronome"); };
-  bpm_.onValueChange = [this] { applyMetronome(); };
-  clickLevel_.onValueChange = [this] { applyMetronome(); };
-  beats_.onChange = [this] { applyMetronome(); };
-  countIn_.onChange = [this] { applyMetronome(); };
+  dockHeight_ = props_->getIntValue("dockHeight", 330);
+  dockShown_ = props_->getBoolValue("dockShown", true);
+  autoOn_ = props_->getBoolValue("autosaveOn", false);
+  const int secs[] = {0, 60, 120, 300, 600, 900, 1800};
+  const int savedSec = props_->getIntValue("autosaveSec", 300);
+  for (int i = 1; i <= 6; ++i) if (secs[i] == savedSec) autoId_ = i;
 
-  meter_.onClick = [this] { chooseMeterPlugin(); };
-  meterEd_.onClick = [this] { openMeterEditor(); };
-  new_.onClick = [this] { newSession(); };
-  open_.onClick = [this] { openSession(); };
-  save_.onClick = [this] { saveSession(false); };
-  saveAs_.onClick = [this] { saveSession(true); };
-
-  // Auto-save options (off by default; remembered between runs).
-  const std::pair<int, int> opts[] = {{1, 60}, {2, 120}, {3, 300}, {4, 600}, {5, 900}, {6, 1800}};
-  const char* labels[] = {"1 min", "2 min", "5 min", "10 min", "15 min", "30 min"};
-  for (int i = 0; i < 6; ++i) autoEvery_.addItem(labels[i], opts[i].first);
-  int savedSec = props_->getIntValue("autosaveSec", 300);
-  autoEvery_.setSelectedId(3, juce::dontSendNotification);
-  for (auto& o : opts) if (o.second == savedSec) autoEvery_.setSelectedId(o.first, juce::dontSendNotification);
-  autoSave_.setToggleState(props_->getBoolValue("autosaveOn", false), juce::dontSendNotification);
-  autoSave_.onClick = [this] { applyAutoSaveSettings(); note(autoSave_.getToggleState() ? "Auto-save on" : "Auto-save off"); };
-  autoEvery_.onChange = [this] { applyAutoSaveSettings(); };
-
-  status_.setFont(juce::FontOptions(16.f, juce::Font::bold));
-  pos_.setFont(juce::FontOptions(34.f, juce::Font::bold)); pos_.setJustificationType(juce::Justification::centred);
-  pos_.setColour(juce::Label::textColourId, juce::Colour(0xfff0b030));
-  notice_label_.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
-  setSize(780, 760);
-  startTimerHz(15);
+  setWantsKeyboardFocus(true);
+  addKeyListener(this);
+  setSize(1600, 1000);
+  startTimerHz(30);
 }
 
 MainComponent::~MainComponent() {
-  meterWindow_.reset();
+  stopTimer();
+  T().removeChangeListener(this);
+  devices_.removeChangeListener(this);
+  pluginWindow_.reset();
+  settings_.reset();
+  dock_.setPlugin(nullptr);
   devices_.removeAudioCallback(&bridge_);
-  props_->saveIfNeeded();
+  if (!snapshotMode_) props_->saveIfNeeded();
+  juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
+}
+
+// ---------------------------------------------------------------- look
+void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* src) {
+  if (src == &T()) { applyTheme(); return; }
+  if (src == &devices_ && !snapshotMode_) {  // remember the device setup (e.g. ASIO, 96 kHz, 64 samples)
+    if (auto xml = devices_.createStateXml()) { props_->setValue("audioDevice", xml.get()); props_->saveIfNeeded(); }
+  }
+}
+
+void MainComponent::applyTheme() {
+  lnf_.refreshColours();
+  juce::Desktop::getInstance().setGlobalScaleFactor(T().scalePct / 100.f);
+  if (!snapshotMode_) T().save(*props_);
+  display_.syncFromTheme();
+  sendLookAndFeelChange();
+  if (auto* top = getTopLevelComponent()) top->repaint();
+  if (settings_) settings_->repaint();
+}
+
+void MainComponent::toggleDisplayPanel() {
+  display_.setVisible(!display_.isVisible());
+  deck_.displayBtn.setToggleState(display_.isVisible(), juce::dontSendNotification);
+  if (display_.isVisible()) { display_.syncFromTheme(); display_.toFront(false); }
+  resized();
+}
+
+void MainComponent::showAudioSettings() {
+  if (!settings_) {
+    settings_ = std::make_unique<ui::SettingsWindow>(ctx_, [this](ui::SettingsContent& c) {
+      c.onAutoSave = [this](bool on, int id) { autoOn_ = on; autoId_ = juce::jlimit(1, 6, id); applyAutoSaveSettings();
+                                                note(on ? "Auto-save on" : "Auto-save off"); };
+      c.autoSaveState = [this] { return std::pair<bool, int>(autoOn_, autoId_); };
+      c.autoSaveInfo = [this] { return lastAutoSave_; };
+    });
+  }
+  settings_->setVisible(true);
+  settings_->toFront(true);
+}
+
+// ---------------------------------------------------------------- layout & paint
+void MainComponent::Splitter::paint(juce::Graphics& g) {
+  auto r = getLocalBounds().toFloat().withSizeKeepingCentre(90.f, 5.f);
+  const bool over = isMouseOver();
+  if (over) T().drawGlow(g, r, T().am(), 12.f, 0.8f);
+  g.setGradientFill(juce::ColourGradient(over ? T().am() : juce::Colours::black, 0, r.getY(),
+                                         over ? T().am() : juce::Colour(0xff3a3a3c), 0, r.getBottom(), false));
+  g.fillRoundedRectangle(r, 3.f);
+}
+
+void MainComponent::paint(juce::Graphics& g) {
+  auto& t = T();
+  auto r = getLocalBounds();
+  g.fillAll(juce::Colours::black);
+  auto col = r.reduced(kTrimW, 0).withTrimmedBottom(kRailH);
+  // warm wash from the top centre (mockup #col background)
+  g.setGradientFill(juce::ColourGradient(t.am().withAlpha(t.glowAlpha(0.16f)), (float)col.getCentreX(), (float)col.getY() - col.getHeight() * 0.1f,
+                                         juce::Colours::transparentBlack, (float)col.getCentreX(), (float)col.getY() + col.getHeight() * 0.55f, true));
+  g.fillRect(col);
+  // walnut side trim and bottom rail
+  auto wood = [&](juce::Rectangle<int> w, bool vertical, bool leftSide) {
+    const juce::Colour a(0xff2b170b), b(0xff4d2e19), c(0xff35200f);
+    juce::ColourGradient wg(a, (float)w.getX(), (float)w.getY(), c, vertical ? (float)w.getRight() : (float)w.getX(),
+                            vertical ? (float)w.getY() : (float)w.getBottom(), false);
+    wg.addColour(0.45, b);
+    g.setGradientFill(wg); g.fillRect(w);
+    juce::Random rng(vertical ? (leftSide ? 7 : 11) : 13);
+    for (int i = 0; i < (vertical ? w.getWidth() : w.getHeight()); i += 2 + rng.nextInt(4)) {
+      g.setColour(juce::Colour(rng.nextBool() ? 0x1c000000 : 0x08ffffff));
+      if (vertical) g.fillRect(w.getX() + i, w.getY(), 1, w.getHeight()); else g.fillRect(w.getX(), w.getY() + i, w.getWidth(), 1);
+    }
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xaa000000), vertical ? (float)(leftSide ? w.getRight() : w.getX()) : 0.f,
+                                           vertical ? 0.f : (float)w.getY(), juce::Colours::transparentBlack,
+                                           vertical ? (float)(leftSide ? w.getRight() - 8 : w.getX() + 8) : 0.f,
+                                           vertical ? 0.f : (float)w.getY() + 4.f, false));
+    g.fillRect(w);
+  };
+  wood(r.withWidth(kTrimW), true, true);
+  wood(r.withLeft(r.getRight() - kTrimW), true, false);
+  wood(col.withY(col.getBottom()).withHeight(kRailH), false, false);
+  // footer: device status (left, red when audio is not running) and the latest notice (right)
+  auto foot = col.removeFromBottom(kFooterH);
+  g.setColour(juce::Colours::black); g.fillRect(foot.removeFromTop(2));
+  foot = foot.reduced(16, 0);
+  g.setFont(ui::Theme::spaced(ui::Theme::uiFont(11.5f), 0.08f));
+  const bool showNote = juce::Time::getMillisecondCounter() < noticeUntil_;
+  if (showNote) {
+    g.setColour(noticeWarn_ ? juce::Colour(0xffff5050) : t.am());
+    g.drawText(notice_, foot.removeFromRight(foot.getWidth() / 2), juce::Justification::centredRight, true);
+  }
+  g.setColour(audioRunning_ ? ui::Theme::dim() : juce::Colour(0xffff5050));
+  g.drawText(status_, foot, juce::Justification::centredLeft, true);
+}
+
+void MainComponent::resized() {
+  auto r = getLocalBounds().reduced(kTrimW, 0).withTrimmedBottom(kRailH + kFooterH);
+  deck_.setBounds(r.removeFromTop(deck_.preferredHeight(r.getWidth())));
+  overview_.setBounds(r.removeFromTop(getHeight() >= 950 ? kOverviewH : 70));  // short windows: slimmer overview
+  if (display_.isVisible())
+    display_.setBounds(r.getRight() - ui::DisplayPanel::kWidth - 16, deck_.getBottom() - 6, ui::DisplayPanel::kWidth, ui::DisplayPanel::kHeight);
+  r = r.reduced(12, 0);
+  r.removeFromTop(10);
+  // Space is shared mixer-first: the meter dock gives way, then the insert panel scrolls.
+  int avail = r.getHeight() - 10;
+  int ins = 0;
+  // Compact strips (slot list folded) still show a usable fader at ~400 px, so the panel may push the mixer down to that.
+  if (inserts_.isVisible()) ins = juce::jmin(inserts_.preferredHeight(), juce::jmax(150, juce::jmin(avail * 2 / 5, avail - 400 - 10)));
+  int dock = 0;
+  if (dockShown_) dock = juce::jmin(dockHeight_, avail - ins - (ins ? 10 : 0) - kMixerMin - 14);
+  if (dock < 150) dock = 0;
+  if (inserts_.isVisible()) { inserts_.setBounds(r.removeFromTop(ins)); r.removeFromTop(10); }
+  if (dock > 0) {
+    dock_.setVisible(true); splitter_.setVisible(true);
+    dock_.setBounds(r.removeFromBottom(dock).withTrimmedBottom(10)); splitter_.setBounds(r.removeFromBottom(14));
+  } else { dock_.setVisible(false); splitter_.setVisible(false); }
+  deck_.metersBtn.setToggleState(dockShown_, juce::dontSendNotification);
+  mixer_.setBounds(r);
+}
+
+// ---------------------------------------------------------------- transport & keys
+void MainComponent::transport(ui::TransportKeys::Key k) {
+  auto* e = bridge_.engine(); if (!e) return;
+  auto& tr = e->transport();
+  switch (k) {
+    case ui::TransportKeys::Rtz: tr.seek(0); break;
+    case ui::TransportKeys::Play:
+      if (tr.playing.load() && !tr.recording.load()) { tr.stop(); break; }  // second press pauses
+      if (requireAudio("Play")) tr.play();
+      break;
+    case ui::TransportKeys::Stop:
+      if (!tr.playing.load()) { tr.seek(0); break; }  // stop while stopped returns to the start
+      tr.stop(); e->flushRecording(); collectTakes();
+      break;
+    case ui::TransportKeys::Rec: {
+      if (tr.recording.load()) { e->stopRecording(); break; }  // punch out, keep playing
+      if (!requireAudio("Recording")) return;
+      bool any = false;
+      for (int t = 0; t < airdaw::kMaxTracks; ++t) any |= e->track(t).armed.load();
+      if (!any) { note("No track is armed: press R on a track first", true); return; }
+      auto dir = sessionFolder().getChildFile("audio"); dir.createDirectory();
+      e->startRecording(dir.getFullPathName().toStdString());
+      break;
+    }
+    case ui::TransportKeys::Click:
+      e->metronome().enabled = !e->metronome().enabled.load();
+      if (e->metronome().enabled.load() && requireAudio("Metronome"))
+        note("Metronome on: " + juce::String(e->metronome().bpm.load(), 1) + " BPM (tempo, beats and count-in: Project > Audio settings)");
+      break;
+    case ui::TransportKeys::Loop:
+      if (tr.loopOut.load() <= tr.loopIn.load()) { note("Shift+drag on the overview to set a loop region"); break; }
+      tr.loopOn = !tr.loopOn.load();
+      break;
+    default: break;
+  }
+}
+
+bool MainComponent::keyPressed(const juce::KeyPress& k, juce::Component*) {
+  const auto m = k.getModifiers();
+  if (m.isCommandDown() && k.getKeyCode() == 'S') { saveSession(m.isShiftDown()); return true; }
+  if (m.isCommandDown() && k.getKeyCode() == 'O') { openSession(); return true; }
+  if (m.isCommandDown() && k.getKeyCode() == 'N') { newSession(); return true; }
+  if (k == juce::KeyPress::spaceKey) {
+    auto* e = bridge_.engine();
+    transport(e && e->transport().playing.load() ? ui::TransportKeys::Stop : ui::TransportKeys::Play);
+    return true;
+  }
+  if (k == juce::KeyPress::escapeKey) {
+    if (display_.isVisible()) { toggleDisplayPanel(); return true; }
+    if (inserts_.isVisible()) { inserts_.close(); return true; }
+  }
+  return false;
+}
+
+void MainComponent::showProjectMenu() {
+  juce::PopupMenu m;
+  m.addSectionHeader("Project: " + sessionName());
+  m.addItem(1, "New", true, false); m.addItem(2, juce::String(juce::CharPointer_UTF8("Open\xe2\x80\xa6")));
+  m.addItem(3, "Save", true, false); m.addItem(4, juce::String(juce::CharPointer_UTF8("Save As\xe2\x80\xa6")));
+  m.addSeparator();
+  m.addItem(7, juce::String(juce::CharPointer_UTF8("Audio settings\xe2\x80\xa6")));
+  m.addItem(5, juce::String(juce::CharPointer_UTF8("Load Hit Record Meter\xe2\x80\xa6")));
+  m.addItem(6, "Show project folder", sessionFile_ != juce::File());
+  m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&deck_.projectBtn), [this](int r) {
+    switch (r) {
+      case 1: newSession(); break; case 2: openSession(); break; case 3: saveSession(false); break; case 4: saveSession(true); break;
+      case 5: chooseMeterPlugin(); break; case 6: sessionFolder().revealToUser(); break; case 7: showAudioSettings(); break; default: break;
+    }
+  });
+}
+
+// ---------------------------------------------------------------- status
+void MainComponent::note(const juce::String& s, bool warn) {
+  notice_ = s; noticeWarn_ = warn || s.startsWith("WARNING") || s.containsIgnoreCase("FAILED");
+  noticeUntil_ = juce::Time::getMillisecondCounter() + 6000;
+  repaint(0, getHeight() - kRailH - kFooterH, getWidth(), kFooterH);
 }
 
 bool MainComponent::requireAudio(const char* what) {
   if (audioRunning_) return true;
-  note(juce::String(what) + " needs a running audio device - see the red status line at the top");
+  note(juce::String(what) + " needs a running audio device: see the status at the bottom left, or open Audio", true);
   return false;
 }
 
-void MainComponent::applyMetronome() {
-  auto* e = bridge_.engine(); if (!e) return;
-  auto& m = e->metronome();
-  m.enabled = metro_.getToggleState(); m.bpm = (float)bpm_.getValue(); m.levelDb = (float)clickLevel_.getValue();
-  m.beatsPerBar = juce::jlimit(1, 16, beats_.getSelectedId()); m.countInBars = juce::jlimit(0, 4, countIn_.getSelectedId() - 1);
-}
-
-void MainComponent::syncMetronomeControls() {  // after a session load or an engine rebuild
-  auto* e = bridge_.engine(); if (!e) return;
-  auto& m = e->metronome();
-  metro_.setToggleState(m.enabled.load(), juce::dontSendNotification);
-  bpm_.setValue(m.bpm.load(), juce::dontSendNotification); clickLevel_.setValue(m.levelDb.load(), juce::dontSendNotification);
-  beats_.setSelectedId(juce::jlimit(1, 12, m.beatsPerBar.load()), juce::dontSendNotification);
-  countIn_.setSelectedId(juce::jlimit(0, 2, m.countInBars.load()) + 1, juce::dontSendNotification);
-}
-
-// Red status line whenever audio is not actually running, so a device that failed to open is obvious.
 void MainComponent::updateDeviceStatus() {
   auto* dev = devices_.getCurrentAudioDevice();
   const double now = juce::Time::getMillisecondCounterHiRes();
   const auto cb = bridge_.callbacks.load(std::memory_order_relaxed);
   if (cb != lastCallbacks_) { lastCallbacks_ = cb; lastCallbackSeen_ = now; }
   audioRunning_ = dev != nullptr && dev->isPlaying() && cb != 0 && now - lastCallbackSeen_ < 1000.0;
-
+  ctx_.audioRunning = audioRunning_;
   juce::String text;
   if (dev == nullptr) {
     auto setup = devices_.getAudioDeviceSetup();
     auto name = setup.outputDeviceName.isNotEmpty() ? setup.outputDeviceName : setup.inputDeviceName;
     text = "AUDIO DEVICE FAILED TO OPEN: " + devices_.getCurrentAudioDeviceType() + (name.isNotEmpty() ? " \"" + name + "\"" : juce::String()) +
            (initError_.isNotEmpty() ? " (" + initError_ + ")" : juce::String()) +
-           ". No sound, no recording. Close other audio apps, replug the interface, or pick another device/buffer below.";
+           ". No sound, no recording. Close other audio apps, replug the interface, or choose another device under Audio.";
   } else if (!audioRunning_) {
-    text = "AUDIO DEVICE NOT RUNNING: " + dev->getTypeName() + " \"" + dev->getName() + "\" is open but is not delivering audio. "
-           "Close other audio apps, replug the interface, or pick another buffer size below.";
+    text = "AUDIO DEVICE NOT RUNNING: " + dev->getTypeName() + " \"" + dev->getName() + "\" is open but not delivering audio. "
+           "Close other audio apps, replug the interface, or try another buffer size under Audio.";
   } else {
-    const double sr = bridge_.sampleRate(); const int buf = bridge_.bufferSamples(), lat = bridge_.deviceLatencySamples();
-    text = dev->getTypeName() + " \"" + dev->getName() + "\" | " + juce::String(sr / 1000.0, 1) + " kHz | buffer " + juce::String(buf) +
-           " smp | round-trip ~" + juce::String(1000.0 * (buf + lat) / sr, 2) + " ms | DSP " + juce::String(int(devices_.getCpuUsage() * 100)) + "%";
+    text = dev->getTypeName() + juce::String(juce::CharPointer_UTF8(" \xc2\xb7 ")) + dev->getName();
   }
-  status_.setText(text, juce::dontSendNotification);
-  status_.setColour(juce::Label::textColourId, audioRunning_ ? juce::Colours::white : juce::Colour(0xffff5050));
+  if (text != status_) { status_ = text; repaint(0, getHeight() - kRailH - kFooterH, getWidth(), kFooterH); }
 }
 
+// ---------------------------------------------------------------- projects
 juce::File MainComponent::sessionFolder() const {
   if (sessionFile_ != juce::File()) return sessionFile_.getParentDirectory();
   return scratchFolder();  // unsaved session: takes and auto-saves go here until Save As makes a project folder
@@ -150,31 +321,32 @@ juce::File MainComponent::sessionFolder() const {
 juce::String MainComponent::sessionName() const {
   return sessionFile_ != juce::File() ? sessionFile_.getFileNameWithoutExtension() : juce::String("Untitled");
 }
+juce::File MainComponent::projectsRoot() {
+  return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("AirDAW");
+}
+juce::File MainComponent::scratchFolder() { return projectsRoot().getChildFile("Untitled"); }
 
 void MainComponent::setSessionFile(const juce::File& f) {
   sessionFile_ = f;
-  if (autoSaver_) autoSaver_->setLocation(sessionFolder().getChildFile("autosave").getFullPathName().toStdString(),
-                                          sessionName().toStdString());
-  getTopLevelComponent()->setName("AirDAW - " + sessionName());
-  lastAutoSave_.setText(autoSave_.getToggleState() ? "No auto-save yet for " + sessionName() : "Auto-save is off", juce::dontSendNotification);
+  if (autoSaver_) autoSaver_->setLocation(sessionFolder().getChildFile("autosave").getFullPathName().toStdString(), sessionName().toStdString());
+  if (auto* top = getTopLevelComponent()) top->setName("AirDAW - " + sessionName());
+  lastAutoSave_ = autoOn_ ? "No auto-save yet for " + sessionName() : juce::String("Auto-save is off");
 }
 
 void MainComponent::applyAutoSaveSettings() {
   const int secs[] = {0, 60, 120, 300, 600, 900, 1800};
   airdaw::AutoSaveSettings s;
-  s.enabled = autoSave_.getToggleState(); s.intervalSec = secs[juce::jlimit(1, 6, autoEvery_.getSelectedId())]; s.keep = 10;
+  s.enabled = autoOn_; s.intervalSec = secs[juce::jlimit(1, 6, autoId_)]; s.keep = 10;
   if (autoSaver_) autoSaver_->configure(s);
-  if (!s.enabled) lastAutoSave_.setText("Auto-save is off", juce::dontSendNotification);
-  else if (!lastAutoSave_.getText().startsWith("Last auto-save"))
-    lastAutoSave_.setText("No auto-save yet for " + sessionName() + " (first one after the interval)", juce::dontSendNotification);
-  props_->setValue("autosaveOn", s.enabled); props_->setValue("autosaveSec", s.intervalSec); props_->saveIfNeeded();
+  if (!s.enabled) lastAutoSave_ = "Auto-save is off";
+  else if (!lastAutoSave_.startsWith("Last auto-save")) lastAutoSave_ = "No auto-save yet for " + sessionName() + " (first one after the interval)";
+  if (!snapshotMode_) { props_->setValue("autosaveOn", s.enabled); props_->setValue("autosaveSec", s.intervalSec); props_->saveIfNeeded(); }
 }
 
 void MainComponent::newSession() {
-  // A new session is a fresh engine state: reload an empty one by rebuilding via the bridge's device restart.
   juce::AlertWindow::showAsync(juce::MessageBoxOptions().withIconType(juce::MessageBoxIconType::QuestionIcon)
-      .withTitle("New session").withMessage("Discard the current mixer state and start a new session?")
-      .withButton("New session", 1).withButton("Cancel", 0),
+      .withTitle("New project").withMessage("Discard the current mixer state and start a new project?")
+      .withButton("New project", 1).withButton("Cancel", 0),
       [this](int r) {
         if (r != 1) return;
         auto* e = bridge_.engine(); if (!e) return;
@@ -182,14 +354,10 @@ void MainComponent::newSession() {
         airdaw::Engine blank(e->sampleRate());
         auto tmp = (juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw_blank.airdaw")).getFullPathName().toStdString();
         airdaw::saveSession(blank, tmp); airdaw::loadSession(*e, tmp);
-        setSessionFile({}); syncMetronomeControls(); note("New session");
+        inserts_.close();
+        setSessionFile({}); note("New project");
       });
 }
-
-juce::File MainComponent::projectsRoot() {
-  return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("AirDAW");
-}
-juce::File MainComponent::scratchFolder() { return projectsRoot().getChildFile("Untitled"); }
 
 void MainComponent::saveSession(bool saveAs) {
   auto* e = bridge_.engine(); if (!e) return;
@@ -198,7 +366,7 @@ void MainComponent::saveSession(bool saveAs) {
     if (r.ok) note("Saved " + sessionFile_.getFileName()); else note("SAVE FAILED: " + r.error);
     return;
   }
-  if (e->transport().recording.load() || e->transport().countingIn()) { note("Stop recording before Save As (it moves take files)"); return; }
+  if (e->transport().recording.load() || e->transport().countingIn()) { note("Stop recording before Save As (it moves take files)", true); return; }
   auto root = projectsRoot(); root.createDirectory();
   const auto suggested = sessionFile_ == juce::File() ? juce::String("My Song") : sessionName() + " copy";
   chooser_ = std::make_shared<juce::FileChooser>("Save project as (AirDAW creates a folder with this name)",
@@ -212,12 +380,12 @@ void MainComponent::saveSession(bool saveAs) {
 // (they belong to this unsaved session), copied from anywhere else (another project still needs them).
 void MainComponent::saveProjectAs(const juce::File& chosen) {
   auto* e = bridge_.engine(); if (!e) return;  // fetched now: the engine may have been rebuilt while the dialog was open
-  if (e->transport().recording.load() || e->transport().countingIn()) { note("Stop recording before Save As"); return; }
+  if (e->transport().recording.load() || e->transport().countingIn()) { note("Stop recording before Save As", true); return; }
   const auto name = chosen.getFileNameWithoutExtension();
   auto dir = chosen.getParentDirectory();
   if (dir.getFileName() != name) dir = dir.getChildFile(name);  // user picked the parent folder: create the project folder
   const auto file = dir.getChildFile(name + ".airdaw");
-  if (file.existsAsFile() && file != sessionFile_) { note("A project called \"" + name + "\" already exists there: choose another name"); return; }
+  if (file.existsAsFile() && file != sessionFile_) { note("A project called \"" + name + "\" already exists there: choose another name", true); return; }
   auto audio = dir.getChildFile("audio");
   if (!audio.createDirectory()) { note("SAVE FAILED: cannot create " + audio.getFullPathName()); return; }
 
@@ -263,11 +431,10 @@ void MainComponent::openSession() {
         auto f = c.getResult(); auto* e = bridge_.engine(); if (f == juce::File() || !e) return;
         auto r = airdaw::loadSession(*e, f.getFullPathName().toStdString());
         if (!r.ok) { note("OPEN FAILED: " + r.error); return; }
+        inserts_.close();
         setSessionFile(f);
-        arm1_.setToggleState(e->track(0).armed.load(), juce::dontSendNotification);
-        arm2_.setToggleState(e->track(1).armed.load(), juce::dontSendNotification);
-        syncMetronomeControls();
-        note(r.warnings.empty() ? "Opened " + f.getFileName() : "Opened with " + juce::String((int)r.warnings.size()) + " warning(s): " + r.warnings[0]);
+        note(r.warnings.empty() ? "Opened " + f.getFileName() : "Opened with " + juce::String((int)r.warnings.size()) + " warning(s): " + r.warnings[0],
+             !r.warnings.empty());
       });
 }
 
@@ -284,38 +451,8 @@ void MainComponent::checkRecovery() {
       .withButton("Restore", 1).withButton("Ignore", 0),
       [this, lf](int r) {
         if (r != 1) return;
-        if (auto* e = bridge_.engine()) { auto res = airdaw::loadSession(*e, lf.getFullPathName().toStdString()); syncMetronomeControls(); note(res.ok ? "Recovered auto-save" : "RECOVERY FAILED: " + res.error); }
+        if (auto* e = bridge_.engine()) { auto res = airdaw::loadSession(*e, lf.getFullPathName().toStdString()); note(res.ok ? "Recovered auto-save" : "RECOVERY FAILED: " + res.error); }
       });
-}
-
-void MainComponent::chooseMeterPlugin() {
-  // The Airwindows Hit Record Meter is a separate VST3 (not part of Consolidated); the user picks the file once.
-  auto start = juce::File(props_->getValue("meterPath", juce::File::getSpecialLocation(juce::File::userHomeDirectory).getFullPathName()));
-  chooser_ = std::make_shared<juce::FileChooser>("Select the Hit Record Meter .vst3", start.getParentDirectory(), "*.vst3");
-  chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles |
-                        juce::FileBrowserComponent::canSelectDirectories,  // some platforms ship VST3 as a bundle folder
-      [this](const juce::FileChooser& c) { auto f = c.getResult(); if (f != juce::File()) loadMeter(f); });
-}
-
-void MainComponent::loadMeter(const juce::File& vst3) {
-  auto* e = bridge_.engine(); if (!e) return;
-  juce::String err;
-  auto ins = Vst3Insert::load(vst3, e->sampleRate(), err);
-  if (!ins) { note("Meter load failed: " + err); return; }
-  props_->setValue("meterPath", vst3.getFullPathName()); props_->saveIfNeeded();
-  if (!e->setInsertProcessor(200, kMeterSlot, std::move(ins))) { note("Could not install the meter"); return; }
-  note("Meter loaded on master insert " + juce::String(kMeterSlot + 1));
-  openMeterEditor();
-}
-
-void MainComponent::openMeterEditor() {
-  auto* e = bridge_.engine(); if (!e) return;
-  auto* v = dynamic_cast<Vst3Insert*>(e->insertAt(200, kMeterSlot));
-  if (!v) { note("No meter loaded yet"); return; }
-  meterWindow_.reset();
-  meterWindow_ = std::make_unique<PluginWindow>(v->plugin(), [this] {
-    juce::MessageManager::callAsync([this] { meterWindow_.reset(); });  // never delete a window inside its own callback
-  });
 }
 
 void MainComponent::collectTakes() {
@@ -327,76 +464,111 @@ void MainComponent::collectTakes() {
   }
 }
 
+// ---------------------------------------------------------------- plugins
+void MainComponent::chooseMeterPlugin() {
+  // The Airwindows Hit Record Meter is a separate VST3 (not part of Consolidated); the user picks the file once.
+  auto start = juce::File(props_->getValue("meterPath", juce::File("C:\\Program Files\\Common Files\\VST3").getFullPathName()));
+  chooser_ = std::make_shared<juce::FileChooser>("Select the Hit Record Meter .vst3", start.isDirectory() ? start : start.getParentDirectory(), "*.vst3");
+  chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles |
+                        juce::FileBrowserComponent::canSelectDirectories,  // some platforms ship VST3 as a bundle folder
+      [this](const juce::FileChooser& c) { auto f = c.getResult(); if (f != juce::File()) loadMeter(f); });
+}
+
+void MainComponent::loadMeter(const juce::File& vst3, bool quiet) {
+  auto* e = bridge_.engine(); if (!e) return;
+  juce::String err;
+  auto ins = Vst3Insert::load(vst3, e->sampleRate(), err);
+  if (!ins) { if (!quiet) note("Meter load failed: " + err, true); return; }
+  if (!snapshotMode_) { props_->setValue("meterPath", vst3.getFullPathName()); props_->saveIfNeeded(); }
+  if (!e->setInsertProcessor(ui::kMasterId, kMeterSlot, std::move(ins))) { note("Could not install the meter", true); return; }
+  if (!quiet) note("Hit Record Meter loaded on master insert " + juce::String(kMeterSlot + 1));
+  if (!dockShown_) { dockShown_ = true; resized(); }
+}
+
+void MainComponent::openPluginWindow(int ch, int slot) {
+  auto* e = bridge_.engine(); if (!e) return;
+  auto* v = dynamic_cast<Vst3Insert*>(e->insertAt(ch, slot));
+  if (!v) return;
+  pluginWindow_.reset();
+  pluginWindow_ = std::make_unique<PluginWindow>(v->plugin(), [this] {
+    juce::MessageManager::callAsync([this] { pluginWindow_.reset(); });  // never delete a window inside its own callback
+  });
+}
+
+// ---------------------------------------------------------------- timer
 void MainComponent::timerCallback() {
+  ++tick_;
   auto* e = bridge_.engine();
   if (e && e != autoEngine_) {  // first run, or the engine was rebuilt for a new sample rate
     autoEngine_ = e;
-    meterWindow_.reset();  // the engine (and its hosted plugins) was rebuilt
+    pluginWindow_.reset();
+    dock_.setPlugin(nullptr);   // the hosted plugins belong to the old engine
+    inserts_.close();
     autoSaver_ = std::make_unique<airdaw::AutoSaver>(*e);
     setSessionFile(sessionFile_);
     applyAutoSaveSettings();
-    applyMetronome();  // first run: push the control defaults; after a rate change the session carried them over anyway
-    if (!recoveryChecked_) { recoveryChecked_ = true; checkRecovery(); }
-  }
-  if (e) {
-    collectTakes();
-    auto saved = autoSaver_->tick(juce::Time::getMillisecondCounterHiRes() / 1000.0);
-    if (!saved.empty()) {
-      const auto when = juce::Time::getCurrentTime().toString(false, true);
-      note("Auto-saved " + when);
-      lastAutoSave_.setText("Last auto-save " + when + "  ->  " + juce::File(juce::String(saved)).getParentDirectory().getFullPathName(),
-                            juce::dontSendNotification);
-    }
-    auto& tr = e->transport();
-    if (tr.countingIn()) {  // show the beats still to go
-      const double beat = e->sampleRate() * 60.0 / juce::jlimit(20.0, 400.0, (double)e->metronome().bpm.load());
-      pos_.setText("COUNT-IN  " + juce::String((int)std::ceil((double)tr.countInLeft.load() / beat)), juce::dontSendNotification);
-    } else
-      pos_.setText(timeText((double)tr.pos.load() / e->sampleRate()), juce::dontSendNotification);
-    meterL_ = e->master().meter.peakL.load(); meterR_ = e->master().meter.peakR.load();
-    rec_.setToggleState(e->transport().recording.load(), juce::dontSendNotification);
-    rec_.setColour(juce::TextButton::buttonColourId, e->transport().recording.load() ? juce::Colours::red : juce::Colour(0xff6a1a1a));
+    if (!snapshotMode_ && !recoveryChecked_) { recoveryChecked_ = true; checkRecovery(); }
+    // Bring the Hit Record Meter back if it was set up before and the session has none.
+    const juce::File mp(props_->getValue("meterPath"));
+    if (!e->insertAt(ui::kMasterId, kMeterSlot) && mp.exists()) loadMeter(mp, true);
   }
   updateDeviceStatus();
-  notice_label_.setText(juce::Time::getMillisecondCounter() < noticeUntil_ ? notice_ : juce::String(), juce::dontSendNotification);
-  repaint();
+  deck_.sync();
+  overview_.sync();
+  mixer_.sync();
+  if (tick_ % 2 == 0) inserts_.sync();
+  if (e && tick_ % 3 == 0) {
+    collectTakes();
+    e->collectGarbage();
+    auto* v = dynamic_cast<Vst3Insert*>(e->insertAt(ui::kMasterId, kMeterSlot));
+    dock_.setPlugin(v ? v->plugin() : nullptr);
+    if (autoSaver_) {
+      auto saved = autoSaver_->tick(juce::Time::getMillisecondCounterHiRes() / 1000.0);
+      if (!saved.empty()) {
+        const auto when = juce::Time::getCurrentTime().toString(false, true);
+        note("Auto-saved " + when);
+        lastAutoSave_ = "Last auto-save " + when + "  ->  " + juce::File(juce::String(saved)).getParentDirectory().getFullPathName();
+      }
+    }
+  }
+  if (tick_ % 15 == 0 && juce::Time::getMillisecondCounter() > noticeUntil_ && notice_.isNotEmpty()) {
+    notice_.clear(); repaint(0, getHeight() - kRailH - kFooterH, getWidth(), kFooterH);
+  }
 }
 
-void MainComponent::paint(juce::Graphics& g) {
-  g.fillAll(juce::Colour(0xff15171a));
-  auto r = getLocalBounds().removeFromBottom(40).reduced(12, 10);
-  g.setColour(juce::Colour(0xff0a0b0d)); g.fillRect(r);
-  auto bar = [&](juce::Rectangle<int> b, float v) {
-    float db = juce::Decibels::gainToDecibels(v, -60.f);
-    g.setColour(db > -3.f ? juce::Colours::red : juce::Colour(0xfff0b030));
-    g.fillRect(b.withWidth((int)juce::jmap(db, -60.f, 0.f, 0.f, (float)b.getWidth())));
-  };
-  bar(r.removeFromTop(8), meterL_); r.removeFromTop(4); bar(r.removeFromTop(8), meterR_);
+// ---------------------------------------------------------------- snapshots (test hook)
+void MainComponent::runScenario(const juce::String& name) {
+  auto* e = bridge_.engine(); if (!e) return;
+  const char* names[] = {"Kick", "Snare", "OH L", "OH R", "Bass DI", "Gtr L", "Gtr R", "Keys"};
+  for (int t = 0; t < 8; ++t) e->track(t).name = names[t];
+  for (int t : {2, 3, 5, 6}) e->track(t).stereo = true;
+  e->setInsert(0, 0, "Console7Channel"); e->setInsert(0, 1, "Pressure5");
+  e->setInsert(4, 0, "Console7Channel"); e->setInsert(4, 1, "Density3"); e->setInsert(4, 2, "ToTape8");
+  e->setInsert(100, 0, "Console7Buss"); e->setInsert(100, 1, "Galactic3");
+  e->setInsert(ui::kMasterId, 0, "Console7Buss"); e->setInsert(ui::kMasterId, 1, "ADClip8");
+  e->track(0).route = 1; e->track(1).route = 2; e->track(0).trimDb = 6.f; e->track(3).pan = -0.4f; e->track(2).gainDb = -4.5f;
+  e->track(1).mute = true; e->track(2).solo = true; e->track(0).armed = true; e->track(0).inputL = 0;
+  if (name == "inserts") { inserts_.show(0, 0); inserts_.show(0, 1); }
+  if (name == "inserts-tape") { inserts_.show(4, 2); }
+  if (name == "add") { inserts_.show(0, 3); }
+  if (name == "display") toggleDisplayPanel();
+  if (name == "blue") { T().hue = 215.f; applyTheme(); }
+  if (name == "glow-off") { T().glow = 0.f; applyTheme(); }
+  if (name == "nodock") { dockShown_ = false; }
+  resized();
 }
 
-void MainComponent::resized() {
-  auto r = getLocalBounds().reduced(12);
-  status_.setBounds(r.removeFromTop(42));  // two lines, so a device error and its hint both fit
-  pos_.setBounds(r.removeFromTop(50));
-  auto row = r.removeFromTop(34);
-  for (auto* b : {&rtz_, &play_, &stop_, &rec_}) b->setBounds(row.removeFromLeft(90).reduced(2));
-  row.removeFromLeft(10);
-  arm1_.setBounds(row.removeFromLeft(130)); arm2_.setBounds(row.removeFromLeft(130));
-  row = r.removeFromTop(30);
-  tone_.setBounds(row.removeFromLeft(180));
-  metro_.setBounds(row.removeFromLeft(100));
-  bpmLabel_.setBounds(row.removeFromLeft(36)); bpm_.setBounds(row.removeFromLeft(112).reduced(0, 3));
-  row.removeFromLeft(6);
-  beats_.setBounds(row.removeFromLeft(64).reduced(0, 3)); row.removeFromLeft(6);
-  countIn_.setBounds(row.removeFromLeft(128).reduced(0, 3)); row.removeFromLeft(6);
-  levelLabel_.setBounds(row.removeFromLeft(40)); clickLevel_.setBounds(row.reduced(0, 3));
-  row = r.removeFromTop(34);
-  for (auto* b : {&new_, &open_, &save_, &saveAs_}) b->setBounds(row.removeFromLeft(90).reduced(2));
-  meter_.setBounds(row.removeFromLeft(150).reduced(2)); meterEd_.setBounds(row.removeFromLeft(110).reduced(2));
-  row = r.removeFromTop(30);  // own row: the interval box used to fall off the right edge
-  autoSave_.setBounds(row.removeFromLeft(140)); autoEvery_.setBounds(row.removeFromLeft(90).reduced(0, 3));
-  row.removeFromLeft(10); lastAutoSave_.setBounds(row);
-  notice_label_.setBounds(r.removeFromTop(26));
-  r.removeFromBottom(40);
-  selector_->setBounds(r);
+void MainComponent::takeSnapshot(const juce::File& png, const juce::String& scenario) {
+  juce::Timer::callAfterDelay(1500, [this, png, scenario] {
+    runScenario(scenario);
+    juce::Timer::callAfterDelay(1500, [this, png] {
+      auto* top = getTopLevelComponent();
+      auto img = top->createComponentSnapshot(top->getLocalBounds(), true, 1.f);
+      png.deleteFile();
+      juce::FileOutputStream out(png);
+      juce::PNGImageFormat().writeImageToStream(img, out);
+      out.flush();
+      juce::JUCEApplication::getInstance()->systemRequestedQuit();
+    });
+  });
 }
