@@ -40,6 +40,21 @@ void MiniReadout::paint(juce::Graphics& g) {
   t.drawGlowText(g, v_, r, juce::Justification::centred, c_.isTransparent() ? t.am() : c_, 0.7f);
 }
 
+// ---------------- MonitorButton ----------------
+void MonitorButton::paintButton(juce::Graphics& g, bool over, bool down) {
+  getLookAndFeel().drawButtonBackground(g, *this, {}, over, down);
+  auto r = getLocalBounds().toFloat().reduced(2.f);
+  if (down) r = r.translated(0.f, 1.f);
+  const float s = juce::jmin(r.getWidth(), r.getHeight()) * 0.62f, cx = r.getCentreX(), cy = r.getCentreY() + s * 0.06f;
+  g.setColour(getToggleState() ? juce::Colour(0xff2a1800) : Theme::tx().withAlpha(isEnabled() ? 1.f : 0.5f));
+  juce::Path band;  // headband
+  band.addCentredArc(cx, cy, s * 0.42f, s * 0.42f, 0.f, -1.9f, 1.9f, true);
+  g.strokePath(band, juce::PathStrokeType(1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+  const float cw = s * 0.22f, ch = s * 0.42f, cupY = cy + s * 0.02f;  // ear cups
+  g.fillRoundedRectangle(cx - s * 0.47f, cupY, cw, ch, cw * 0.4f);
+  g.fillRoundedRectangle(cx + s * 0.47f - cw, cupY, cw, ch, cw * 0.4f);
+}
+
 // ---------------- Strip ----------------
 Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
   plate_.setColourBar(channelColour(id));
@@ -52,8 +67,11 @@ Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
   if (isBus(id)) {
     chn_.setButtonText("Bus"); chn_.setEnabled(false); in_.setVisible(false);
     route_.setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x86\x92 Master"))); route_.setEnabled(false);
-    t_.setVisible(false); r_.setVisible(false);
+    t_.setVisible(false); r_.setVisible(false); mon_.setVisible(false);
   } else {
+    addAndMakeVisible(mon_);
+    mon_.setTooltip("Input monitoring: hear this track's input while it is armed (R). Recording works either way.");
+    mon_.onClick = [this] { if (auto* e = ctx_.engine()) e->track(id_).monitor = !e->track(id_).monitor.load(); };
     chn_.onClick = [this] {
       auto* e = ctx_.engine(); if (!e) return;
       auto& c = e->track(id_);
@@ -68,10 +86,10 @@ Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
     r_.onClick = [this] {
       auto* e = ctx_.engine(); if (!e) return;
       auto& c = e->track(id_);
-      if (!c.armed.load() && c.inputL.load() < 0) {
-        const int in = id_ % numInputs(ctx_);
-        c.inputL = in; c.inputR = c.stereo.load() && in + 1 < numInputs(ctx_) ? in + 1 : -1;
-        ctx_.note(juce::String(c.name) + ": input set to In " + juce::String(in + 1) + " (change it with the In button)");
+      if (!c.armed.load() && c.inputL.load() < 0) {  // no input chosen yet: use In 1 (In 1/2 for stereo)
+        const bool st = c.stereo.load() && numInputs(ctx_) > 1;
+        c.inputL = 0; c.inputR = st ? 1 : -1;
+        ctx_.note(juce::String(c.name) + ": input set to " + (st ? "In 1/2" : "In 1") + " (change it with the In button)");
       }
       c.armed = !c.armed.load();
     };
@@ -154,6 +172,7 @@ void Strip::sync() {
     const int rt = c.route.load();
     route_.setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x86\x92 ")) + (rt == 0 ? "Master" : "Bus " + juce::String(rt)));
     r_.setToggleState(c.armed.load(), juce::dontSendNotification);
+    mon_.setToggleState(c.monitor.load(), juce::dontSendNotification);
     t_.setColour(juce::TextButton::textColourOffId, e->numTakes(id_) > 0 ? T().am() : Theme::tx());
   }
   m_.setToggleState(c.mute.load(), juce::dontSendNotification);
@@ -200,8 +219,9 @@ void Strip::resized() {
   route_.setBounds(take(26));
   pan_.setBounds(take(20));
   row = take(26);
-  const int nb = isBus(id_) ? 2 : 4, bw = row.getWidth() / nb;
-  for (auto* b : {&m_, &s_, &t_, &r_}) if (b->isVisible()) b->setBounds(row.removeFromLeft(bw).reduced(1, 0));
+  const int nb = isBus(id_) ? 2 : 5, bw = row.getWidth() / nb;
+  for (juce::Button* b : {(juce::Button*)&m_, (juce::Button*)&s_, (juce::Button*)&mon_, (juce::Button*)&t_, (juce::Button*)&r_})
+    if (b->isVisible()) b->setBounds(row.removeFromLeft(bw).reduced(1, 0));
   fader_.setBounds(r);
 }
 

@@ -65,10 +65,12 @@ class AudioBridge : public juce::AudioIODeviceCallback {
       const float* merged[33];
       for (int c = 0; c < m; ++c) merged[c] = in[c];
       merged[m] = tone_.data();               // virtual input just past the hardware channels
-      e->track(0).inputL = m; toneOn_ = true;
+      if (!toneOn_) { savedInput_ = e->track(0).inputL.load(); toneOn_ = true; }
+      e->track(0).inputL = m;
+      e->track(0).audition = true;            // heard without arming track 1
       e->process(merged, m + 1, out, nOut, n);
     } else {
-      if (toneOn_) { e->track(0).inputL = 0; toneOn_ = false; }
+      if (toneOn_) { e->track(0).inputL = savedInput_; e->track(0).audition = false; toneOn_ = false; }  // restore the user's input
       e->process(in, nIn, out, nOut, n);
     }
   }
@@ -83,6 +85,7 @@ class AudioBridge : public juce::AudioIODeviceCallback {
   std::atomic<airdaw::Engine*> engine_{nullptr};
   std::vector<float> tone_;
   bool toneOn_ = false;
+  int savedInput_ = -1;
   double sr_ = 48000, phase_ = 0;
   int bufferSize_ = 0, latency_ = 0;
 };

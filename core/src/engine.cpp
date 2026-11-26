@@ -190,7 +190,13 @@ void Engine::processTrack(int ti, const SegCtx& c) {
   if (rec && !t.recActive) { writer_->beginTake(ti, c.pos, stereo ? 2 : 1); t.recActive = true; }
   else if (!rec && t.recActive) { writer_->endTake(ti); t.recActive = false; }
 
-  if (!hasInput && !useTake && !rec) {
+  // Live input is heard only on armed tracks with monitoring on (or while auditioning). Armed tracks always
+  // read their input (to record it, and to show its level on the meter even when not monitoring).
+  const bool audible = hasInput && ((armed && t.monitor.load(std::memory_order_relaxed)) || t.audition.load(std::memory_order_relaxed));
+  const bool readInput = hasInput && (audible || armed);
+  bool meterDone = false;
+
+  if (!readInput && !useTake && !rec) {
     t.meter.peakL = t.meter.peakR = t.meter.rmsL = t.meter.rmsR = 0.f;
     bool hasFx = false; for (auto* f : t.insert) hasFx |= (f != nullptr);
     if (!hasFx) return;  // idle track, nothing to ring out
@@ -204,11 +210,15 @@ void Engine::processTrack(int ti, const SegCtx& c) {
       wr[i] = ok ? (tStereo ? tk->r[(size_t)p] : wl[i]) : 0.f;
     }
   } else {
-    if (hasInput) std::memcpy(wl, c.in[il] + c.done, n * sizeof(float)); else std::fill_n(wl, n, 0.f);
+    if (readInput) std::memcpy(wl, c.in[il] + c.done, n * sizeof(float)); else std::fill_n(wl, n, 0.f);
     int ir = t.inputR.load(std::memory_order_relaxed);
-    if (stereo && ir >= 0 && ir < c.nIn) std::memcpy(wr, c.in[ir] + c.done, n * sizeof(float));
+    if (readInput && stereo && ir >= 0 && ir < c.nIn) std::memcpy(wr, c.in[ir] + c.done, n * sizeof(float));
     else std::memcpy(wr, wl, n * sizeof(float));
     if (rec) writer_->push(ti, wl, wr, n, stereo ? 2 : 1);
+    if (!audible) {  // armed but not monitoring: meter shows the input level, nothing reaches the mix
+      if (readInput) { updateMeter(t.meter, wl, wr, n); meterDone = true; }
+      std::fill_n(wl, n, 0.f); std::fill_n(wr, n, 0.f);
+    }
   }
 
   applyGain(wl, wr, n, t.smoothTrim, dbToLin(t.trimDb.load(std::memory_order_relaxed)));
@@ -224,7 +234,7 @@ void Engine::processTrack(int ti, const SegCtx& c) {
   for (int i = 0; i < n; ++i) { sg += step; wl[i] *= sg * gl; wr[i] *= sg * gr; }
   t.smoothGain = target;
 
-  updateMeter(t.meter, wl, wr, n);
+  if (!meterDone) updateMeter(t.meter, wl, wr, n);
   trackLive_[ti] = 1;
 }
 

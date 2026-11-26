@@ -18,6 +18,12 @@ class MiniReadout : public juce::Component, public juce::SettableTooltipClient {
   juce::String cap_, v_; juce::Colour c_;
 };
 
+// Strip button with a drawn headphone icon (input monitoring on/off).
+class MonitorButton : public juce::TextButton {
+ public:
+  void paintButton(juce::Graphics&, bool over, bool down) override;
+};
+
 // Track or bus strip.
 class Strip : public juce::Component {
  public:
@@ -36,6 +42,7 @@ class Strip : public juce::Component {
   const int id_;
   NamePlate plate_;
   juce::TextButton chn_, in_, route_, m_{"M"}, s_{"S"}, t_{"T"}, r_{"R"};
+  MonitorButton mon_;
   GainKnob gain_;
   std::array<InsertSlot, airdaw::kMaxInserts> slots_;
   InsertSlot summary_;  // compact mode (short window): one row "N inserts" instead of the slot list

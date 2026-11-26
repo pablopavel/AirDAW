@@ -53,6 +53,10 @@ struct Channel {
   std::atomic<int> route{0};          // Route
   std::atomic<bool> stereo{false};    // tracks only
   std::atomic<bool> armed{false};
+  // Live input is heard only on armed tracks with monitoring on (or while auditioning, e.g. the test tone).
+  // Recording does not depend on monitoring: an armed track records its input either way.
+  std::atomic<bool> monitor{true};
+  std::atomic<bool> audition{false};
   std::atomic<int> inputL{-1}, inputR{-1};  // hardware input index, -1 none
   Meter meter;
   std::array<InsertProcessor*, kMaxInserts> insert{};  // audio-thread-owned pointers

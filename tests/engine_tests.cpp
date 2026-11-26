@@ -31,6 +31,8 @@ struct Rig {
   }
   // run `blocks` blocks of sine on input 0 and return last block peak L,R
   void run(int blocks, float amp, float& pl, float& pr) {
+    // Live input is only heard on armed (monitoring) tracks, so arm every track that has an input.
+    for (int t = 0; t < kMaxTracks; ++t) if (e.track(t).inputL.load() >= 0) e.track(t).armed = true;
     const float* ip[8]; float* op[2] = {out[0].data(), out[1].data()};
     for (int c = 0; c < 8; ++c) ip[c] = in[c].data();
     for (int b = 0; b < blocks; ++b) { sine(0, amp, b * N); e.process(ip, 8, op, 2, N); }
@@ -111,6 +113,60 @@ static void testMetronome() {
       auto p = tmpDir() + "/metro.airdaw"; CHECK(saveSession(a, p).ok, "metro save");
       Engine b(SR); CHECK(loadSession(b, p).ok, "metro load"); auto& n = b.metronome();
       CHECK(n.enabled && n.bpm == 93.5f && n.beatsPerBar == 7 && n.levelDb == -12.f && n.countInBars == 2, "metronome settings round trip"); } }
+}
+
+// Two inputs: input 0 = sigAt(k), input 1 = a 300 Hz tone. Returns left/right output.
+static float sig2At(long k) { return 0.3f * std::sin(2 * M_PI * 300.0 * k / SR); }
+static void stream2(Engine& e, long& k, int frames, std::vector<float>& L, std::vector<float>& R, int blk = 64) {
+  std::vector<float> a(blk), b(blk), l(blk), r(blk);
+  for (int done = 0; done < frames; done += blk) {
+    const int n = std::min(blk, frames - done);
+    for (int i = 0; i < n; ++i) { a[i] = sigAt(k + i); b[i] = sig2At(k + i); }
+    const float* ip[2] = {a.data(), b.data()}; float* op[2] = {l.data(), r.data()};
+    e.process(ip, 2, op, 2, n); k += n;
+    L.insert(L.end(), l.begin(), l.begin() + n); R.insert(R.end(), r.begin(), r.begin() + n);
+  }
+}
+static float peakOf(const std::vector<float>& v, size_t from = 0) { float p = 0; for (size_t i = from; i < v.size(); ++i) p = std::max(p, std::fabs(v[i])); return p; }
+
+// Live input is heard only when armed + monitoring (or auditioning); recording does not depend on monitoring.
+// Layering: a second track records while the first plays its take back.
+static void testMonitoringAndLayering() {
+  { Engine e(SR); auto& t = e.track(0); t.inputL = 0; t.pan = -1.f;
+    long k = 0; std::vector<float> L, R;
+    stream2(e, k, 2000, L, R);
+    CHECK(peakOf(L) == 0.f && t.meter.peakL.load() == 0.f, "unarmed track must not pass live input (peak %f)", peakOf(L));
+    t.armed = true; L.clear(); R.clear(); stream2(e, k, 2000, L, R);
+    CHECK(std::fabs(peakOf(L, 500) - 0.5f) < 0.01f, "armed + monitoring must pass input (peak %f)", peakOf(L, 500));
+    t.monitor = false; L.clear(); R.clear(); stream2(e, k, 2000, L, R);
+    CHECK(peakOf(L, 500) == 0.f, "monitoring off must silence the input (peak %f)", peakOf(L, 500));
+    CHECK(t.meter.peakL.load() > 0.4f, "armed track meter must show the input level even when not monitoring");
+    t.armed = false; t.audition = true; L.clear(); R.clear(); stream2(e, k, 2000, L, R);
+    CHECK(peakOf(L, 500) > 0.4f, "audition must pass input on an unarmed track"); }
+  { Engine e(SR); auto dir = tmpDir(); auto& t = e.track(0); t.inputL = 0; t.armed = true; t.monitor = false;
+    long k = 0; std::vector<float> L, R;
+    e.startRecording(dir); stream2(e, k, 5000, L, R); e.transport().stop(); stream2(e, k, 64, L, R); e.flushRecording();
+    auto f = e.pollFinishedTakes(); bool ok = f.size() == 1;
+    if (ok) { WavData w; readWav(f[0].path, w); ok = w.left.size() == 5000; for (size_t i = 0; ok && i < 5000; ++i) ok = w.left[i] == sigAt((long)i); }
+    CHECK(ok && peakOf(L) == 0.f, "monitoring off: take must still be bit-exact and nothing audible"); }
+  { Engine e(SR); auto dir = tmpDir();
+    auto& a = e.track(0); a.inputL = 0; a.armed = true; a.pan = -1.f;
+    long k = 0; std::vector<float> L, R;
+    e.startRecording(dir); stream2(e, k, 20000, L, R); e.transport().stop(); stream2(e, k, 64, L, R); e.flushRecording();
+    auto f1 = e.pollFinishedTakes();
+    CHECK(f1.size() == 1, "layering: first take"); if (f1.size() != 1) return;
+    e.setActiveTake(0, e.addTake(0, f1[0].path, f1[0].start));
+    a.armed = false;
+    auto& b = e.track(1); b.inputL = 1; b.armed = true; b.pan = 1.f;  // second take from input 2, hard right
+    e.transport().seek(0); long k2 = 0; std::vector<float> L2, R2;
+    e.startRecording(dir); stream2(e, k2, 20000, L2, R2); e.transport().stop(); stream2(e, k2, 64, L2, R2); e.flushRecording();
+    auto f2 = e.pollFinishedTakes();
+    bool ok = f2.size() == 1 && f2[0].track == 1;
+    if (ok) { WavData w; readWav(f2[0].path, w); ok = w.left.size() == 20000; for (size_t i = 0; ok && i < 20000; ++i) ok = w.left[i] == sig2At((long)i); }
+    CHECK(ok, "layering: track 2 take must hold input 2, bit-exact");
+    bool pb = true; for (size_t i = 0; pb && i < 20000; ++i) pb = std::fabs(L2[i] - sigAt((long)i)) < 1e-6f;
+    CHECK(pb, "layering: track 1 must play its take back while track 2 records");
+    std::printf("monitoring: heard only when armed + monitoring; layering: track 2 overdubs while track 1 plays back\n"); }
 }
 
 // Loading a session (or New) replaces the take list instead of appending to it, so takes never leak
@@ -241,6 +297,7 @@ int main() {
   // 13b. Metronome: clicks on the beat grid, accent on beat 1, output only (never recorded), count-in
   testMetronome();
   testTakeLists();
+  testMonitoringAndLayering();
 
   // 14. Session save/load round trip, including plugin parameters, takes, loop/punch
   { auto dir = tmpDir(); std::string sess = dir + "/song.airdaw";
@@ -300,7 +357,7 @@ int main() {
       void loadState(const std::string& s) override { st = s; v = std::stoi(s.substr(6)) / 100.f; }
       void process(float* l, float* r, int n) override { for (int i = 0; i < n; ++i) { l[i] *= 2 * v; r[i] *= 2 * v; } } };
     auto dir = tmpDir(); Engine a(SR); a.setInsertFactory([](const std::string& id, double) -> std::unique_ptr<InsertProcessor> { return id == "test:gain" ? std::make_unique<Gain2>() : nullptr; });
-    a.track(0).inputL = 0; a.track(0).pan = -1.f; auto g = std::make_unique<Gain2>(); g->v = 0.25f; a.setInsertProcessor(0, 0, std::move(g));
+    a.track(0).inputL = 0; a.track(0).armed = true; a.track(0).pan = -1.f; auto g = std::make_unique<Gain2>(); g->v = 0.25f; a.setInsertProcessor(0, 0, std::move(g));
     long k = 0; auto out = stream(a, k, 400); CHECK(std::fabs(out[300] - sigAt(300) * 0.5f) < 1e-6f, "hosted insert processes audio");
     CHECK(saveSession(a, dir + "/h.airdaw").ok, "save hosted");
     Engine b(SR); b.setInsertFactory(a.insertFactory()); auto lr = loadSession(b, dir + "/h.airdaw");
@@ -311,7 +368,7 @@ int main() {
   // 17. Multi-core: output bit-identical for any thread count, plus speed-up, pool idle/wake, and recording under load
   { auto build = [&](Engine& e) {
       const char* chain[4] = {"Console7Channel", "Density2", "ToTape8", "Pressure5"};
-      for (int t = 0; t < 24; ++t) { e.track(t).inputL = t % 8; e.track(t).stereo = (t % 2); e.track(t).route = t % 5; e.track(t).pan = (t % 7 - 3) / 3.f;
+      for (int t = 0; t < 24; ++t) { e.track(t).inputL = t % 8; e.track(t).armed = true; e.track(t).stereo = (t % 2); e.track(t).route = t % 5; e.track(t).pan = (t % 7 - 3) / 3.f;
         for (int s2 = 0; s2 < 4; ++s2) e.setInsert(t, s2, chain[s2]); }
       for (int b = 0; b < 4; ++b) { e.setInsert(100 + b, 0, "Console7Buss"); e.setInsert(100 + b, 1, "Density2"); }
       e.setInsert(200, 0, "Console7Buss"); e.setInsert(200, 1, "ADClip8"); };
@@ -364,7 +421,7 @@ int main() {
   // 9. Load benchmark: 24 tracks x 4 inserts + 4 buses x 2 + master x 2, 96 kHz, 64-sample blocks
   { Engine e(SR);
     const char* chain[4] = {"Console7Channel", "Density2", "ToTape8", "Pressure5"};
-    for (int t = 0; t < 24; ++t) { e.track(t).inputL = t % 8; e.track(t).stereo = (t % 2); e.track(t).route = 1 + t % 4;
+    for (int t = 0; t < 24; ++t) { e.track(t).inputL = t % 8; e.track(t).armed = true; e.track(t).stereo = (t % 2); e.track(t).route = 1 + t % 4;
       for (int s = 0; s < 4; ++s) e.setInsert(t, s, chain[s]); }
     for (int b = 0; b < 4; ++b) { e.setInsert(100 + b, 0, "Console7Buss"); e.setInsert(100 + b, 1, "Density2"); }
     e.setInsert(200, 0, "Console7Buss"); e.setInsert(200, 1, "ADClip8");
