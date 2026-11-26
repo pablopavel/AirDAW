@@ -30,6 +30,12 @@ enum class Route : int { Master = 0, Bus1, Bus2, Bus3, Bus4 };  // value-1 = bus
 // `keep` is the user's star in the takes bar (UI thread only; saved in sessions).
 struct Take { std::vector<float> l, r; int64_t start = 0; std::string path; bool keep = false; };
 
+// Comping: parts of a track's timeline played from chosen takes (e.g. take 2 in the verse, take 4 in the chorus).
+// Sections are sorted and never overlap. Outside them the track plays its active take, or silence.
+// A Comp is immutable once published; changing it publishes a new one (the audio thread swaps in one step).
+struct CompSection { const Take* take = nullptr; int64_t from = 0, to = 0; };  // timeline [from, to)
+struct Comp { std::vector<CompSection> sections; bool silenceOutside = false; };
+
 struct Meter {
   std::atomic<float> peakL{0}, peakR{0}, rmsL{0}, rmsR{0};
 };
@@ -92,6 +98,7 @@ struct Channel {
   Meter meter;
   std::array<InsertProcessor*, kMaxInserts> insert{};  // audio-thread-owned pointers
   std::atomic<const Take*> take{nullptr};         // active take for playback
+  std::atomic<const Comp*> comp{nullptr};         // optional comp over the active take (see Comp)
   bool recActive = false;                          // audio thread only
   float smoothGain = 1.f, smoothTrim = 1.f;       // audio thread only
   std::string name;                                // UI thread only
@@ -156,6 +163,19 @@ class Engine {
   // the engine is destroyed, because the audio thread may still be reading it. UI thread only.
   void removeTake(int track, int i);
 
+  // --- comping (UI thread) ---
+  // Plays `take` in [from, to) of the track's timeline; overlapping parts of other sections are replaced.
+  // take == nullptr removes [from, to) from the comp (the active take, or silence, plays there again).
+  void setCompSection(int track, int64_t from, int64_t to, const Take* take);
+  void setCompSilenceOutside(int track, bool silence);  // outside the sections: silence, or the active take
+  void clearComp(int track);
+  const Comp* comp(int track) const { return tracks_[track].comp.load(); }
+  bool takeInComp(int track, const Take* t) const;
+  std::atomic<float> compCrossfadeMs{5.f};  // 0..50 ms, equal-power, centred on every boundary of a comp
+  // What a track plays at timeline position p, without crossfades (overview, song length). UI thread.
+  bool trackFrameAt(int track, int64_t p, float& l, float& r) const;
+  int64_t trackEnd(int track) const;  // end of everything the track plays (0 = nothing)
+
   // App-side per-project data (a JSON object as text; UI thread only). Sessions save it under "app" and restore it
   // on load ("" when the session predates it). The engine never reads it.
   std::string appData;
@@ -210,6 +230,9 @@ class Engine {
   std::array<std::vector<std::unique_ptr<Take>>, kMaxTracks> takes_;
   std::array<int, kMaxTracks> takeBase_{};  // first take of the current session's list
   std::vector<std::unique_ptr<Take>> removedTakes_;  // kept alive until the engine is destroyed
+  std::vector<std::unique_ptr<Comp>> comps_;         // every comp published (the audio thread may still read one)
+  void publishComp(int track, std::vector<CompSection> sections, bool silenceOutside);
+  void renderComp(const Comp& cp, const Take* base, int64_t pos, int n, float* l, float* r) const;
   FloatRing tap_{1u << 17};                          // master tap: ~0.68 s of stereo at 96 kHz
   FloatRing heardTap_{1u << 17};
   FloatRing refTap_{1u << 17};

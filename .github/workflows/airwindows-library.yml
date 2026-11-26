@@ -21,7 +21,7 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Get the newest Airwindows Consolidated
         shell: pwsh
@@ -49,7 +49,8 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         shell: pwsh
         run: |
-          cmake -S fxlib -B build-fxlib -G "Visual Studio 17 2022" -A x64 -DAIRWIN2RACK_DIR="$pwd/airwin2rack-src" -DAIRDAW_FXLIB_BUILD="$env:BUILD_ID"
+          # No -G: CMake picks the newest Visual Studio on the runner (the images move to new versions).
+          cmake -S fxlib -B build-fxlib -A x64 -DAIRWIN2RACK_DIR="$pwd/airwin2rack-src" -DAIRDAW_FXLIB_BUILD="$env:BUILD_ID"
           cmake --build build-fxlib --config Release --parallel
 
       - name: Package (manifest with SHA-256 and effect list)

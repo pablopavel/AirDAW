@@ -11,7 +11,7 @@ namespace airdaw {
 int64_t songEnd(Engine& e) {
   int64_t end = 0;
   for (int t = 0; t < kMaxTracks; ++t)
-    if (const Take* tk = e.track(t).take.load()) end = std::max(end, tk->start + (int64_t)tk->l.size());
+    end = std::max(end, e.trackEnd(t));  // the active take and any comp sections
   return end;
 }
 

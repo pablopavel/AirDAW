@@ -18,9 +18,10 @@ static juce::String mmss(double sec) {
 void Overview::rebuildWave(airdaw::Engine& e) {
   juce::String key; double end = 0.0;
   for (int t = 0; t < airdaw::kMaxTracks; ++t)
-    if (auto* tk = e.track(t).take.load()) {
-      key << juce::String::toHexString((juce::pointer_sized_int)tk) << ";";
-      end = juce::jmax(end, (double)tk->start + (double)tk->l.size());
+    if (e.track(t).take.load() || e.comp(t)) {
+      key << juce::String::toHexString((juce::pointer_sized_int)e.track(t).take.load()) << "/"
+          << juce::String::toHexString((juce::pointer_sized_int)e.comp(t)) << ";";
+      end = juce::jmax(end, (double)e.trackEnd(t));
     }
   key << e.sampleRate();
   if (key == waveKey_) return;
@@ -28,6 +29,16 @@ void Overview::rebuildWave(airdaw::Engine& e) {
   wave_.assign(kBuckets, 0.f);
   len_ = juce::jmax(end, e.sampleRate() * 30.0);  // at least 30 s so a new song has room
   for (int t = 0; t < airdaw::kMaxTracks; ++t) {
+    if (e.comp(t)) {  // a comped track: what it actually plays, section by section
+      const auto tEnd = e.trackEnd(t);
+      for (juce::int64 p = 0; p < tEnd; p += 16) {
+        float l, r;
+        if (!e.trackFrameAt(t, p, l, r)) continue;
+        const int b = juce::jlimit(0, kBuckets - 1, (int)((double)p / len_ * kBuckets));
+        wave_[(size_t)b] = juce::jmax(wave_[(size_t)b], juce::jmax(std::abs(l), std::abs(r)));
+      }
+      continue;
+    }
     auto* tk = e.track(t).take.load(); if (!tk) continue;
     const bool st = !tk->r.empty();
     for (size_t i = 0; i < tk->l.size(); i += 16) {  // every 16th sample is plenty for a ~600-pixel overview

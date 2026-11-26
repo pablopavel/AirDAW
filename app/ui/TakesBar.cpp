@@ -20,6 +20,19 @@ TakesBar::TakesBar(AppCtx& ctx) : ctx_(ctx) {
   };
   del_.setTooltip("Remove the takes without a star (in this loop region) and move their files to the Recycle Bin");
   del_.onClick = [this] { deleteUnkept(); };
+  outside_.setTooltip("Outside the comped regions this track plays its take, or silence");
+  outside_.onClick = [this] {
+    auto* e = ctx_.engine(); const int t = track(); if (!e || t < 0) return;
+    const auto* cp = e->comp(t);
+    e->setCompSilenceOutside(t, !(cp && cp->silenceOutside)); key_.clear();
+  };
+  clearComp_.setTooltip("Remove every region pick: the track's take plays everywhere again (no take is deleted)");
+  clearComp_.onClick = [this] { auto* e = ctx_.engine(); const int t = track(); if (e && t >= 0) { e->clearComp(t); key_.clear(); } };
+  xfade_.setRange(0.0, 50.0, 1.0);
+  xfade_.setTextValueSuffix(" ms crossfade");
+  xfade_.setTooltip("Crossfade at every comp edge (0 = hard cut). Saved with the project.");
+  xfade_.onValueChange = [this] { if (auto* e = ctx_.engine()) e->compCrossfadeMs = (float)xfade_.getValue(); };
+  for (juce::Component* c : std::initializer_list<juce::Component*>{&outside_, &clearComp_, &xfade_}) addChildComponent(c);
   clear_.setTooltip("Remove the loop region");
   clear_.onClick = [this] { if (auto* e = ctx_.engine()) { auto& tr = e->transport(); tr.loopOn = false; tr.loopIn = 0; tr.loopOut = 0; } };
 }
@@ -54,7 +67,8 @@ void TakesBar::sync() {
   auto& tr = e->transport();
   juce::String k; k << t << "|" << tr.loopIn.load() << "|" << tr.loopOut.load() << "|" << (int)tr.loopOn.load();
   if (t >= 0) {
-    k << "|" << juce::String::toHexString((juce::pointer_sized_int)e->track(t).take.load()) << "|" << (int)e->track(t).armed.load();
+    k << "|" << juce::String::toHexString((juce::pointer_sized_int)e->track(t).take.load()) << "|" << (int)e->track(t).armed.load()
+      << "|" << juce::String::toHexString((juce::pointer_sized_int)e->comp(t));
     for (int i = 0; i < e->numTakes(t); ++i) k << ";" << juce::String::toHexString((juce::pointer_sized_int)e->takeAt(t, i)) << (e->takeAt(t, i)->keep ? "*" : "");
   }
   if (k != key_) { key_ = k; rebuild(); }
@@ -82,12 +96,20 @@ void TakesBar::rebuild() {
   if (region)  // kept takes from other regions of this track are listed after the loop's takes
     for (int i = 0; i < e->numTakes(t); ++i)
       if (e->takeAt(t, i)->keep && std::find(inScope.begin(), inScope.end(), i) == inScope.end()) shown.push_back(i);
+  if (region)  // the track's own take too, so a click can hand the region back to it
+    for (int i = 0; i < e->numTakes(t); ++i)
+      if (e->takeAt(t, i) == ch.take.load() && std::find(shown.begin(), shown.end(), i) == shown.end()) shown.insert(shown.begin(), i);
   int n = 0;
   const auto* active = ch.take.load();
+  const auto* cp = e->comp(t);
+  const auto li = tr.loopIn.load(), lo = tr.loopOut.load();
+  const airdaw::Take* inRegion = nullptr;  // the take the comp plays over this loop region
+  if (cp && region) for (auto& s : cp->sections) if (s.from <= li && s.to >= lo) inRegion = s.take;
   for (int i : shown) {
     const auto* tk = e->takeAt(t, i);
     auto c = std::make_unique<Chip>();
-    c->index = i; c->active = tk == active; c->kept = tk->keep;
+    c->index = i; c->kept = tk->keep; c->inComp = e->takeInComp(t, tk);
+    c->active = inRegion ? tk == inRegion : tk == active;
     const bool own = std::find(inScope.begin(), inScope.end(), i) != inScope.end();
     const double a = (double)tk->start / sr, b = a + (double)tk->l.size() / sr;
     c->label = own ? (region ? "Take " + juce::String(++n) : "Take " + juce::String(++n) + "  " + mmss(a))
@@ -98,7 +120,15 @@ void TakesBar::rebuild() {
     }
     float mx = 0.f; for (float p : c->peaks) mx = juce::jmax(mx, p);
     if (mx > 0.f) for (float& p : c->peaks) p = std::pow(p / mx, 0.7f);
-    c->onPick = [this, t](int idx) { if (auto* en = ctx_.engine()) { en->setActiveTake(t, idx); key_.clear(); } };
+    c->onPick = [this, t](int idx) { pick(t, idx, 0); };
+    c->onMenu = [this, t](int idx) {
+      auto* en = ctx_.engine(); if (!en) return;
+      const bool hasRegion = en->transport().loopOut.load() > en->transport().loopIn.load();
+      juce::PopupMenu m;
+      m.addItem(1, "Play on the whole track");
+      m.addItem(2, "Play in this loop region only", hasRegion);
+      m.showMenuAsync(juce::PopupMenu::Options(), [this, t, idx](int r) { if (r > 0) pick(t, idx, r); });
+    };
     c->setTooltip(juce::File(juce::String(tk->path)).getFileName());
     row_.addAndMakeVisible(*c); chips_.push_back(std::move(c));
   }
@@ -109,15 +139,40 @@ void TakesBar::rebuild() {
   bool activeKept = false;
   for (int i = 0; i < e->numTakes(t); ++i) if (e->takeAt(t, i) == active) activeKept = e->takeAt(t, i)->keep;
   keep_.setVisible(!shown.empty()); del_.setVisible(!inScope.empty());
+  const bool comping = cp != nullptr || (region && active != nullptr);
+  outside_.setVisible(comping); xfade_.setVisible(comping); clearComp_.setVisible(cp != nullptr && !cp->sections.empty());
+  outside_.setButtonText(cp && cp->silenceOutside ? "Outside: silence" : "Outside: take");
+  outside_.setToggleState(cp && cp->silenceOutside, juce::dontSendNotification);
+  if (!xfade_.isMouseButtonDown()) xfade_.setValue(e->compCrossfadeMs.load(), juce::dontSendNotification);
   keep_.setButtonText(juce::String(juce::CharPointer_UTF8(activeKept ? "\xe2\x98\x85 Kept" : "\xe2\x98\x85 Keep")));
   keep_.setToggleState(activeKept, juce::dontSendNotification);
   resized(); repaint();
 }
 
+// With a loop region and a take already playing on the track, a click plays the take in that region only (comping);
+// a click on the track's own take hands the region back to it. Without a region: the take plays on the whole track.
+void TakesBar::pick(int t, int idx, int how) {
+  auto* e = ctx_.engine(); if (!e || t < 0 || idx < 0 || idx >= e->numTakes(t)) return;
+  auto& tr = e->transport();
+  const auto li = tr.loopIn.load(), lo = tr.loopOut.load();
+  const auto* tk = e->takeAt(t, idx);
+  const auto* base = e->track(t).take.load();
+  const bool region = lo > li;
+  if (how == 0) how = region && base && tk != base ? 2 : 1;
+  if (how == 2 && region) {
+    e->setCompSection(t, li, lo, tk == base ? nullptr : tk);
+    ctx_.note(tk == base ? "This region plays the track's take again" : "Comp: this take plays in the loop region; the rest of the track is unchanged");
+  } else {
+    e->setActiveTake(t, idx);
+    if (e->comp(t)) e->setCompSection(t, tk->start, tk->start + (juce::int64)tk->l.size(), nullptr);  // its own span plays it, not old picks
+  }
+  key_.clear();
+}
+
 void TakesBar::deleteUnkept() {
   auto* e = ctx_.engine(); const int t = track(); if (!e || t < 0) return;
   std::vector<int> doomed;
-  for (int i : scope(*e, t)) if (!e->takeAt(t, i)->keep) doomed.push_back(i);
+  for (int i : scope(*e, t)) if (!e->takeAt(t, i)->keep && !e->takeInComp(t, e->takeAt(t, i))) doomed.push_back(i);  // comp takes count as kept
   if (doomed.empty()) { ctx_.note("Every take here is starred: nothing to delete"); return; }
   if (e->transport().recording.load()) { ctx_.note("Stop recording first"); return; }
   const juce::String name(e->track(t).name);
@@ -132,7 +187,7 @@ void TakesBar::deleteUnkept() {
         int removed = 0;
         auto list = scope(*en, t);
         for (auto it = list.rbegin(); it != list.rend(); ++it) {  // highest index first: removal shifts later ones
-          const auto* tk = en->takeAt(t, *it); if (tk->keep) continue;
+          const auto* tk = en->takeAt(t, *it); if (tk->keep || en->takeInComp(t, tk)) continue;
           juce::File(juce::String::fromUTF8(tk->path.c_str())).moveToTrash();
           en->removeTake(t, *it); ++removed;
         }
@@ -157,6 +212,7 @@ void TakesBar::Chip::paint(juce::Graphics& g) {
   auto wave = tr.removeFromRight(72.f).reduced(0.f, 7.f);
   g.setColour(ink); g.setFont(Theme::spaced(Theme::uiFont(12.f), 0.04f));
   g.drawText((kept ? juce::String(juce::CharPointer_UTF8("\xe2\x98\x85 ")) : juce::String()) + label, tr, juce::Justification::centredLeft, true);
+  if (inComp && !active) { g.setColour(t.am()); g.fillEllipse(r.getRight() - 9.f, r.getY() + 3.f, 5.f, 5.f); }  // used elsewhere in the comp
   const float bw = wave.getWidth() / 24.f;
   for (int i = 0; i < 24; ++i) {
     const float h = juce::jmax(1.f, peaks[(size_t)i] * wave.getHeight());
@@ -183,7 +239,8 @@ void TakesBar::resized() {
   auto r = getLocalBounds().reduced(16, 8);
   r.removeFromLeft(60);
   if (region_.isVisible()) { region_.setBounds(r.removeFromLeft(120)); r.removeFromLeft(8); loop_.setBounds(r.removeFromLeft(90).reduced(0, 2)); r.removeFromLeft(12); }
-  for (auto* b : {&clear_, &del_, &keep_}) if (b->isVisible()) { b->setBounds(r.removeFromRight(b->getBestWidthForHeight(28) + 20).reduced(0, 2)); r.removeFromRight(8); }
+  for (auto* b : {&clear_, &del_, &keep_, &clearComp_, &outside_}) if (b->isVisible()) { b->setBounds(r.removeFromRight(b->getBestWidthForHeight(28) + 20).reduced(0, 2)); r.removeFromRight(8); }
+  if (xfade_.isVisible()) { xfade_.setBounds(r.removeFromRight(150).reduced(0, 6)); r.removeFromRight(8); }
   titleArea_ = r.removeFromLeft(juce::jmin(240, r.getWidth() / 3));
   view_.setBounds(r);
   int x = 0;

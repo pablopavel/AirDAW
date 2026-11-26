@@ -77,6 +77,11 @@ void Engine::removeTake(int track, int i) {
   auto& list = takes_[track];
   const size_t at = (size_t)(takeBase_[track] + i);
   if (tracks_[track].take.load() == list[at].get()) tracks_[track].take.store(nullptr);
+  if (const Comp* cp = tracks_[track].comp.load(); cp && takeInComp(track, list[at].get())) {  // its sections go too
+    std::vector<CompSection> keep;
+    for (auto& s : cp->sections) if (s.take != list[at].get()) keep.push_back(s);
+    publishComp(track, std::move(keep), cp->silenceOutside);
+  }
   removedTakes_.push_back(std::move(list[at]));
   list.erase(list.begin() + (std::ptrdiff_t)at);
 }
@@ -141,7 +146,126 @@ void Engine::applyMonitor(float* l, float* r, int n, int64_t) {
 void Engine::clearTakeList(int track) {
   if (track < 0 || track >= kMaxTracks) return;
   tracks_[track].take.store(nullptr);
+  tracks_[track].comp.store(nullptr);
   takeBase_[track] = (int)takes_[track].size();
+}
+
+// ---------------------------------------------------------------- comping
+void Engine::publishComp(int track, std::vector<CompSection> s, bool silence) {
+  if (track < 0 || track >= kMaxTracks) return;
+  s.erase(std::remove_if(s.begin(), s.end(), [](const CompSection& x) { return !x.take || x.to <= x.from; }), s.end());
+  std::sort(s.begin(), s.end(), [](const CompSection& a, const CompSection& b) { return a.from < b.from; });
+  if (s.empty() && !silence) { tracks_[track].comp.store(nullptr, std::memory_order_release); return; }
+  auto c = std::make_unique<Comp>();
+  c->sections = std::move(s); c->silenceOutside = silence;
+  tracks_[track].comp.store(c.get(), std::memory_order_release);
+  comps_.push_back(std::move(c));
+}
+
+void Engine::setCompSection(int track, int64_t from, int64_t to, const Take* take) {
+  if (track < 0 || track >= kMaxTracks || to <= from) return;
+  const Comp* cur = tracks_[track].comp.load();
+  std::vector<CompSection> out;
+  if (cur)
+    for (auto s : cur->sections) {  // keep what lies outside [from, to), trimming sections that straddle it
+      if (s.to <= from || s.from >= to) { out.push_back(s); continue; }
+      if (s.from < from) out.push_back({s.take, s.from, from});
+      if (s.to > to) out.push_back({s.take, to, s.to});
+    }
+  if (take) out.push_back({take, from, to});
+  publishComp(track, std::move(out), cur && cur->silenceOutside);
+}
+
+void Engine::setCompSilenceOutside(int track, bool silence) {
+  if (track < 0 || track >= kMaxTracks) return;
+  const Comp* cur = tracks_[track].comp.load();
+  publishComp(track, cur ? cur->sections : std::vector<CompSection>{}, silence);
+}
+
+void Engine::clearComp(int track) { if (track >= 0 && track < kMaxTracks) tracks_[track].comp.store(nullptr); }
+
+bool Engine::takeInComp(int track, const Take* t) const {
+  const Comp* cp = tracks_[track].comp.load();
+  if (!cp) return false;
+  for (auto& s : cp->sections) if (s.take == t) return true;
+  return false;
+}
+
+static inline void takeFrame(const Take* tk, int64_t p, float& l, float& r) {
+  if (tk) {
+    const int64_t i = p - tk->start;
+    if (i >= 0 && i < (int64_t)tk->l.size()) { l = tk->l[(size_t)i]; r = tk->r.empty() ? l : tk->r[(size_t)i]; return; }
+  }
+  l = r = 0.f;
+}
+
+// The take playing at p (no crossfade): the section containing p, else the active take (or silence).
+static const Take* compSource(const Comp& cp, const Take* base, int64_t p) {
+  const auto& s = cp.sections;
+  auto it = std::upper_bound(s.begin(), s.end(), p, [](int64_t v, const CompSection& x) { return v < x.from; });
+  if (it != s.begin() && p < (it - 1)->to) return (it - 1)->take;
+  return cp.silenceOutside ? nullptr : base;
+}
+
+bool Engine::trackFrameAt(int track, int64_t p, float& l, float& r) const {
+  const Take* base = tracks_[track].take.load();
+  const Comp* cp = tracks_[track].comp.load();
+  takeFrame(cp ? compSource(*cp, base, p) : base, p, l, r);
+  return l != 0.f || r != 0.f;
+}
+
+int64_t Engine::trackEnd(int track) const {
+  const Take* base = tracks_[track].take.load();
+  const Comp* cp = tracks_[track].comp.load();
+  int64_t end = 0;
+  if (base && !(cp && cp->silenceOutside)) end = base->start + (int64_t)base->l.size();
+  if (cp) for (auto& s : cp->sections) end = std::max(end, std::min(s.to, s.take->start + (int64_t)s.take->l.size()));
+  return end;
+}
+
+// Does the take have audio over [a, z)? Silence (no take) fades fine anywhere.
+static bool covers(const Take* tk, int64_t a, int64_t z) { return !tk || (a >= tk->start && z <= tk->start + (int64_t)tk->l.size()); }
+
+// Audio thread. Each boundary b between two sources gets an equal-power crossfade, placed where both takes have
+// audio: centred on b if they can, else just after b (the new take starts at b, e.g. a loop pass), else just before
+// b (the old take ends at b). If neither fits, a hard cut (never a fade into missing audio, which would click).
+void Engine::renderComp(const Comp& cp, const Take* base, int64_t pos, int n, float* wl, float* wr) const {
+  const auto& s = cp.sections;
+  const int64_t fade = (int64_t)std::llround(std::clamp(compCrossfadeMs.load(std::memory_order_relaxed), 0.f, 50.f) * 0.001 * sr_);
+  for (int i = 0; i < n; ++i) {
+    const int64_t p = pos + i;
+    float l, r;
+    const Take *a = nullptr, *c = nullptr;
+    int64_t ws = 0, we = 0;
+    bool fading = false;
+    if (fade > 1) {  // section edges close enough for p to be inside their fade window
+      auto it = std::upper_bound(s.begin(), s.end(), p, [](int64_t v, const CompSection& x) { return v < x.from; });
+      int64_t edges[3]; int ne = 0;
+      if (it != s.end()) edges[ne++] = it->from;
+      if (it != s.begin()) { edges[ne++] = (it - 1)->from; edges[ne++] = (it - 1)->to; }
+      for (int k = 0; k < ne && !fading; ++k) {
+        const int64_t b = edges[k];
+        if (std::llabs(p - b) > fade) continue;
+        const Take *s1 = compSource(cp, base, b - 1), *s2 = compSource(cp, base, b);
+        if (s1 == s2) continue;
+        const int64_t h = fade / 2;
+        const int64_t starts[3] = {b - h, b, b - fade};
+        for (int64_t st : starts)
+          if (covers(s1, st, st + fade) && covers(s2, st, st + fade)) {
+            if (p >= st && p < st + fade) { a = s1; c = s2; ws = st; we = st + fade; fading = true; }
+            break;  // the first window that fits is this edge's window
+          }
+      }
+    }
+    if (fading) {
+      float l1, r1, l2, r2;
+      takeFrame(a, p, l1, r1); takeFrame(c, p, l2, r2);
+      const float t = ((float)(p - ws) + 0.5f) / (float)(we - ws);
+      const float gIn = std::sin(t * 1.5707963f), gOut = std::cos(t * 1.5707963f);
+      l = l1 * gOut + l2 * gIn; r = r1 * gOut + r2 * gIn;
+    } else takeFrame(compSource(cp, base, p), p, l, r);
+    wl[i] = l; wr[i] = r;
+  }
 }
 
 Channel* Engine::resolve(int id) {
@@ -270,8 +394,9 @@ void Engine::processTrack(int ti, const SegCtx& c) {
   const bool stereo = t.stereo.load(std::memory_order_relaxed);
   const bool armed = t.armed.load(std::memory_order_relaxed);
   const Take* tk = t.take.load(std::memory_order_acquire);
+  const Comp* cp = t.comp.load(std::memory_order_acquire);
   const bool rec = c.playing && c.recordingOn && armed && c.inRange;
-  const bool useTake = c.playing && tk && !(armed && (!c.recordingOn || c.inRange));
+  const bool useTake = c.playing && (tk || cp) && !(armed && (!c.recordingOn || c.inRange));
 
   if (rec && !t.recActive) { writer_->beginTake(ti, c.pos, stereo ? 2 : 1); t.recActive = true; }
   else if (!rec && t.recActive) { writer_->endTake(ti); t.recActive = false; }
@@ -287,7 +412,9 @@ void Engine::processTrack(int ti, const SegCtx& c) {
     bool hasFx = false; for (auto* f : t.insert) hasFx |= (f != nullptr);
     if (!hasFx) return;  // idle track, nothing to ring out
   }
-  if (useTake) {
+  if (useTake && cp) {
+    renderComp(*cp, tk, c.pos, n, wl, wr);
+  } else if (useTake) {
     const bool tStereo = !tk->r.empty();
     const int64_t base = c.pos - tk->start, len = (int64_t)tk->l.size();
     for (int i = 0; i < n; ++i) {
@@ -376,7 +503,8 @@ void Engine::process(const float* const* in, int nIn, float* const* out, int nOu
     int busy = 0;
     for (auto& t : tracks_) {
       bool hasFx = false; for (auto* f : t.insert) hasFx |= (f != nullptr);
-      busy += (hasFx || t.take.load(std::memory_order_relaxed) || t.inputL.load(std::memory_order_relaxed) >= 0 || t.recActive);
+      busy += (hasFx || t.take.load(std::memory_order_relaxed) || t.comp.load(std::memory_order_relaxed) ||
+               t.inputL.load(std::memory_order_relaxed) >= 0 || t.recActive);
     }
     struct Job { Engine* e; const SegCtx* c; } job{this, &c};
     auto trackFn = [](void* p, int i) { auto* j = (Job*)p; j->e->processTrack(i, *j->c); };

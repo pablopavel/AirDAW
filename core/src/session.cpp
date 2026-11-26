@@ -43,6 +43,7 @@ std::string sessionToJson(Engine& e, const std::string& baseDir) {
   mj.set("enabled", JVal::boolean(m.enabled)).set("bpm", JVal::num(m.bpm)).set("beatsPerBar", JVal::num(m.beatsPerBar))
     .set("levelDb", JVal::num(m.levelDb)).set("countInBars", JVal::num(m.countInBars));
   root.set("metronome", mj);
+  { JVal cj = JVal::obj(); cj.set("crossfadeMs", JVal::num(e.compCrossfadeMs.load())); root.set("comping", cj); }
   {  // app-side per-project data (reference track, plugin MIDI mappings...), kept as a JSON object
     JVal app; if (e.appData.empty() || !JVal::parse(e.appData, app) || app.type != JVal::Obj) app = JVal::obj();
     root.set("app", app);
@@ -74,6 +75,17 @@ std::string sessionToJson(Engine& e, const std::string& baseDir) {
         tk.push(q);
       }
       j.set("takes", tk).set("activeTake", JVal::num(active));
+      if (const Comp* cp = e.comp(id)) {  // sections refer to takes by their index in "takes"
+        JVal cj = JVal::obj(), secs = JVal::arr();
+        for (auto& s : cp->sections)
+          for (int i = 0; i < e.numTakes(id); ++i)
+            if (e.takeAt(id, i) == s.take) {
+              JVal q = JVal::obj(); q.set("take", JVal::num(i)).set("from", JVal::num((double)s.from)).set("to", JVal::num((double)s.to));
+              secs.push(q); break;
+            }
+        cj.set("silenceOutside", JVal::boolean(cp->silenceOutside)).set("sections", secs);
+        j.set("comp", cj);
+      }
     }
     chs.push(j);
   }
@@ -103,6 +115,8 @@ SessionResult loadSession(Engine& e, const std::string& path) {
   if ((int)root.num("sampleRate", 0) != (int)e.sampleRate())
     r.warnings.push_back("session sample rate differs from the audio device; takes will play at the wrong speed until sample-rate conversion exists");
   std::string baseDir = S(P(path).parent_path());
+  { const JVal none = JVal::obj(); const JVal* cj = root.get("comping"); if (!cj) cj = &none;
+    e.compCrossfadeMs = std::clamp((float)cj->num("crossfadeMs", 5), 0.f, 50.f); }
   if (auto* t = root.get("transport")) {
     auto& tr = e.transport();
     tr.loopIn = (int64_t)t->num("loopIn", 0); tr.loopOut = (int64_t)t->num("loopOut", 0); tr.loopOn = t->flag("loopOn", false);
@@ -157,6 +171,15 @@ SessionResult loadSession(Engine& e, const std::string& path) {
       }
       int saved = (int)j.num("activeTake", -1);
       e.setActiveTake(id, saved >= 0 && saved < (int)mapIdx.size() ? mapIdx[saved] : -1);
+      if (auto* cj = j.get("comp")) {
+        if (auto* secs = cj->get("sections"))
+          for (auto& q : secs->a) {
+            const int k = (int)q.num("take", -1);
+            if (k >= 0 && k < (int)mapIdx.size() && mapIdx[(size_t)k] >= 0)
+              e.setCompSection(id, (int64_t)q.num("from", 0), (int64_t)q.num("to", 0), e.takeAt(id, mapIdx[(size_t)k]));
+          }
+        if (cj->flag("silenceOutside", false)) e.setCompSilenceOutside(id, true);
+      }
     }
   }
   r.ok = true; return r;

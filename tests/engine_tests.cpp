@@ -199,6 +199,68 @@ static void testKeepAndRemoveTakes() {
   std::printf("takes: keep / remove unkept / save and reload OK\n");
 }
 
+// Comping: sections of a track played from other takes, sample-exact edges, outside = active take or silence,
+// equal-power crossfades, overlapping picks, removal, save/load, export.
+static void testComping() {
+  auto dir = tmpDir();
+  auto wav = [&](const char* name, float v, int frames) {
+    WavWriter w; w.open(dir + "/" + name, 1, (int)SR); std::vector<float> x((size_t)frames, v); w.write(x.data(), x.size()); w.close();
+    return dir + "/" + name;
+  };
+  Engine e(SR); auto& t = e.track(0); t.pan = -1.f;
+  const int A = e.addTake(0, wav("a.wav", 0.25f, 20000), 0);      // full-length pass
+  const int B = e.addTake(0, wav("b.wav", 0.75f, 5000), 5000);    // a loop pass over [5000, 10000)
+  const int C = e.addTake(0, wav("c.wav", 0.5f, 20000), 0);
+  e.setActiveTake(0, A);
+  auto play = [&](std::vector<float>& L) { std::vector<float> R; L.clear(); long k = 0; e.transport().seek(0); e.transport().play(); stream2(e, k, 20000, L, R, 333); e.transport().stop(); };
+  std::vector<float> L;
+  e.compCrossfadeMs = 0.f;
+  e.setCompSection(0, 5000, 10000, e.takeAt(0, B));
+  play(L);
+  CHECK(L[4999] == 0.25f && L[5000] == 0.75f && L[9999] == 0.75f && L[10000] == 0.25f && L[19999] == 0.25f,
+        "comp: B plays exactly in [5000, 10000), the active take elsewhere (%f %f %f %f)", L[4999], L[5000], L[9999], L[10000]);
+  CHECK(e.trackEnd(0) == 20000, "track end with the active take outside: %lld", (long long)e.trackEnd(0));
+  e.setCompSilenceOutside(0, true); play(L);
+  CHECK(L[4999] == 0.f && L[5000] == 0.75f && L[10000] == 0.f && e.trackEnd(0) == 10000, "comp: silence outside the sections");
+  e.setCompSilenceOutside(0, false);
+  e.setCompSection(0, 7000, 8000, e.takeAt(0, C)); play(L);  // a pick inside B's section splits it
+  CHECK(L[6999] == 0.75f && L[7000] == 0.5f && L[7999] == 0.5f && L[8000] == 0.75f && e.comp(0)->sections.size() == 3, "comp: overlapping pick splits a section");
+  e.compCrossfadeMs = 10.f; play(L);  // 10 ms fades, placed where both takes have audio
+  const int fade = (int)std::llround(0.010 * SR), half = fade / 2;
+  const float eq = 0.70710678f;
+  // 5000: B (a loop pass) starts there, so the fade runs just after the edge.
+  CHECK(L[4999] == 0.25f && std::fabs(L[5000 + fade] - 0.75f) < 1e-6f && std::fabs(L[5000 + half] - eq * (0.25f + 0.75f)) < 0.01f,
+        "crossfade into a loop pass: after the edge (%f %f)", L[4999], L[5000 + half]);
+  // 7000: B and C both have audio around the edge, so the fade is centred on it.
+  CHECK(std::fabs(L[7000] - eq * (0.75f + 0.5f)) < 0.01f && L[7000 - half - 1] == 0.75f, "crossfade between full takes: centred (%f)", L[7000]);
+  // 10000: B ends there, so the fade back to the active take runs just before the edge.
+  CHECK(L[10000] == 0.25f && L[10000 - fade - 1] == 0.75f && std::fabs(L[10000 - half] - eq * (0.25f + 0.75f)) < 0.01f,
+        "crossfade out of a loop pass: before the edge (%f)", L[10000 - half]);
+  bool smooth = true;  // no jumps anywhere (equal-power may peak a little above the louder take between edges)
+  for (int i = 4000; i < 11000; ++i) smooth = smooth && std::fabs(L[(size_t)i + 1] - L[(size_t)i]) < 0.01f;
+  CHECK(smooth, "crossfades: no jumps across the whole comp");
+  if (!smooth) for (int i = 4000; i < 11000; ++i) if (std::fabs(L[(size_t)i + 1] - L[(size_t)i]) >= 0.01f) std::printf("  jump at %d: %f -> %f\n", i, L[(size_t)i], L[(size_t)i + 1]);
+  e.compCrossfadeMs = 0.f; play(L);
+  { auto st = saveSession(e, dir + "/comp.airdaw");
+    Engine b(SR); auto r = loadSession(b, dir + "/comp.airdaw");
+    const Comp* cp = b.comp(0);
+    bool same = st.ok && r.ok && cp && cp->sections.size() == 3 && !cp->silenceOutside && b.compCrossfadeMs.load() == 0.f;
+    for (size_t i = 0; same && i < 3; ++i) same = cp->sections[i].from == e.comp(0)->sections[i].from && cp->sections[i].to == e.comp(0)->sections[i].to &&
+                                                 std::filesystem::path(cp->sections[i].take->path).filename() == std::filesystem::path(e.comp(0)->sections[i].take->path).filename();
+    CHECK(same, "comp survives save/load");
+    b.track(0).pan = -1.f;
+    RenderOptions o; o.end = songEnd(b); o.tailSeconds = 0; o.bits = 32;
+    WavData w; bool ok = renderMix(b, dir + "/mix.wav", o).ok && readWav(dir + "/mix.wav", w) && w.left.size() == 20000;
+    for (size_t i = 0; ok && i < w.left.size(); ++i) ok = w.left[i] == L[i];
+    CHECK(ok, "export plays the comp sample for sample"); }
+  e.removeTake(0, C);
+  CHECK(e.comp(0)->sections.size() == 2 && e.comp(0)->sections[0].to == 7000 && e.comp(0)->sections[1].from == 8000 &&
+        e.comp(0)->sections[1].take == e.takeAt(0, B), "removing a take drops its sections (B's pieces remain)");
+  e.setCompSection(0, 0, 20000, nullptr);
+  CHECK(e.comp(0) == nullptr, "clearing every section ends the comp");
+  std::printf("comping: sample-exact sections, active take or silence outside, equal-power crossfades, splits, save/load, export\n");
+}
+
 // Mix export: sample-exact against the take, 24-bit within rounding, ranges, no click/live input, cancel.
 static void testRenderMix() {
   auto dir = tmpDir();
@@ -677,6 +739,7 @@ int main() {
   testMonitor();
   testPolarityAndReference();
   testFxLibrary();
+  testComping();
 
   // 14. Session save/load round trip, including plugin parameters, takes, loop/punch
   { auto dir = tmpDir(); std::string sess = dir + "/song.airdaw";

@@ -644,7 +644,15 @@ void MainComponent::collectTakes() {
   auto* e = bridge_.engine(); if (!e) return;
   for (auto& t : e->pollFinishedTakes()) {
     int idx = e->addTake(t.track, t.path, t.start);
-    if (idx >= 0) e->setActiveTake(t.track, idx);
+    if (idx >= 0) {
+      // A loop or punch pass recorded over a longer take is comped into its region, so the rest of the song keeps
+      // playing; otherwise (first take, or a pass over a take of the same span) it becomes the track's take.
+      const auto* tk = e->takeAt(t.track, idx);
+      const auto* base = e->track(t.track).take.load();
+      const juce::int64 a = tk->start, z = tk->start + (juce::int64)tk->l.size();
+      const bool longerBase = base && (base->start < a - 1 || base->start + (juce::int64)base->l.size() > z + 1);
+      if (longerBase) e->setCompSection(t.track, a, z, tk); else e->setActiveTake(t.track, idx);
+    }
     if (t.droppedFrames) note("WARNING: disk fell behind, " + juce::String((int)t.droppedFrames) + " frames dropped on track " + juce::String(t.track + 1));
   }
   for (auto& err : e->pollRecordingErrors()) note("RECORDING FAILED: " + juce::String::fromUTF8(err.c_str()) + " - the take was not saved", true);
@@ -1095,6 +1103,28 @@ void MainComponent::runScenario(const juce::String& name) {
     ctx_.mixLevels = {-15.2f, -14.1f, -14.6f, -1.3f}; ctx_.refLevels = {-8.9f, -9.4f, -9.6f, 0.2f}; ctx_.refLive = true;
     tools_.addToSuite("reference", 0);
     setListen(true);
+  }
+  if (name == "comp") {  // test hook: a full take on Kick, 3 loop passes over a chorus, pass 2 comped into it
+    const double sr = e->sampleRate();
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw-comp-test");
+    dir.deleteRecursively(); dir.createDirectory();
+    auto wav = [&](const juce::String& n, float amp, double sec, double hz) {
+      const auto f = dir.getChildFile(n);
+      airdaw::WavWriter w; w.open(f.getFullPathName().toStdString(), 1, (int)sr);
+      std::vector<float> x((size_t)(sec * sr));
+      for (size_t i = 0; i < x.size(); ++i) x[i] = amp * (float)std::sin(2.0 * 3.14159265 * hz * (double)i / sr) * (0.6f + 0.4f * (float)std::sin((double)i / sr * 3.0));
+      w.write(x.data(), x.size()); w.close();
+      return f.getFullPathName().toStdString();
+    };
+    const auto li = (juce::int64)(12.0 * sr), lo = (juce::int64)(20.0 * sr);
+    const int base = e->addTake(0, wav("full.wav", 0.3f, 30.0, 110.0), 0);
+    e->setActiveTake(0, base);
+    int pass2 = -1;
+    for (int k = 0; k < 3; ++k) { const int i = e->addTake(0, wav("pass" + juce::String(k + 1) + ".wav", 0.5f + 0.2f * k, 8.0, 110.0), li); if (k == 1) pass2 = i; }
+    auto& tr = e->transport(); tr.loopIn = li; tr.loopOut = lo; tr.loopOn = true;
+    e->setCompSection(0, li, lo, e->takeAt(0, pass2));
+    e->compCrossfadeMs = 10.f;
+    ctx_.viewTrack = 0;
   }
   if (name == "midilearn" || name == "midimap") {  // simulated controllers (no MIDI device is opened in snapshot runs)
     auto cc = [this](const char* dev, int n, int v) { midi_->inject(dev, juce::MidiMessage::controllerEvent(1, n, v)); };
