@@ -12,6 +12,7 @@
 #include "airdaw/engine.h"
 #include "airdaw/session.h"
 #include "airdaw/render.h"
+#include "airdaw/analysis.h"
 #include "airdaw/work_pool.h"
 #include <filesystem>
 #include <fstream>
@@ -224,6 +225,53 @@ static void testRenderMix() {
   std::printf("export: 32-bit sample-exact, 24-bit within 1 LSB, ranges, no click/live input, cancel cleans up\n");
 }
 
+// Loudness (EBU Tech 3341/3342 reference cases), true peak, correlation, and the engine's master tap.
+static void testLoudness() {
+  auto feed = [](LoudnessMeter& m, double seconds, auto gen) {  // gen(i) -> {l, r}
+    const size_t n = (size_t)(seconds * m.sampleRate()); std::vector<float> buf(2 * 4096);
+    for (size_t done = 0; done < n;) {
+      const size_t k = std::min<size_t>(4096, n - done);
+      for (size_t i = 0; i < k; ++i) { auto [l, r] = gen(done + i); buf[2 * i] = l; buf[2 * i + 1] = r; }
+      m.process(buf.data(), k); done += k;
+    }
+  };
+  auto sine = [](double sr, double dbfs, double f = 997.0) {
+    const double a = std::pow(10.0, dbfs / 20.0);
+    return [=](size_t i) { const float v = (float)(a * std::sin(2 * M_PI * f * (double)i / sr)); return std::pair<float, float>{v, v}; };
+  };
+  { LoudnessMeter m(48000); feed(m, 20, sine(48000, -23)); auto r = m.read();  // EBU 3341 case 1
+    CHECK(std::fabs(r.momentary + 23) < 0.1f && std::fabs(r.shortTerm + 23) < 0.1f && std::fabs(r.integrated + 23) < 0.1f,
+          "-23 dBFS stereo 997 Hz: M %.2f S %.2f I %.2f (want -23.0)", r.momentary, r.shortTerm, r.integrated);
+    CHECK(r.lra < 0.5f, "steady tone LRA %.2f", r.lra); }
+  { LoudnessMeter m(96000); auto a = sine(96000, -36), b = sine(96000, -23);  // gating: -36/-23/-36 -> -23
+    feed(m, 10, a); feed(m, 20, b); feed(m, 10, a); auto r = m.read();
+    CHECK(std::fabs(r.integrated + 23) < 0.1f, "gated integrated %.2f (want -23.0)", r.integrated); }
+  { LoudnessMeter m(48000); feed(m, 5, [](size_t i) { return std::pair<float, float>{(float)std::sin(2 * M_PI * 997.0 * (double)i / 48000), 0.f}; });
+    auto r = m.read(); CHECK(std::fabs(r.integrated + 3.01f) < 0.1f, "0 dBFS sine on one channel %.2f (want -3.01)", r.integrated); }
+  { LoudnessMeter m(48000); feed(m, 20, sine(48000, -20, 1000)); feed(m, 20, sine(48000, -30, 1000));  // EBU 3342 case 1
+    auto r = m.read(); CHECK(std::fabs(r.lra - 10.f) < 1.f, "LRA %.2f (want 10 +- 1)", r.lra); }
+  { LoudnessMeter m(48000);  // samples land at +-0.354 but the waveform peaks at 0.5
+    feed(m, 1, [](size_t i) { const float v = 0.5f * (float)std::sin(2 * M_PI * (double)i / 4.0 + M_PI / 4); return std::pair<float, float>{v, v}; });
+    auto r = m.read();
+    CHECK(std::fabs(r.samplePeak + 9.03f) < 0.1f && std::fabs(r.truePeak + 6.02f) < 0.4f, "sample peak %.2f (want -9.03), true peak %.2f (want -6.02)", r.samplePeak, r.truePeak); }
+  { LoudnessMeter m(48000); feed(m, 1, sine(48000, -12)); CHECK(m.read().correlation > 0.99f, "identical channels correlate +1");
+    LoudnessMeter n(48000); auto s = sine(48000, -12); feed(n, 1, [&](size_t i) { auto p = s(i); return std::pair<float, float>{p.first, -p.second}; });
+    CHECK(n.read().correlation < -0.99f, "inverted channels correlate -1");
+    LoudnessMeter u(48000); uint32_t x = 1, y = 7;
+    feed(u, 2, [&](size_t) { x = x * 1664525u + 1013904223u; y = y * 22695477u + 1u;
+                             return std::pair<float, float>{(float)((x >> 8) / 16777216.0 - 0.5), (float)((y >> 8) / 16777216.0 - 0.5)}; });
+    CHECK(std::fabs(u.read().correlation) < 0.1f, "unrelated noise correlation %.2f", u.read().correlation); }
+  { Engine e(SR); e.setMasterTapEnabled(true); auto& t = e.track(0); t.inputL = 0; t.armed = true; t.pan = -1.f;
+    e.metronome().enabled = true; e.metronome().levelDb = 0; e.transport().play();
+    long k = 0; std::vector<float> L, R; stream2(e, k, 4000, L, R);
+    std::vector<float> tap(2 * 8000); const size_t got = e.readMasterTap(tap.data(), 8000);
+    bool ok = got == 4000;
+    for (size_t i = 0; ok && i < got; ++i) ok = tap[2 * i] == sigAt((long)i) && tap[2 * i + 1] == 0.f;
+    CHECK(ok, "master tap must carry the mix exactly (frames %zu)", got);
+    CHECK(peakOf(L) > 0.9f, "the output does contain the click (peak %f)", peakOf(L)); }
+  std::printf("loudness: EBU 3341/3342 cases, true peak, correlation; master tap exact and click-free\n");
+}
+
 // Insert reordering: same instances, new order, each insert processed exactly once per block.
 struct Affine : InsertProcessor {
   float a, b; std::string nm; std::vector<FxParamInfo> ps; long calls = 0;
@@ -415,6 +463,7 @@ int main() {
   testInsertReorder();
   testKeepAndRemoveTakes();
   testRenderMix();
+  testLoudness();
 
   // 14. Session save/load round trip, including plugin parameters, takes, loop/punch
   { auto dir = tmpDir(); std::string sess = dir + "/song.airdaw";

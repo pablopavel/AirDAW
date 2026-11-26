@@ -20,6 +20,9 @@ struct FxInfo {
 // Registry queries (UI thread).
 std::vector<FxInfo> listEffects();
 bool effectExists(const std::string& name);
+// Chris's full write-up for an effect (as on airwindows.com; Markdown-ish text, first line "# Name is ...").
+// Falls back to the one-line description; empty for unknown names.
+std::string effectDocumentation(const std::string& name);
 
 class FxInstance : public InsertProcessor {
  public:

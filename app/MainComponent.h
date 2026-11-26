@@ -11,6 +11,7 @@
 #include "ui/MeterDock.h"
 #include "ui/Mixer.h"
 #include "ui/Overview.h"
+#include "ui/PluginInfo.h"
 #include "ui/SettingsWindow.h"
 #include "ui/TakesBar.h"
 
@@ -58,12 +59,12 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   juce::String sessionName() const;
   static juce::File projectsRoot();   // Documents/AirDAW
   static juce::File scratchFolder();  // Documents/AirDAW/Untitled (unsaved session)
-  static std::unique_ptr<juce::PropertiesFile> makeProps();
+  static std::unique_ptr<juce::PropertiesFile> makeProps(bool snapshot);
 
   const bool snapshotMode_;
   juce::AudioDeviceManager devices_;
   AudioBridge bridge_;
-  std::unique_ptr<juce::PropertiesFile> props_ = makeProps();
+  std::unique_ptr<juce::PropertiesFile> props_ = makeProps(snapshotMode_);
   ui::AirLookAndFeel lnf_;
   ui::AppCtx ctx_{bridge_, devices_, *props_};
   ui::PresetStore presets_{props_->getFile().getParentDirectory().getChildFile("presets")};
@@ -85,6 +86,11 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   } splitter_;
   std::unique_ptr<ui::SettingsWindow> settings_;
   std::unique_ptr<PluginWindow> pluginWindow_;
+  std::unique_ptr<ui::PluginInfoWindow> pluginInfo_;
+  std::unique_ptr<airdaw::LoudnessMeter> loudness_;  // master analysis, fed from the engine's master tap
+  std::vector<float> tapBuf_;
+  bool wasPlaying_ = false;
+  void pumpAnalysis(airdaw::Engine& e);
   std::unique_ptr<juce::TooltipWindow> tooltips_;
 
   int dockHeight_ = 330;

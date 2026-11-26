@@ -241,9 +241,15 @@ MasterStrip::MasterStrip(AppCtx& ctx) : ctx_(ctx) {
     sl.onClick = [this, i] { ctx_.showInserts(kMasterId, i); };
     sl.onDropFrom = [this, i](int from) { if (ctx_.moveInsert) ctx_.moveInsert(kMasterId, from, i); };
   }
-  for (auto* c : std::initializer_list<juce::Component*>{&vuL_, &vuR_, &pkL_, &pkR_, &rms_, &clip_, &fader_}) addAndMakeVisible(c);
-  clip_.setTooltip("Lights when the master output reaches 0 dBFS. Click to reset.");
-  clip_.onClick = [this] { clipped_ = false; holdL_ = holdR_ = -200.f; };
+  for (auto* c : std::initializer_list<juce::Component*>{&vuL_, &vuR_, &lm_, &ls_, &li_, &tp_, &rms_, &clip_, &corr_, &fader_}) addAndMakeVisible(c);
+  lm_.setTooltip("Momentary loudness (400 ms), LUFS");
+  ls_.setTooltip("Short-term loudness (3 s), LUFS");
+  li_.setTooltip("Integrated loudness of what has played since the start (resets when you play from the beginning). Click to reset.");
+  tp_.setTooltip("Highest true peak (inter-sample, 4x oversampled), dBTP. Red above -1 dBTP. Click to reset.");
+  rms_.setTooltip("RMS level, last 300 ms, dBFS");
+  clip_.setTooltip("Lights when the master reaches 0 dBFS / 0 dBTP. Click to reset.");
+  auto reset = [this] { clipped_ = false; if (onResetLoudness) onResetLoudness(); };
+  li_.onClick = reset; tp_.onClick = reset; clip_.onClick = reset;
   fader_.onChange = [this](float v) { if (auto* e = ctx_.engine()) e->master().gainDb = juce::jmax(-200.f, dbOf(v)); };
 }
 
@@ -257,21 +263,41 @@ void MasterStrip::sync() {
   auto vu = [](float rms) { const float db = rms > 0.f ? 20.f * std::log10(rms) + 18.f : -40.f; return juce::jlimit(0.f, 1.05f, (db + 20.f) / 23.f); };
   vuL += (vu(rl) - vuL) * 0.25f; vuR += (vu(rr) - vuR) * 0.25f;
   vuL_.setLevel(vuL); vuR_.setLevel(vuR);
-  auto db = [](float x) { return x > 0.f ? 20.f * std::log10(x) : -200.f; };
-  // Peak readouts hold the highest value for ~2 s.
-  const float dl = db(pl), dr = db(pr);
-  if (++holdAge_ > 60) { holdL_ = dl; holdR_ = dr; holdAge_ = 0; }
-  if (dl > holdL_) { holdL_ = dl; holdAge_ = 0; }
-  if (dr > holdR_) { holdR_ = dr; holdAge_ = 0; }
-  pkL_.set(holdL_ > -100.f ? juce::String(holdL_, 1) : "-");
-  pkR_.set(holdR_ > -100.f ? juce::String(holdR_, 1) : "-");
-  const float r = juce::jmax(rl, rr);
-  rms_.set(r > 0.00001f ? juce::String(db(r), 1) : "-");  // below -100 dB counts as silence
-  if (pl >= 0.999f || pr >= 0.999f) clipped_ = true;
-  clip_.set(juce::String(juce::CharPointer_UTF8("\xe2\x97\x8f")), clipped_ ? juce::Colour(0xffe5484d) : T().c(0xff5b4a2c));
   const int want = slotsToShow(*e, kMasterId);
   if (want != shownSlots_) { shownSlots_ = want; resized(); }
   for (int s = 0; s < shownSlots_; ++s) syncSlot(ctx_, *e, kMasterId, s, slots_[(size_t)s]);
+}
+
+void MasterStrip::setLoudness(const airdaw::LoudnessReadout& r) {
+  // Below -70 LUFS (the BS.1770 absolute gate) / -90 dB it is the plugins' noise floor, not programme: show "-".
+  auto txt = [](float v, float floor) { return v > floor ? juce::String(v, 1) : juce::String("-"); };
+  lm_.set(txt(r.momentary, -70.f)); ls_.set(txt(r.shortTerm, -70.f)); li_.set(txt(r.integrated, -70.f));
+  tp_.set(txt(r.truePeak, -90.f), r.truePeak > -1.f ? juce::Colour(0xffe5484d) : juce::Colour());  // red above -1 dBTP (streaming limit)
+  rms_.set(txt(r.rms, -90.f));
+  if (r.truePeak >= 0.f || r.samplePeak >= -0.01f) clipped_ = true;
+  clip_.set(juce::String(juce::CharPointer_UTF8("\xe2\x97\x8f")), clipped_ ? juce::Colour(0xffe5484d) : T().c(0xff5b4a2c));
+  corr_.set(r.rms > -70.f ? r.correlation : 0.f);  // near silence the correlation is meaningless
+}
+
+void CorrBar::paint(juce::Graphics& g) {
+  auto& t = T();
+  auto r = getLocalBounds().toFloat();
+  auto lab = r.removeFromTop(14.f);
+  g.setColour(Theme::dim()); g.setFont(Theme::spaced(Theme::uiFont(10.f), 0.14f));
+  g.drawText("CORR", lab, juce::Justification::centredLeft);
+  g.drawText(juce::String(juce::CharPointer_UTF8("\xe2\x88\x92" "1 \xc2\xb7 0 \xc2\xb7 +1")), lab, juce::Justification::centredRight);
+  auto bar = r.withHeight(11.f).withY(r.getY() + 2.f);
+  t.drawWell(g, bar, juce::Colour(0xff030303), 2.f);
+  // From the centre: amber to the right for in-phase material, red to the left only when it is out of phase.
+  const float cx = bar.getCentreX(), x = bar.getX() + (c_ + 1.f) * 0.5f * bar.getWidth();
+  if (std::abs(c_) > 0.01f) {
+    auto fill = c_ > 0 ? bar.withLeft(cx).withRight(x) : bar.withLeft(x).withRight(cx);
+    const juce::Colour col = c_ > 0 ? (c_ > 0.9f ? t.amLight() : t.am()) : juce::Colour(0xffe5484d);
+    t.drawGlow(g, fill, col, 8.f, 0.4f);
+    g.setColour(col);
+    for (float sx = fill.getX(); sx < fill.getRight(); sx += 6.f) g.fillRect(sx, fill.getY(), juce::jmin(5.f, fill.getRight() - sx), fill.getHeight());
+  }
+  g.setColour(juce::Colour(0x55ffffff)); g.fillRect(bar.getCentreX() - 0.5f, bar.getY() - 2.f, 1.f, bar.getHeight() + 4.f);
 }
 
 void MasterStrip::paint(juce::Graphics& g) {
@@ -294,16 +320,25 @@ void MasterStrip::resized() {
     const int row = s / 2, col = s % 2, w = (grid.getWidth() - 4) / 2;
     slots_[(size_t)s].setBounds(grid.getX() + col * (w + 4), grid.getY() + row * 28, w, 24);
   }
-  const int vuH = juce::jmin(86, (r.getWidth() - 6) / 2 * 70 / 120);
-  const bool showVu = r.getHeight() - vuH - 6 - 48 >= 160;  // short window: the VU pair makes way for the fader
-  vuL_.setVisible(showVu); vuR_.setVisible(showVu);
+  const int vuH = 64;
+  // Short windows: the VU pair, then the correlation bar, make way for the fader (kept >= 110 px).
+  const int rowH = fader_.bigReadout ? 64 : 34, readH = 2 * rowH + 4 + 8, corrH = 30, faderMin = 110 + 30;
+  const bool showVu = r.getHeight() - vuH - 6 - readH - corrH >= faderMin;
+  showCorr_ = r.getHeight() - readH - corrH >= faderMin;
+  vuL_.setVisible(showVu); vuR_.setVisible(showVu); corr_.setVisible(showCorr_);
   if (showVu) {
     auto vu = r.removeFromTop(vuH); r.removeFromTop(6);
-    vuL_.setBounds(vu.removeFromLeft((vu.getWidth() - 6) / 2)); vu.removeFromLeft(6); vuR_.setBounds(vu);
+    const int vw = juce::jmin((vu.getWidth() - 6) / 2, vuH * 120 / 70);  // keep the meter face's proportions
+    auto both = vu.withSizeKeepingCentre(2 * vw + 6, vuH);
+    vuL_.setBounds(both.removeFromLeft(vw)); both.removeFromLeft(6); vuR_.setBounds(both);
   }
-  auto rd = r.removeFromTop(fader_.bigReadout ? 64 : 40); r.removeFromTop(8);
-  const int w = (rd.getWidth() - 12) / 4;
-  for (auto* m : {&pkL_, &pkR_, &rms_, &clip_}) { m->setBounds(rd.removeFromLeft(w)); rd.removeFromLeft(4); }
+  for (auto row : {std::array<MiniReadout*, 3>{&lm_, &ls_, &li_}, std::array<MiniReadout*, 3>{&tp_, &rms_, &clip_}}) {
+    auto rd = r.removeFromTop(rowH); r.removeFromTop(4);
+    const int w = (rd.getWidth() - 8) / 3;
+    for (auto* m : row) { m->setBounds(rd.removeFromLeft(w)); rd.removeFromLeft(4); }
+  }
+  r.removeFromTop(4);
+  if (showCorr_) { corr_.setBounds(r.removeFromTop(corrH - 6)); r.removeFromTop(6); }
   fader_.setBounds(r);
 }
 

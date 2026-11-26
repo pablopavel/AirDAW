@@ -14,9 +14,10 @@ static std::unique_ptr<airdaw::InsertProcessor> pluginFactory(const std::string&
   return Vst3Insert::load(juce::File(juce::String(id.substr(5))), sr, err);
 }
 
-std::unique_ptr<juce::PropertiesFile> MainComponent::makeProps() {
+std::unique_ptr<juce::PropertiesFile> MainComponent::makeProps(bool snapshot) {
   juce::PropertiesFile::Options opt;
-  opt.applicationName = "AirDAW"; opt.filenameSuffix = ".settings"; opt.osxLibrarySubFolder = "Application Support";
+  // Test snapshots use their own settings file, so they can never change the user's settings.
+  opt.applicationName = snapshot ? "AirDAW-snapshot" : "AirDAW"; opt.filenameSuffix = ".settings"; opt.osxLibrarySubFolder = "Application Support";
   opt.folderName = "AirDAW";
   return std::make_unique<juce::PropertiesFile>(opt);
 }
@@ -46,6 +47,11 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   ctx_.isCardOpen = [this](int ch, int slot) { return inserts_.isOpen(ch, slot); };
   ctx_.layoutChanged = [this] { resized(); };
   ctx_.openPluginWindow = [this](int ch, int slot) { openPluginWindow(ch, slot); };
+  mixer_.master().onResetLoudness = [this] { if (loudness_) loudness_->resetIntegrated(); };
+  ctx_.showPluginInfo = [this](const juce::String& name) {
+    if (!pluginInfo_) pluginInfo_ = std::make_unique<ui::PluginInfoWindow>();
+    pluginInfo_->show(name);
+  };
   // Deferred: the move rebuilds the insert cards, one of which is still handling the drop.
   ctx_.moveInsert = [this](int ch, int from, int to) {
     juce::Component::SafePointer<MainComponent> sp(this);
@@ -92,6 +98,7 @@ MainComponent::~MainComponent() {
   T().removeChangeListener(this);
   devices_.removeChangeListener(this);
   pluginWindow_.reset();
+  pluginInfo_.reset();
   settings_.reset();
   dock_.setPlugin(nullptr);
   devices_.removeAudioCallback(&bridge_);
@@ -369,7 +376,7 @@ void MainComponent::newSession() {
         airdaw::Engine blank(e->sampleRate());
         auto tmp = (juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw_blank.airdaw")).getFullPathName().toStdString();
         airdaw::saveSession(blank, tmp); airdaw::loadSession(*e, tmp);
-        inserts_.close(); ctx_.viewTrack = -1;
+        inserts_.close(); ctx_.viewTrack = -1; if (loudness_) loudness_->resetIntegrated();
         setSessionFile({}); note("New project");
       });
 }
@@ -446,7 +453,7 @@ void MainComponent::openSession() {
         auto f = c.getResult(); auto* e = bridge_.engine(); if (f == juce::File() || !e) return;
         auto r = airdaw::loadSession(*e, f.getFullPathName().toStdString());
         if (!r.ok) { note("OPEN FAILED: " + r.error); return; }
-        inserts_.close(); ctx_.viewTrack = -1;
+        inserts_.close(); ctx_.viewTrack = -1; if (loudness_) loudness_->resetIntegrated();
         setSessionFile(f);
         note(r.warnings.empty() ? "Opened " + f.getFileName() : "Opened with " + juce::String((int)r.warnings.size()) + " warning(s): " + r.warnings[0],
              !r.warnings.empty());
@@ -607,6 +614,9 @@ void MainComponent::timerCallback() {
     dock_.setPlugin(nullptr);   // the hosted plugins belong to the old engine
     inserts_.close();
     autoSaver_ = std::make_unique<airdaw::AutoSaver>(*e);
+    loudness_ = std::make_unique<airdaw::LoudnessMeter>(e->sampleRate());  // K-weighting depends on the rate
+    tapBuf_.assign(2 * 16384, 0.f);
+    e->setMasterTapEnabled(true);
     setSessionFile(sessionFile_);
     applyAutoSaveSettings();
     if (!snapshotMode_ && !recoveryChecked_) { recoveryChecked_ = true; checkRecovery(); }
@@ -615,6 +625,7 @@ void MainComponent::timerCallback() {
     if (!e->insertAt(ui::kMasterId, kMeterSlot) && mp.exists()) loadMeter(mp, true);
   }
   updateDeviceStatus();
+  if (e) pumpAnalysis(*e);
   deck_.sync();
   overview_.sync();
   mixer_.sync();
@@ -638,6 +649,18 @@ void MainComponent::timerCallback() {
   if (tick_ % 15 == 0 && juce::Time::getMillisecondCounter() > noticeUntil_ && notice_.isNotEmpty()) {
     notice_.clear(); repaint(0, getHeight() - kRailH - kFooterH, getWidth(), kFooterH);
   }
+}
+
+// Drains the engine's master tap into the loudness meter. Integrated loudness / LRA only accumulate while the
+// transport plays, and start over when playback starts from the beginning of the song.
+void MainComponent::pumpAnalysis(airdaw::Engine& e) {
+  if (!loudness_) return;
+  auto& tr = e.transport();
+  const bool playing = tr.playing.load() && !tr.countingIn();
+  if (playing && !wasPlaying_ && (double)tr.pos.load() < e.sampleRate() * 0.05) loudness_->resetIntegrated();
+  wasPlaying_ = playing;
+  for (size_t got; (got = e.readMasterTap(tapBuf_.data(), tapBuf_.size() / 2)) > 0;) loudness_->process(tapBuf_.data(), got, playing);
+  if (tick_ % 2 == 0) mixer_.master().setLoudness(loudness_->read());
 }
 
 // ---------------------------------------------------------------- snapshots (test hook)
@@ -677,6 +700,11 @@ void MainComponent::runScenario(const juce::String& name) {
     e->track(2).solo = false;  // the base scenario solos OH L, which would (correctly) silence the Kick takes
     startExport(juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw_snap_export.wav"), false, 24);
   }
+  if (name == "favs") {  // ToTape8 as a favourite (in-memory only: snapshot mode never saves settings)
+    props_->setValue("favoritePlugins", "Console7Channel;ToTape8");
+    inserts_.show(4, 2);
+  }
+  if (name == "info") ctx_.showPluginInfo("ToTape8");
   if (name == "reorder") { inserts_.show(4, 2); inserts_.moveInsert(4, 2, 0); }  // ToTape8 to the front, card stays open
   if (name == "add") { inserts_.show(0, 3); }
   if (name == "display") toggleDisplayPanel();
@@ -690,7 +718,8 @@ void MainComponent::takeSnapshot(const juce::File& png, const juce::String& scen
   juce::Timer::callAfterDelay(1500, [this, png, scenario] {
     runScenario(scenario);
     juce::Timer::callAfterDelay(scenario == "export" ? 12000 : 1500, [this, png] {  // an export needs time to finish
-      auto* top = getTopLevelComponent();
+      juce::Component* top = getTopLevelComponent();
+      if (pluginInfo_ && pluginInfo_->isVisible()) top = pluginInfo_.get();  // "info" scenario: picture the About window
       auto img = top->createComponentSnapshot(top->getLocalBounds(), true, 1.f);
       png.deleteFile();
       juce::FileOutputStream out(png);

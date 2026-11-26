@@ -57,6 +57,18 @@ static void cardFrame(juce::Graphics& g, juce::Rectangle<float> r, bool active) 
   g.setColour(active ? t.c(0xff3d2c12) : juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), 6.f, 1.f);
 }
 
+// Favourite plugins: a ';'-separated list in the app settings, shown at the top of the picker.
+static juce::StringArray favourites(AppCtx& ctx) {
+  auto a = juce::StringArray::fromTokens(ctx.props.getValue("favoritePlugins"), ";", ""); a.removeEmptyStrings(); return a;
+}
+static bool isFavourite(AppCtx& ctx, const juce::String& n) { return favourites(ctx).contains(n); }
+static void setFavourite(AppCtx& ctx, const juce::String& n, bool on) {
+  auto a = favourites(ctx);
+  if (on) a.addIfNotAlreadyThere(n); else a.removeString(n);
+  a.sort(true);
+  ctx.props.setValue("favoritePlugins", a.joinIntoString(";")); ctx.props.saveIfNeeded();
+}
+
 // Newest version of each Airwindows family only ("ToTape8" hides "ToTape7"), unless showOld.
 static std::vector<airdaw::FxInfo> pickerList(bool showOld) {
   auto all = airdaw::listEffects();
@@ -85,6 +97,14 @@ class InsertCard : public juce::Component, public juce::DragAndDropTarget {
     hosted_ = dynamic_cast<airdaw::FxInstance*>(fx) == nullptr;
     open_ = p_.isOpen(p_.ch_, slot);
     for (auto* b : {&byp_, &tog_, &rm_}) { addAndMakeVisible(*b); b->getProperties().set("noUpper", true); b->getProperties().set("fontH", 12.0); }
+    if (!hosted_) {
+      for (auto* b : {&fav_, &info_}) { addAndMakeVisible(*b); b->getProperties().set("noUpper", true); b->getProperties().set("fontH", 13.0); }
+      fav_.setTooltip("Favourite: show this plugin at the top of the plugin list");
+      fav_.onClick = [this] { const bool on = !isFavourite(p_.ctx_, name_); setFavourite(p_.ctx_, name_, on);
+                              p_.ctx_.note(name_ + (on ? " added to favourites" : " removed from favourites")); p_.key_.clear(); };
+      info_.setTooltip("About this plugin (Chris's description from Airwindows)");
+      info_.onClick = [this] { if (p_.ctx_.showPluginInfo) p_.ctx_.showPluginInfo(name_); };
+    }
     byp_.setTooltip("Bypass on/off"); tog_.setTooltip("Show / hide the controls"); rm_.setTooltip("Remove from the chain");
     byp_.onClick = [this] { if (auto* f = fxNow()) f->setBypass(!f->bypassed()); sync(); };
     tog_.onClick = [this] { p_.setOpen(slot_, !open_); };
@@ -154,7 +174,7 @@ class InsertCard : public juce::Component, public juce::DragAndDropTarget {
 
   int cols() const { return juce::jlimit(1, kMaxCols, (int)knobs_.size()); }
   int prefWidth() const {
-    const int head = 172 + juce::roundToInt(juce::GlyphArrangement::getStringWidth(Theme::spaced(Theme::uiFont(14.f, true), 0.05f), name_));
+    const int head = (hosted_ ? 172 : 240) + juce::roundToInt(juce::GlyphArrangement::getStringWidth(Theme::spaced(Theme::uiFont(14.f, true), 0.05f), name_));
     if (!open_) return juce::jmax(170, head);
     if (hosted_) return juce::jmax(head, 260);
     return juce::jmax(head, cols() * kKnobW + (cols() - 1) * kKnobGapX + 2 * kPad);
@@ -197,6 +217,14 @@ class InsertCard : public juce::Component, public juce::DragAndDropTarget {
     byp_.setBounds(head.removeFromRight(30));
     tog_.setButtonText(juce::String(juce::CharPointer_UTF8(open_ ? "\xe2\x96\xbe" : "\xe2\x96\xb8")));
     byp_.setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x8f\xbb")));
+    if (!hosted_) {
+      info_.setBounds(head.removeFromRight(30)); head.removeFromRight(4);
+      fav_.setBounds(head.removeFromRight(30)); head.removeFromRight(4);
+      const bool fav = isFavourite(p_.ctx_, name_);
+      fav_.setButtonText(juce::String(juce::CharPointer_UTF8(fav ? "\xe2\x98\x85" : "\xe2\x98\x86")));
+      fav_.setToggleState(fav, juce::dontSendNotification);
+      info_.setButtonText("i");
+    }
     rm_.setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x9c\x95")));
     if (!open_) return;
     auto body = r.reduced(kPad);
@@ -257,7 +285,7 @@ class InsertCard : public juce::Component, public juce::DragAndDropTarget {
   const int slot_;
   juce::String name_;
   bool hosted_ = false, open_ = false, active_ = true, dropHover_ = false;
-  juce::TextButton byp_, tog_, rm_, window_, def_{"Default"}, save_{juce::String(juce::CharPointer_UTF8("\xef\xbc\x8b Save"))};
+  juce::TextButton byp_, tog_, rm_, fav_, info_, window_, def_{"Default"}, save_{juce::String(juce::CharPointer_UTF8("\xef\xbc\x8b Save"))};
   std::vector<std::unique_ptr<PluginKnob>> knobs_;
   std::vector<std::unique_ptr<juce::TextButton>> presetBtns_;
 };
@@ -270,14 +298,21 @@ class AddCard : public juce::Component {
     juce::ignoreUnused(p);
     auto list = pickerList(showOld);
     box_.setTextWhenNothingSelected(juce::String(juce::CharPointer_UTF8("Choose Airwindows plugin\xe2\x80\xa6")));
+    const auto favs = favourites(ctx);
+    if (!favs.isEmpty()) {  // favourites first (ids offset so they never clash with the main list)
+      box_.addSectionHeading(juce::String(juce::CharPointer_UTF8("\xe2\x98\x85 Favourites")));
+      for (auto& f : favs) if (airdaw::effectExists(f.toStdString())) { box_.addItem(f, 10000 + names_.size()); names_.add(f); }
+    }
+    const int favCount = names_.size();
     std::string cat;
     for (int i = 0; i < (int)list.size(); ++i) {
       if (list[(size_t)i].category != cat) { cat = list[(size_t)i].category; box_.addSectionHeading(cat); }
-      box_.addItem(list[(size_t)i].name, i + 1);
+      box_.addItem(list[(size_t)i].name, favCount + i + 1);
       names_.add(list[(size_t)i].name);
     }
     box_.onChange = [this] {
-      const int i = box_.getSelectedId() - 1; if (i < 0) return;
+      const int id = box_.getSelectedId(); if (id <= 0) return;
+      const int i = id >= 10000 ? id - 10000 : id - 1;  // index into names_
       const auto n = names_[i];
       juce::Component::SafePointer<AddCard> sp(this);
       juce::MessageManager::callAsync([this, n, sp] {
@@ -372,7 +407,7 @@ void InsertPanel::setOpen(int slot, bool open) {
 
 juce::String InsertPanel::chainKey() const {
   auto* e = ctx_.engine(); if (!e || ch_ < 0) return {};
-  juce::String k; k << ch_ << "|" << target_ << "|" << (int)showOld_ << "|";
+  juce::String k; k << ch_ << "|" << target_ << "|" << (int)showOld_ << "|" << ctx_.props.getValue("favoritePlugins") << "|";
   for (int s = 0; s < airdaw::kMaxInserts; ++s) {
     auto* fx = e->insertAt(ch_, s);
     k << (fx ? juce::String(fx->name()) : juce::String("-")) << (isOpen(ch_, s) ? "+" : "") << ";";

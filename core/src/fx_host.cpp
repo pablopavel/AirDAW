@@ -13,6 +13,13 @@ std::vector<FxInfo> listEffects() {
   return out;
 }
 
+std::string effectDocumentation(const std::string& name) {
+  auto it = AirwinRegistry::nameToIndex.find(name);
+  if (it == AirwinRegistry::nameToIndex.end()) return {};
+  auto doc = AirwinRegistry::documentationStringFor(it->second);
+  return doc.empty() ? AirwinRegistry::registry[(size_t)it->second].whatText : doc;
+}
+
 bool effectExists(const std::string& name) {
   return AirwinRegistry::nameToIndex.count(name) > 0;
 }

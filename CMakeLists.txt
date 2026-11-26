@@ -20,7 +20,8 @@ add_library(airdaw_core STATIC
   core/src/disk_writer.cpp
   core/src/session.cpp
   core/src/work_pool.cpp
-  core/src/render.cpp)
+  core/src/render.cpp
+  core/src/analysis.cpp)
 find_package(Threads REQUIRED)
 target_include_directories(airdaw_core PUBLIC core/include)
 target_link_libraries(airdaw_core PUBLIC airwin-registry Threads::Threads)

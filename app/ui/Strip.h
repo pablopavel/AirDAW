@@ -2,6 +2,7 @@
 #pragma once
 #include <array>
 #include "AppCtx.h"
+#include "airdaw/analysis.h"
 #include "Widgets.h"
 
 namespace ui {
@@ -52,11 +53,22 @@ class Strip : public juce::Component {
   FaderBlock fader_;
 };
 
-// Master strip: insert grid, VU pair, peak/RMS readouts, clip LED, fader.
+// Correlation bar (mockup .hb under "Corr  -1 . 0 . +1").
+class CorrBar : public juce::Component {
+ public:
+  void set(float c) { if (std::abs(c - c_) > 0.005f) { c_ = c; repaint(); } }
+  void paint(juce::Graphics&) override;
+ private:
+  float c_ = 0.f;
+};
+
+// Master strip: insert grid, VU pair, loudness readouts (LUFS M/S/I, true peak, RMS, clip), correlation, fader.
 class MasterStrip : public juce::Component {
  public:
   explicit MasterStrip(AppCtx& ctx);
   void sync();
+  void setLoudness(const airdaw::LoudnessReadout& r);   // from the master analysis (MainComponent)
+  std::function<void()> onResetLoudness;                // click on LUFS I / TRUE PK / CLIP
   void paint(juce::Graphics&) override;
   void resized() override;
   void setListenLayout(bool big) { fader_.bigReadout = big; resized(); }
@@ -67,10 +79,11 @@ class MasterStrip : public juce::Component {
   std::array<InsertSlot, airdaw::kMaxInserts> slots_;
   int shownSlots_ = 4;
   VuMeter vuL_{"VU L"}, vuR_{"VU R"};
-  MiniReadout pkL_{"PEAK L"}, pkR_{"PEAK R"}, rms_{"RMS"}, clip_{"CLIP"};
+  MiniReadout lm_{"LUFS M"}, ls_{"LUFS S"}, li_{"LUFS I"}, tp_{"TRUE PK"}, rms_{"RMS"}, clip_{"CLIP"};
+  CorrBar corr_;
+  bool showCorr_ = true;
   FaderBlock fader_;
-  float vuL = 0.f, vuR = 0.f, holdL_ = -200.f, holdR_ = -200.f;
-  int holdAge_ = 0;
+  float vuL = 0.f, vuR = 0.f;
   bool clipped_ = false;
 };
 

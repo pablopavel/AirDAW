@@ -32,6 +32,7 @@ struct AppCtx {
   std::function<bool(int channelId, int slot)> isCardOpen;    // insert card expanded in the panel
   std::function<void(int channelId, int slot)> openPluginWindow;  // a hosted VST3's own editor window
   std::function<void(int channelId, int from, int to)> moveInsert;  // reorder a chain (drag and drop)
+  std::function<void(const juce::String& effect)> showPluginInfo;   // Airwindows write-up window
   std::function<void()> layoutChanged;                        // a panel changed its preferred size
   std::function<bool(const char*)> requireAudio;              // false + explanation if no audio is running
 };

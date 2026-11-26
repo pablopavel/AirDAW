@@ -80,6 +80,12 @@ void Engine::removeTake(int track, int i) {
   list.erase(list.begin() + (std::ptrdiff_t)at);
 }
 
+size_t Engine::readMasterTap(float* dst, size_t maxFrames) {
+  const size_t frames = std::min(maxFrames, tap_.readable() / 2);
+  if (frames) tap_.read(dst, frames * 2);
+  return frames;
+}
+
 void Engine::clearTakeList(int track) {
   if (track < 0 || track >= kMaxTracks) return;
   tracks_[track].take.store(nullptr);
@@ -355,6 +361,18 @@ void Engine::process(const float* const* in, int nIn, float* const* out, int nOu
               master_.mute.load(std::memory_order_relaxed) ? 0.f
                   : dbToLin(master_.gainDb.load(std::memory_order_relaxed)));
     updateMeter(master_.meter, ml, mr, n);
+
+    // Master tap for analysis (before the click). Lock-free; drops if the reader falls behind.
+    if (tapOn_.load(std::memory_order_relaxed)) {
+      if (tap_.freeSpace() >= (size_t)n * 2) {
+        float tmp[512];
+        for (int i = 0; i < n; i += 256) {
+          const int m = std::min(256, n - i);
+          for (int k = 0; k < m; ++k) { tmp[2 * k] = ml[i + k]; tmp[2 * k + 1] = mr[i + k]; }
+          tap_.write(tmp, (size_t)m * 2);
+        }
+      } else tapDropped_.fetch_add((uint64_t)n, std::memory_order_relaxed);
+    }
 
     // Click goes to the output only (after master inserts and meter, so it is never recorded or metered).
     if (countIn) {

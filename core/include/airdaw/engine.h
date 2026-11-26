@@ -121,6 +121,13 @@ class Engine {
   // the engine is destroyed, because the audio thread may still be reading it. UI thread only.
   void removeTake(int track, int i);
 
+  // Master tap for metering/analysis: a copy of the master output (after the master chain, before the click),
+  // interleaved stereo, in a lock-free ring. Off by default; if the reader falls behind, frames are dropped
+  // (counted) rather than ever blocking the audio thread. UI thread reads.
+  void setMasterTapEnabled(bool on) { tapOn_.store(on); }
+  size_t readMasterTap(float* interleaved, size_t maxFrames);
+  uint64_t masterTapDropped() const { return tapDropped_.load(); }
+
   // Worker threads for parallel track/bus processing (-1 = automatic: cores-1, max 7; 0 = single-threaded).
   // Not real-time safe: call while audio is stopped. Output is bit-identical for any thread count.
   void setWorkerThreads(int n);
@@ -158,6 +165,9 @@ class Engine {
   std::array<std::vector<std::unique_ptr<Take>>, kMaxTracks> takes_;
   std::array<int, kMaxTracks> takeBase_{};  // first take of the current session's list
   std::vector<std::unique_ptr<Take>> removedTakes_;  // kept alive until the engine is destroyed
+  FloatRing tap_{1u << 17};                          // master tap: ~0.68 s of stereo at 96 kHz
+  std::atomic<bool> tapOn_{false};
+  std::atomic<uint64_t> tapDropped_{0};
   std::array<Channel, kMaxTracks> tracks_;
   std::array<Channel, kNumBuses> buses_;
   Channel master_;

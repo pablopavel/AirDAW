@@ -1,0 +1,122 @@
+#include "airdaw/analysis.h"
+#include <algorithm>
+#include <cmath>
+
+namespace airdaw {
+
+static constexpr double kPi = 3.14159265358979323846;
+static float lufsOf(double meanEnergy) { return meanEnergy > 1e-20 ? (float)(-0.691 + 10.0 * std::log10(meanEnergy)) : -200.f; }
+static float dbOf(double lin) { return lin > 1e-10 ? (float)(20.0 * std::log10(lin)) : -200.f; }
+
+LoudnessMeter::LoudnessMeter(double sr) : sr_(sr) {
+  // K-weighting for any sample rate (BS.1770-4 stage 1 high shelf + stage 2 high-pass, bilinear designs).
+  {
+    const double f0 = 1681.974450955533, G = 3.999843853973347, Q = 0.7071752369554196;
+    const double K = std::tan(kPi * f0 / sr), Vh = std::pow(10.0, G / 20.0), Vb = std::pow(Vh, 0.4996667741545416);
+    const double a0 = 1.0 + K / Q + K * K;
+    Biquad b{(Vh + Vb * K / Q + K * K) / a0, 2.0 * (K * K - Vh) / a0, (Vh - Vb * K / Q + K * K) / a0,
+             2.0 * (K * K - 1.0) / a0, (1.0 - K / Q + K * K) / a0};
+    shelf_ = {b, b};
+  }
+  {
+    const double f0 = 38.13547087602444, Q = 0.5003270373238773, K = std::tan(kPi * f0 / sr);
+    const double a0 = 1.0 + K / Q + K * K;
+    Biquad b{1.0, -2.0, 1.0, 2.0 * (K * K - 1.0) / a0, (1.0 - K / Q + K * K) / a0};
+    hp_ = {b, b};
+  }
+  subLen_ = (size_t)std::llround(sr * 0.1);
+  subs_.assign(30, 0.0);
+  // True peak: 48-tap windowed-sinc low-pass at the original Nyquist, split into 4 phases of 12 taps.
+  const int N = kPhases * kTaps;
+  for (int p = 0; p < kPhases; ++p)
+    for (int k = 0; k < kTaps; ++k) {
+      const int n = k * kPhases + p;
+      const double x = (n - (N - 1) / 2.0) / kPhases;
+      const double sinc = std::abs(x) < 1e-9 ? 1.0 : std::sin(kPi * x) / (kPi * x);
+      const double w = 0.42 - 0.5 * std::cos(2 * kPi * (n + 0.5) / N) + 0.08 * std::cos(4 * kPi * (n + 0.5) / N);  // Blackman
+      fir_[(size_t)p][(size_t)k] = (float)(sinc * w);
+    }
+  for (auto& ph : fir_) { double s = 0; for (float c : ph) s += c; for (float& c : ph) c = (float)(c / s); }  // unity gain per phase
+  coef_ = 1.0 - std::exp(-1.0 / (0.3 * sr));       // ~300 ms averages
+  tpDecay_ = std::exp(-1.0 / (0.3 * sr));
+}
+
+void LoudnessMeter::resetIntegrated() {
+  gatedBlocks_.clear(); shortTerms_.clear();
+  tpHold_ = 0.f; spHold_ = 0.f;
+}
+
+void LoudnessMeter::process(const float* in, size_t frames, bool accumulate) {
+  for (size_t i = 0; i < frames; ++i) {
+    const float l = in[2 * i], r = in[2 * i + 1];
+    // K-weighted energy (stereo: G = 1 for both channels)
+    const double kl = hp_[0].run(shelf_[0].run(l)), kr = hp_[1].run(shelf_[1].run(r));
+    subSum_ += kl * kl + kr * kr;
+    // true peak
+    hist_[0][histPos_] = l; hist_[1][histPos_] = r;
+    float tp = 0.f;
+    for (int c = 0; c < 2; ++c)
+      for (int p = 0; p < kPhases; ++p) {
+        float acc = 0.f;
+        for (int k = 0; k < kTaps; ++k) acc += fir_[(size_t)p][(size_t)k] * hist_[(size_t)c][(histPos_ + kTaps - (size_t)k) % kTaps];
+        tp = std::max(tp, std::fabs(acc));
+      }
+    tp = std::max(tp, std::max(std::fabs(l), std::fabs(r)));  // never below the sample peak
+    histPos_ = (histPos_ + 1) % kTaps;
+    tpNow_ = std::max(tp, (float)(tpNow_ * tpDecay_));
+    tpHold_ = std::max(tpHold_, tp);
+    spHold_ = std::max(spHold_, std::max(std::fabs(l), std::fabs(r)));
+    // correlation, RMS, balance
+    cLR_ += coef_ * ((double)l * r - cLR_); cLL_ += coef_ * ((double)l * l - cLL_); cRR_ += coef_ * ((double)r * r - cRR_);
+    rmsAcc_ += coef_ * (0.5 * ((double)l * l + (double)r * r) - rmsAcc_);
+
+    if (++subFill_ >= subLen_) {  // a 100 ms sub-block is complete
+      subs_[subCount_ % 30] = subSum_ / (double)subLen_;
+      ++subCount_; subSum_ = 0; subFill_ = 0;
+      auto meanOf = [&](size_t n) { double s = 0; for (size_t k = 0; k < n; ++k) s += subs_[(subCount_ - 1 - k) % 30]; return s / (double)n; };
+      if (subCount_ >= 4) {
+        const double m = meanOf(4);
+        momentary_ = lufsOf(m);
+        if (accumulate) gatedBlocks_.push_back(m);
+      }
+      if (subCount_ >= 30) {
+        const double s = meanOf(30);
+        shortTerm_ = lufsOf(s);
+        if (accumulate) shortTerms_.push_back(s);
+      }
+    }
+  }
+}
+
+LoudnessReadout LoudnessMeter::read() const {
+  LoudnessReadout r;
+  r.momentary = momentary_; r.shortTerm = shortTerm_;
+  // Integrated: absolute gate -70 LUFS, then relative gate 10 LU below the mean of what passed.
+  auto gatedMean = [](const std::vector<double>& v, double absGate, double relOffsetLu, std::vector<double>* kept) {
+    double sum = 0; size_t n = 0;
+    for (double e : v) if (lufsOf(e) > absGate) { sum += e; ++n; }
+    if (!n) return -1.0;
+    const double rel = lufsOf(sum / (double)n) + relOffsetLu;
+    sum = 0; n = 0;
+    for (double e : v) if (lufsOf(e) > absGate && lufsOf(e) > rel) { sum += e; ++n; if (kept) kept->push_back(e); }
+    return n ? sum / (double)n : -1.0;
+  };
+  const double im = gatedMean(gatedBlocks_, -70.0, -10.0, nullptr);
+  r.integrated = im > 0 ? lufsOf(im) : -200.f;
+  // LRA (EBU Tech 3342): short-term values gated -70 absolute / -20 relative; 95th minus 10th percentile.
+  std::vector<double> st;
+  if (gatedMean(shortTerms_, -70.0, -20.0, &st) > 0 && st.size() >= 2) {
+    std::vector<float> l; l.reserve(st.size()); for (double e : st) l.push_back(lufsOf(e));
+    std::sort(l.begin(), l.end());
+    auto pct = [&](double p) { return l[(size_t)std::llround(p * (double)(l.size() - 1))]; };
+    r.lra = pct(0.95) - pct(0.10);
+  }
+  r.truePeak = dbOf(tpHold_); r.truePeakNow = dbOf(tpNow_); r.samplePeak = dbOf(spHold_);
+  r.rms = rmsAcc_ > 1e-20 ? (float)(10.0 * std::log10(rmsAcc_)) : -200.f;
+  r.correlation = (cLL_ > 1e-12 && cRR_ > 1e-12) ? (float)std::clamp(cLR_ / std::sqrt(cLL_ * cRR_), -1.0, 1.0) : 0.f;
+  const double sumLR = cLL_ + cRR_;
+  r.balance = sumLR > 1e-12 ? (float)std::clamp((std::sqrt(cRR_) - std::sqrt(cLL_)) / (std::sqrt(cRR_) + std::sqrt(cLL_)), -1.0, 1.0) : 0.f;
+  return r;
+}
+
+}  // namespace airdaw
