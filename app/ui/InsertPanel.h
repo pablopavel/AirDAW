@@ -34,6 +34,8 @@ class InsertPanel : public juce::Component {
   // Opens the panel on a channel. slot >= 0: toggles that card open (filled slot) or targets it for loading (empty slot).
   void show(int channelId, int slot);
   void close();
+  // Reorders a chain (drag and drop); open/closed card state follows each plugin.
+  void moveInsert(int channelId, int from, int to);
   int channel() const { return ch_; }
   bool isOpen(int channelId, int slot) const;
   void sync();  // ~15x/s: knob values, rebuild if the chain changed

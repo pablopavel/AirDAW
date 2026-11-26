@@ -114,16 +114,31 @@ class VuMeter : public juce::Component {
   juce::String word_; float lv_ = 0.f;
 };
 
+// Insert drag-and-drop: description "insert:<channelId>:<slot>"; drops only within the same channel.
+juce::String insertDragId(int channelId, int slot);
+bool parseInsertDrag(const juce::var& desc, int& channelId, int& slot);
+void drawDropOutline(juce::Graphics&, juce::Rectangle<float>, float corner);
+
 // Insert slot button: LED + plugin name, or "+ Insert" when empty (mockup .ins).
-class InsertSlot : public juce::Component {
+// A filled slot can be dragged onto another slot of the same strip to reorder the chain.
+class InsertSlot : public juce::Component, public juce::DragAndDropTarget {
  public:
   juce::String name;       // empty = free slot
   bool lit = true, open = false, hosted = false;
+  int channelId = -1, slot = -1;
   std::function<void()> onClick;
+  std::function<void(int fromSlot)> onDropFrom;
   void paint(juce::Graphics&) override;
   void mouseUp(const juce::MouseEvent& e) override { if (e.mouseWasClicked() && onClick) onClick(); }
+  void mouseDrag(const juce::MouseEvent&) override;
   void mouseEnter(const juce::MouseEvent&) override { repaint(); }
   void mouseExit(const juce::MouseEvent&) override { repaint(); }
+  bool isInterestedInDragSource(const SourceDetails&) override;
+  void itemDragEnter(const SourceDetails&) override { dropHover_ = true; repaint(); }
+  void itemDragExit(const SourceDetails&) override { dropHover_ = false; repaint(); }
+  void itemDropped(const SourceDetails&) override;
+ private:
+  bool dropHover_ = false;
 };
 
 }  // namespace ui

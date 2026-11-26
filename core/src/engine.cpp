@@ -71,6 +71,15 @@ void Engine::setActiveTake(int track, int i) {
   tracks_[track].take.store(i >= 0 && i < numTakes(track) ? takeAt(track, i) : nullptr);
 }
 
+void Engine::removeTake(int track, int i) {
+  if (track < 0 || track >= kMaxTracks || i < 0 || i >= numTakes(track)) return;
+  auto& list = takes_[track];
+  const size_t at = (size_t)(takeBase_[track] + i);
+  if (tracks_[track].take.load() == list[at].get()) tracks_[track].take.store(nullptr);
+  removedTakes_.push_back(std::move(list[at]));
+  list.erase(list.begin() + (std::ptrdiff_t)at);
+}
+
 void Engine::clearTakeList(int track) {
   if (track < 0 || track >= kMaxTracks) return;
   tracks_[track].take.store(nullptr);
@@ -110,6 +119,24 @@ bool Engine::setInsert(int channelId, int slot, const std::string& effect) {
   return setInsertProcessor(channelId, slot, std::move(fresh));
 }
 
+bool Engine::moveInsert(int channelId, int from, int to) {
+  if (!resolve(channelId) || from < 0 || to < 0 || from >= kMaxInserts || to >= kMaxInserts) return false;
+  auto& own = owned_[ownedIndex(channelId)];
+  if (!own[from]) return false;
+  if (from == to) return true;
+  std::array<int, kMaxInserts> order{};  // new slot -> old slot
+  { std::vector<int> v; for (int s = 0; s < kMaxInserts; ++s) if (s != from) v.push_back(s);
+    v.insert(v.begin() + to, from);
+    for (int s = 0; s < kMaxInserts; ++s) order[(size_t)s] = v[(size_t)s]; }
+  Cmd c{channelId, kChainCmd, nullptr};
+  for (int s = 0; s < kMaxInserts; ++s) c.chain[(size_t)s] = own[(size_t)order[(size_t)s]].get();
+  if (!toAudio_.push(c)) return false;  // queue full: nothing changed
+  std::array<std::unique_ptr<InsertProcessor>, kMaxInserts> next;
+  for (int s = 0; s < kMaxInserts; ++s) next[(size_t)s] = std::move(own[(size_t)order[(size_t)s]]);
+  own = std::move(next);
+  return true;
+}
+
 InsertProcessor* Engine::insertAt(int channelId, int slot) {
   if (!resolve(channelId) || slot < 0 || slot >= kMaxInserts) return nullptr;
   return owned_[ownedIndex(channelId)][slot].get();
@@ -129,6 +156,7 @@ void Engine::applyCommands() {
   while (toAudio_.pop(c)) {
     Channel* ch = resolve(c.channelId);
     if (!ch) continue;
+    if (c.slot == kChainCmd) { for (int s = 0; s < kMaxInserts; ++s) ch->insert[(size_t)s] = c.chain[(size_t)s]; continue; }
     InsertProcessor* old = ch->insert[c.slot];
     ch->insert[c.slot] = c.fx;
     if (old) fromAudio_.push(old);

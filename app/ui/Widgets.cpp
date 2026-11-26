@@ -312,6 +312,37 @@ void VuMeter::paint(juce::Graphics& g) {
   g.setColour(juce::Colours::black); g.drawRoundedRectangle(face, 3.f, 2.f);
 }
 
+// ---------------- insert drag and drop ----------------
+juce::String insertDragId(int channelId, int slot) { return "insert:" + juce::String(channelId) + ":" + juce::String(slot); }
+bool parseInsertDrag(const juce::var& desc, int& channelId, int& slot) {
+  const auto s = desc.toString();
+  if (!s.startsWith("insert:")) return false;
+  auto parts = juce::StringArray::fromTokens(s.substring(7), ":", "");
+  if (parts.size() != 2) return false;
+  channelId = parts[0].getIntValue(); slot = parts[1].getIntValue();
+  return true;
+}
+void drawDropOutline(juce::Graphics& g, juce::Rectangle<float> r, float corner) {  // mockup .ov: 2px dashed accent
+  juce::Path p; p.addRoundedRectangle(r.reduced(1.f), corner);
+  const float dash[] = {5.f, 4.f};
+  juce::PathStrokeType(2.f).createDashedStroke(p, p, dash, 2);
+  T().drawGlow(g, r, T().am(), 10.f, 0.4f);
+  g.setColour(T().am()); g.fillPath(p);
+}
+
+void InsertSlot::mouseDrag(const juce::MouseEvent& e) {
+  if (name.isEmpty() || e.getDistanceFromDragStart() < 6) return;
+  if (auto* dc = juce::DragAndDropContainer::findParentDragContainerFor(this))
+    if (!dc->isDragAndDropActive()) dc->startDragging(insertDragId(channelId, slot), this);
+}
+bool InsertSlot::isInterestedInDragSource(const SourceDetails& d) {
+  int ch, s; return parseInsertDrag(d.description, ch, s) && ch == channelId && s != slot;
+}
+void InsertSlot::itemDropped(const SourceDetails& d) {
+  dropHover_ = false; repaint();
+  int ch, s; if (parseInsertDrag(d.description, ch, s) && ch == channelId && onDropFrom) onDropFrom(s);
+}
+
 // ---------------- InsertSlot ----------------
 void InsertSlot::paint(juce::Graphics& g) {
   auto& t = T();
@@ -332,6 +363,7 @@ void InsertSlot::paint(juce::Graphics& g) {
   g.setFont(Theme::uiFont(11.5f));
   g.drawFittedText(empty ? juce::String(juce::CharPointer_UTF8("\xef\xbc\x8b Insert")) : name,
                    r.withTrimmedLeft(22.f).withTrimmedRight(4.f).toNearestInt(), juce::Justification::centredLeft, 1, 0.85f);
+  if (dropHover_) drawDropOutline(g, getLocalBounds().toFloat(), 4.f);
 }
 
 }  // namespace ui

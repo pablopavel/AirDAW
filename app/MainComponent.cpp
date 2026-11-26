@@ -1,10 +1,18 @@
 #include "MainComponent.h"
 #include "Vst3Insert.h"
+#include "airdaw/render.h"
 #include <map>
 
 using ui::T;
 static constexpr int kMeterSlot = 7;  // last master insert slot: the meter listens to the final mix
 static constexpr int kTrimW = 30, kRailH = 14, kFooterH = 26, kOverviewH = 100, kMixerMin = 480;
+
+// Recreates hosted plugins from session ids ("vst3:<path>"); Airwindows effects are built in.
+static std::unique_ptr<airdaw::InsertProcessor> pluginFactory(const std::string& id, double sr) {
+  if (id.rfind("vst3:", 0) != 0) return nullptr;
+  juce::String err;
+  return Vst3Insert::load(juce::File(juce::String(id.substr(5))), sr, err);
+}
 
 std::unique_ptr<juce::PropertiesFile> MainComponent::makeProps() {
   juce::PropertiesFile::Options opt;
@@ -21,11 +29,7 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   T().addChangeListener(this);
   tooltips_ = std::make_unique<juce::TooltipWindow>(this, 600);
 
-  bridge_.setInsertFactory([](const std::string& id, double sr) -> std::unique_ptr<airdaw::InsertProcessor> {
-    if (id.rfind("vst3:", 0) != 0) return nullptr;
-    juce::String err;
-    return Vst3Insert::load(juce::File(juce::String(id.substr(5))), sr, err);
-  });
+  bridge_.setInsertFactory(pluginFactory);
   // Reopen the last audio device (e.g. ASIO) unless taking a test snapshot.
   std::unique_ptr<juce::XmlElement> saved = snapshotMode_ ? nullptr : props_->getXmlValue("audioDevice");
   juce::String err = devices_.initialise(2, 2, saved.get(), true);  // Black Lion Revolution 2x2 is 2-in/2-out
@@ -42,6 +46,11 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   ctx_.isCardOpen = [this](int ch, int slot) { return inserts_.isOpen(ch, slot); };
   ctx_.layoutChanged = [this] { resized(); };
   ctx_.openPluginWindow = [this](int ch, int slot) { openPluginWindow(ch, slot); };
+  // Deferred: the move rebuilds the insert cards, one of which is still handling the drop.
+  ctx_.moveInsert = [this](int ch, int from, int to) {
+    juce::Component::SafePointer<MainComponent> sp(this);
+    juce::MessageManager::callAsync([sp, ch, from, to] { if (sp) sp->inserts_.moveInsert(ch, from, to); });
+  };
 
   deck_.onTransport = [this](ui::TransportKeys::Key k) { transport(k); };
   deck_.onProject = [this] { showProjectMenu(); };
@@ -61,6 +70,7 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   display_.setVisible(false);
   for (juce::Component* c : std::initializer_list<juce::Component*>{&deck_, &overview_, &inserts_, &mixer_, &splitter_, &dock_})
     addAndMakeVisible(c);
+  addChildComponent(takes_);
   addChildComponent(display_);
   inserts_.setVisible(false);
 
@@ -185,6 +195,8 @@ void MainComponent::resized() {
   auto r = getLocalBounds().reduced(kTrimW, 0).withTrimmedBottom(kRailH + kFooterH);
   deck_.setBounds(r.removeFromTop(deck_.preferredHeight(r.getWidth())));
   overview_.setBounds(r.removeFromTop(getHeight() >= 950 ? kOverviewH : 70));  // short windows: slimmer overview
+  takes_.setVisible(takes_.wanted());
+  if (takes_.isVisible()) takes_.setBounds(r.removeFromTop(ui::TakesBar::kHeight));
   if (display_.isVisible())
     display_.setBounds(r.getRight() - ui::DisplayPanel::kWidth - 16, deck_.getBottom() - 6, ui::DisplayPanel::kWidth, ui::DisplayPanel::kHeight);
   r = r.reduced(12, 0);
@@ -248,6 +260,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& k, juce::Component*) {
   if (m.isCommandDown() && k.getKeyCode() == 'S') { saveSession(m.isShiftDown()); return true; }
   if (m.isCommandDown() && k.getKeyCode() == 'O') { openSession(); return true; }
   if (m.isCommandDown() && k.getKeyCode() == 'N') { newSession(); return true; }
+  if (m.isCommandDown() && k.getKeyCode() == 'E') { exportMix(); return true; }
   if (k == juce::KeyPress::spaceKey) {
     auto* e = bridge_.engine();
     transport(e && e->transport().playing.load() ? ui::TransportKeys::Stop : ui::TransportKeys::Play);
@@ -266,13 +279,15 @@ void MainComponent::showProjectMenu() {
   m.addItem(1, "New", true, false); m.addItem(2, juce::String(juce::CharPointer_UTF8("Open\xe2\x80\xa6")));
   m.addItem(3, "Save", true, false); m.addItem(4, juce::String(juce::CharPointer_UTF8("Save As\xe2\x80\xa6")));
   m.addSeparator();
+  m.addItem(8, juce::String(juce::CharPointer_UTF8("Export mix\xe2\x80\xa6")) + "   (Ctrl+E)");
+  m.addSeparator();
   m.addItem(7, juce::String(juce::CharPointer_UTF8("Audio settings\xe2\x80\xa6")));
   m.addItem(5, juce::String(juce::CharPointer_UTF8("Load Hit Record Meter\xe2\x80\xa6")));
   m.addItem(6, "Show project folder", sessionFile_ != juce::File());
   m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&deck_.projectBtn), [this](int r) {
     switch (r) {
       case 1: newSession(); break; case 2: openSession(); break; case 3: saveSession(false); break; case 4: saveSession(true); break;
-      case 5: chooseMeterPlugin(); break; case 6: sessionFolder().revealToUser(); break; case 7: showAudioSettings(); break; default: break;
+      case 5: chooseMeterPlugin(); break; case 6: sessionFolder().revealToUser(); break; case 7: showAudioSettings(); break; case 8: exportMix(); break; default: break;
     }
   });
 }
@@ -354,7 +369,7 @@ void MainComponent::newSession() {
         airdaw::Engine blank(e->sampleRate());
         auto tmp = (juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw_blank.airdaw")).getFullPathName().toStdString();
         airdaw::saveSession(blank, tmp); airdaw::loadSession(*e, tmp);
-        inserts_.close();
+        inserts_.close(); ctx_.viewTrack = -1;
         setSessionFile({}); note("New project");
       });
 }
@@ -431,7 +446,7 @@ void MainComponent::openSession() {
         auto f = c.getResult(); auto* e = bridge_.engine(); if (f == juce::File() || !e) return;
         auto r = airdaw::loadSession(*e, f.getFullPathName().toStdString());
         if (!r.ok) { note("OPEN FAILED: " + r.error); return; }
-        inserts_.close();
+        inserts_.close(); ctx_.viewTrack = -1;
         setSessionFile(f);
         note(r.warnings.empty() ? "Opened " + f.getFileName() : "Opened with " + juce::String((int)r.warnings.size()) + " warning(s): " + r.warnings[0],
              !r.warnings.empty());
@@ -463,6 +478,92 @@ void MainComponent::collectTakes() {
     if (t.droppedFrames) note("WARNING: disk fell behind, " + juce::String((int)t.droppedFrames) + " frames dropped on track " + juce::String(t.track + 1));
   }
   for (auto& err : e->pollRecordingErrors()) note("RECORDING FAILED: " + juce::String::fromUTF8(err.c_str()) + " - the take was not saved", true);
+}
+
+// ---------------------------------------------------------------- mix export
+// Renders on its own engine (a copy of the current state, unsaved changes included) on a background
+// thread, so the live engine and the audio device are untouched. Deletes itself when finished.
+class ExportJob : public juce::ThreadWithProgressWindow {
+ public:
+  ExportJob(std::unique_ptr<airdaw::Engine> e, juce::File out, airdaw::RenderOptions o, bool reveal, std::function<void(const juce::String&, bool)> report)
+      : ThreadWithProgressWindow("Exporting mix", true, true, 10000, "Cancel"), e_(std::move(e)), out_(std::move(out)), o_(o), reveal_(reveal),
+        report_(std::move(report)) {
+    setStatusMessage("Rendering " + out_.getFileName() + juce::String(juce::CharPointer_UTF8("\xe2\x80\xa6")));
+  }
+  void run() override {
+    r_ = airdaw::renderMix(*e_, out_.getFullPathName().toStdString(), o_, [this](double f) { setProgress(f); return !threadShouldExit(); });
+  }
+  void threadComplete(bool cancelled) override {
+    e_.reset();  // hosted plugins are released on the message thread
+    if (r_.ok) {
+      const float pk = r_.peak > 0.f ? 20.f * std::log10(r_.peak) : -200.f;
+      report_("Exported " + out_.getFileName() + "  (" + juce::String((double)r_.frames / o_.sampleRate, 1) + " s, peak " + juce::String(pk, 1) + " dBFS" +
+                  (pk > -0.1f ? ", CLIPPING: lower the master" : "") + ")", pk > -0.1f);
+      if (reveal_) out_.revealToUser();
+    } else report_(cancelled || r_.error == "cancelled" ? juce::String("Export cancelled") : "EXPORT FAILED: " + juce::String(r_.error), !cancelled);
+    delete this;
+  }
+ private:
+  std::unique_ptr<airdaw::Engine> e_;
+  juce::File out_;
+  airdaw::RenderOptions o_;
+  airdaw::RenderResult r_;
+  bool reveal_ = true;
+  std::function<void(const juce::String&, bool)> report_;
+};
+
+static juce::String mmssText(double s) { return juce::String::formatted("%02d:%02d", (int)s / 60, (int)s % 60); }
+
+void MainComponent::exportMix() {
+  auto* e = bridge_.engine(); if (!e) return;
+  if (e->transport().recording.load()) { note("Stop recording before exporting", true); return; }
+  const double sr = e->sampleRate();
+  const auto end = airdaw::songEnd(*e);
+  if (end <= 0) { note("Nothing to export yet: no track has a take playing", true); return; }
+  const auto li = e->transport().loopIn.load(), lo = e->transport().loopOut.load();
+  bool solo = false, muted = false;
+  for (int t = 0; t < airdaw::kMaxTracks; ++t) { solo |= e->track(t).solo.load(); muted |= e->track(t).mute.load() && e->track(t).take.load() != nullptr; }
+  juce::String msg = "Render the mix of all playing takes to a stereo WAV file. The export is what you hear: faders, inserts, mutes and solos apply.";
+  if (solo) msg << "\n\nNOTE: a track is soloed, so only soloed tracks will be in the export.";
+  else if (muted) msg << "\n\nNote: some tracks with takes are muted and will be silent in the export.";
+  auto* w = new juce::AlertWindow("Export mix", msg, juce::MessageBoxIconType::NoIcon);
+  juce::StringArray ranges{"Whole song (" + mmssText((double)end / sr) + " + 2 s tail)"};
+  if (lo > li) ranges.add("Loop region (" + mmssText((double)li / sr) + juce::String(juce::CharPointer_UTF8("\xe2\x80\x93")) + mmssText((double)lo / sr) + ")");
+  w->addComboBox("range", ranges, "Range");
+  w->addComboBox("format", {"WAV 24-bit (for mastering and sharing)", "WAV 32-bit float (lossless, larger)"}, "Format");
+  w->addButton("Export...", 1, juce::KeyPress(juce::KeyPress::returnKey));
+  w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+  w->enterModalState(true, juce::ModalCallbackFunction::create([this, w](int r) {
+    if (r != 1) return;
+    const bool loop = w->getComboBoxComponent("range")->getSelectedItemIndex() == 1;
+    const int bits = w->getComboBoxComponent("format")->getSelectedItemIndex() == 1 ? 32 : 24;
+    auto dir = (sessionFile_ == juce::File() ? projectsRoot().getChildFile("Exports") : sessionFolder().getChildFile("exports"));
+    dir.createDirectory();
+    chooser_ = std::make_shared<juce::FileChooser>("Export mix as", dir.getChildFile(sessionName() + (loop ? " loop" : " mix") + ".wav"), "*.wav");
+    chooser_->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+        [this, loop, bits](const juce::FileChooser& c) { auto f = c.getResult(); if (f != juce::File()) startExport(f.withFileExtension("wav"), loop, bits); });
+  }), true);
+}
+
+void MainComponent::startExport(const juce::File& out, bool loopRange, int bits) {
+  auto* e = bridge_.engine(); if (!e) return;
+  // Copy the current state (unsaved changes too) into a fresh engine.
+  auto tmp = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw_export.airdaw");
+  if (!airdaw::saveSession(*e, tmp.getFullPathName().toStdString()).ok) { note("EXPORT FAILED: cannot snapshot the session", true); return; }
+  auto copy = std::make_unique<airdaw::Engine>(e->sampleRate());
+  copy->setInsertFactory(pluginFactory);
+  auto lr = airdaw::loadSession(*copy, tmp.getFullPathName().toStdString());
+  tmp.deleteFile();
+  if (!lr.ok) { note("EXPORT FAILED: " + juce::String(lr.error), true); return; }
+  copy->setWorkerThreads(-1);
+  airdaw::RenderOptions o;
+  o.bits = bits;
+  if (loopRange) { o.start = e->transport().loopIn.load(); o.end = e->transport().loopOut.load(); o.tailSeconds = 0.0; }
+  else { o.start = 0; o.end = airdaw::songEnd(*copy); o.tailSeconds = 2.0; }
+  o.sampleRate = e->sampleRate();
+  juce::Component::SafePointer<MainComponent> sp(this);
+  auto* job = new ExportJob(std::move(copy), out, o, !snapshotMode_, [sp](const juce::String& msg, bool warn) { if (sp) sp->note(msg, warn); });
+  job->launchThread();
 }
 
 // ---------------------------------------------------------------- plugins
@@ -518,6 +619,8 @@ void MainComponent::timerCallback() {
   overview_.sync();
   mixer_.sync();
   if (tick_ % 2 == 0) inserts_.sync();
+  if (takes_.wanted() != takes_.isVisible()) resized();  // a loop region appeared/disappeared, or T was toggled
+  if (tick_ % 3 == 0) takes_.sync();
   if (e && tick_ % 3 == 0) {
     collectTakes();
     e->collectGarbage();
@@ -551,6 +654,30 @@ void MainComponent::runScenario(const juce::String& name) {
   e->track(1).mute = true; e->track(2).solo = true; e->track(0).armed = true; e->track(0).inputL = 0;
   if (name == "inserts") { inserts_.show(0, 0); inserts_.show(0, 1); }
   if (name == "inserts-tape") { inserts_.show(4, 2); }
+  if (name == "takes") {  // three loop passes on Kick, the second one starred, the third one playing
+    auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw_snap_takes");
+    dir.deleteRecursively(); dir.createDirectory();
+    const double sr = e->sampleRate(); const auto li = (juce::int64)(sr * 43), lo = (juce::int64)(sr * 51);
+    for (int pass = 0; pass < 3; ++pass) {
+      auto f = dir.getChildFile("Kick_take00" + juce::String(pass + 1) + ".wav").getFullPathName().toStdString();
+      airdaw::WavWriter w; w.open(f, 1, (int)sr);
+      std::vector<float> buf((size_t)(lo - li));
+      for (size_t i = 0; i < buf.size(); ++i) {
+        const double tt = (double)i / sr, env = std::exp(-std::fmod(tt, 0.5) * (6.0 + pass * 3.0));
+        buf[i] = (float)(0.6 * env * std::sin(2.0 * 3.14159265 * (60.0 + pass * 15.0) * tt));
+      }
+      w.write(buf.data(), buf.size()); w.close();
+      e->setActiveTake(0, e->addTake(0, f, li));
+    }
+    e->setTakeKeep(0, 1, true);
+    e->transport().loopIn = li; e->transport().loopOut = lo; e->transport().loopOn = true; e->transport().seek(li + (juce::int64)(sr * 3));
+  }
+  if (name == "export") {  // end-to-end export of the "takes" scenario (no dialogs)
+    runScenario("takes");
+    e->track(2).solo = false;  // the base scenario solos OH L, which would (correctly) silence the Kick takes
+    startExport(juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw_snap_export.wav"), false, 24);
+  }
+  if (name == "reorder") { inserts_.show(4, 2); inserts_.moveInsert(4, 2, 0); }  // ToTape8 to the front, card stays open
   if (name == "add") { inserts_.show(0, 3); }
   if (name == "display") toggleDisplayPanel();
   if (name == "blue") { T().hue = 215.f; applyTheme(); }
@@ -562,7 +689,7 @@ void MainComponent::runScenario(const juce::String& name) {
 void MainComponent::takeSnapshot(const juce::File& png, const juce::String& scenario) {
   juce::Timer::callAfterDelay(1500, [this, png, scenario] {
     runScenario(scenario);
-    juce::Timer::callAfterDelay(1500, [this, png] {
+    juce::Timer::callAfterDelay(scenario == "export" ? 12000 : 1500, [this, png] {  // an export needs time to finish
       auto* top = getTopLevelComponent();
       auto img = top->createComponentSnapshot(top->getLocalBounds(), true, 1.f);
       png.deleteFile();

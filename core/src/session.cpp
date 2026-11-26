@@ -65,7 +65,9 @@ std::string sessionToJson(Engine& e, const std::string& baseDir) {
       JVal tk = JVal::arr(); int active = -1; const Take* cur = c.take.load();
       for (int i = 0; i < e.numTakes(id); ++i) {
         const Take* x = e.takeAt(id, i); if (x == cur) active = i;
-        JVal q = JVal::obj(); q.set("path", JVal::str(relPath(x->path, baseDir))).set("start", JVal::num((double)x->start)); tk.push(q);
+        JVal q = JVal::obj(); q.set("path", JVal::str(relPath(x->path, baseDir))).set("start", JVal::num((double)x->start));
+        if (x->keep) q.set("keep", JVal::boolean(true));
+        tk.push(q);
       }
       j.set("takes", tk).set("activeTake", JVal::num(active));
     }
@@ -145,6 +147,7 @@ SessionResult loadSession(Engine& e, const std::string& path) {
         std::string p = q.text("path"); if (!P(p).is_absolute()) p = S(P(baseDir) / P(p));
         int idx = e.addTake(id, p, (int64_t)q.num("start", 0));
         if (idx < 0) r.warnings.push_back("missing take: " + p);
+        else e.setTakeKeep(id, idx, q.flag("keep", false));
         mapIdx.push_back(idx);
       }
       int saved = (int)j.num("activeTake", -1);

@@ -15,14 +15,15 @@ std::FILE* openFile(const std::string& utf8Path, const char* mode);
 class WavWriter {
  public:
   ~WavWriter() { close(); }
-  bool open(const std::string& path, int channels, int sampleRate);
+  // bits: 32 = IEEE float (takes), 24 = PCM (mix exports).
+  bool open(const std::string& path, int channels, int sampleRate, int bits = 32);
   bool write(const float* interleaved, size_t frames);
   void close();  // patches header sizes
   bool isOpen() const { return f_ != nullptr; }
   uint64_t framesWritten() const { return frames_; }
  private:
   std::FILE* f_ = nullptr;
-  int ch_ = 0;
+  int ch_ = 0, bytes_ = 4;
   uint64_t frames_ = 0;
 };
 

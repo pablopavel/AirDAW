@@ -76,7 +76,7 @@ static std::vector<airdaw::FxInfo> pickerList(bool showOld) {
 }
 
 // ---------------- InsertCard ----------------
-class InsertCard : public juce::Component {
+class InsertCard : public juce::Component, public juce::DragAndDropTarget {
  public:
   InsertCard(InsertPanel& p, int slot) : p_(p), slot_(slot) {
     auto* e = p_.ctx_.engine(); auto* fx = e ? e->insertAt(p_.ch_, slot) : nullptr;
@@ -154,7 +154,7 @@ class InsertCard : public juce::Component {
 
   int cols() const { return juce::jlimit(1, kMaxCols, (int)knobs_.size()); }
   int prefWidth() const {
-    const int head = 150 + juce::roundToInt(juce::GlyphArrangement::getStringWidth(Theme::uiFont(14.f, true), name_));
+    const int head = 172 + juce::roundToInt(juce::GlyphArrangement::getStringWidth(Theme::spaced(Theme::uiFont(14.f, true), 0.05f), name_));
     if (!open_) return juce::jmax(170, head);
     if (hosted_) return juce::jmax(head, 260);
     return juce::jmax(head, cols() * kKnobW + (cols() - 1) * kKnobGapX + 2 * kPad);
@@ -175,7 +175,9 @@ class InsertCard : public juce::Component {
     g.reduceClipRegion(clip);
     T().drawBrush(g, head); g.restoreState();
     g.setColour(juce::Colours::black); g.fillRect(head.getX(), head.getBottom() - 1.f, head.getWidth(), 1.f);
-    auto hr = head.reduced(10.f, 0.f);
+    auto hr = head.reduced(8.f, 0.f);
+    g.setColour(Theme::dim()); g.setFont(Theme::uiFont(16.f));
+    g.drawText(juce::String(juce::CharPointer_UTF8("\xe2\xa0\xbf")), hr.removeFromLeft(14.f), juce::Justification::centredLeft);  // drag grip
     g.setColour(T().amd()); g.setFont(Theme::monoFont(12.f, false));
     g.drawText(juce::String(slot_ + 1), hr.removeFromLeft(16.f), juce::Justification::centredLeft);
     g.setColour(Theme::cream()); g.setFont(Theme::spaced(Theme::uiFont(14.f, true), 0.05f));
@@ -211,6 +213,21 @@ class InsertCard : public juce::Component {
   void mouseUp(const juce::MouseEvent& e) override {  // clicking the header toggles the card
     if (e.mouseWasClicked() && e.y < kHeaderH) p_.setOpen(slot_, !open_);
   }
+  void mouseDrag(const juce::MouseEvent& e) override {  // dragging the header moves the plugin in the chain
+    if (e.mouseDownPosition.y >= kHeaderH || e.getDistanceFromDragStart() < 6) return;
+    if (auto* dc = juce::DragAndDropContainer::findParentDragContainerFor(this))
+      if (!dc->isDragAndDropActive()) dc->startDragging(insertDragId(p_.ch_, slot_), this);
+  }
+  void paintOverChildren(juce::Graphics& g) override { if (dropHover_) drawDropOutline(g, getLocalBounds().toFloat(), 6.f); }
+  bool isInterestedInDragSource(const SourceDetails& d) override {
+    int ch, s; return parseInsertDrag(d.description, ch, s) && ch == p_.ch_ && s != slot_;
+  }
+  void itemDragEnter(const SourceDetails&) override { dropHover_ = true; repaint(); }
+  void itemDragExit(const SourceDetails&) override { dropHover_ = false; repaint(); }
+  void itemDropped(const SourceDetails& d) override {
+    dropHover_ = false; repaint();
+    int ch, s; if (parseInsertDrag(d.description, ch, s) && p_.ctx_.moveInsert) p_.ctx_.moveInsert(ch, s, slot_);
+  }
 
  private:
   void savePreset() {
@@ -239,7 +256,7 @@ class InsertCard : public juce::Component {
   InsertPanel& p_;
   const int slot_;
   juce::String name_;
-  bool hosted_ = false, open_ = false, active_ = true;
+  bool hosted_ = false, open_ = false, active_ = true, dropHover_ = false;
   juce::TextButton byp_, tog_, rm_, window_, def_{"Default"}, save_{juce::String(juce::CharPointer_UTF8("\xef\xbc\x8b Save"))};
   std::vector<std::unique_ptr<PluginKnob>> knobs_;
   std::vector<std::unique_ptr<juce::TextButton>> presetBtns_;
@@ -333,6 +350,21 @@ void InsertPanel::close() {
   if (ctx_.layoutChanged) ctx_.layoutChanged();
 }
 
+void InsertPanel::moveInsert(int channelId, int from, int to) {
+  auto* e = ctx_.engine(); if (!e) return;
+  if (!e->moveInsert(channelId, from, to)) { ctx_.note("Could not move the insert"); return; }
+  // Same reorder for the open/closed card state, so each card stays as it was.
+  auto& m = open_[channelId];
+  std::vector<int> order; for (int s = 0; s < airdaw::kMaxInserts; ++s) if (s != from) order.push_back(s);
+  order.insert(order.begin() + to, from);
+  std::map<int, bool> next; for (int s = 0; s < airdaw::kMaxInserts; ++s) next[s] = m[order[(size_t)s]];
+  m = next;
+  if (auto* c = channelOf(*e, channelId)) ctx_.note("Moved " + juce::String(e->insertAt(channelId, to)->name()) + " to slot " + juce::String(to + 1) +
+                                                    " on " + juce::String(c->name));
+  key_.clear(); rebuild();
+  if (ctx_.layoutChanged) ctx_.layoutChanged();
+}
+
 void InsertPanel::setOpen(int slot, bool open) {
   open_[ch_][slot] = open; key_.clear(); rebuild();
   if (ctx_.layoutChanged) ctx_.layoutChanged();
@@ -391,7 +423,7 @@ void InsertPanel::paint(juce::Graphics& g) {
     g.setFont(Theme::spaced(Theme::uiFont(15.f, true), 0.16f));
     T().drawGlowText(g, juce::String(c ? c->name : "").toUpperCase(), hd.removeFromTop(22).toFloat(), juce::Justification::centredLeft, Theme::cream(), 0.5f);
     g.setColour(Theme::dim()); g.setFont(Theme::uiFont(11.5f));
-    g.drawFittedText("Insert chain\nclick a header to open", hd.removeFromTop(34), juce::Justification::topLeft, 2);
+    g.drawFittedText(juce::String(juce::CharPointer_UTF8("Insert chain\ndrag \xe2\xa0\xbf to reorder")), hd.removeFromTop(34), juce::Justification::topLeft, 2);
   }
 }
 

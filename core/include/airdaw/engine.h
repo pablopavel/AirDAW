@@ -27,7 +27,8 @@ constexpr int kMaxBlock = 8192;
 enum class Route : int { Master = 0, Bus1, Bus2, Bus3, Bus4 };  // value-1 = bus index
 
 // A recorded take, held in RAM for playback (streaming from disk comes later).
-struct Take { std::vector<float> l, r; int64_t start = 0; std::string path; };
+// `keep` is the user's star in the takes bar (UI thread only; saved in sessions).
+struct Take { std::vector<float> l, r; int64_t start = 0; std::string path; bool keep = false; };
 
 struct Meter {
   std::atomic<float> peakL{0}, peakR{0}, rmsL{0}, rmsR{0};
@@ -81,6 +82,9 @@ class Engine {
   bool setInsert(int channelId, int slot, const std::string& effect);  // Airwindows by name; empty = remove
   // Installs a ready-made insert (e.g. a hosted VST3). The engine takes ownership.
   bool setInsertProcessor(int channelId, int slot, std::unique_ptr<InsertProcessor> p);
+  // Moves the insert at `from` to position `to` of the same chain (the others shift), keeping the same
+  // instance, so its settings and internal state survive. The audio thread sees the new order in one step.
+  bool moveInsert(int channelId, int from, int to);
   // Used by session loading for ids that are not Airwindows names ("vst3:...").
   void setInsertFactory(InsertFactory f) { factory_ = std::move(f); }
   InsertFactory& insertFactory() { return factory_; }
@@ -112,6 +116,10 @@ class Engine {
   // Records that a take's file moved (e.g. into a project folder on Save As). UI thread only:
   // the audio thread never reads `path`.
   void setTakePath(int track, int i, const std::string& path) { takes_[track][takeBase_[track] + i]->path = path; }
+  void setTakeKeep(int track, int i, bool keep) { takes_[track][takeBase_[track] + i]->keep = keep; }
+  // Removes a take from the track's list (deactivating it if it was playing). Its audio stays in memory until
+  // the engine is destroyed, because the audio thread may still be reading it. UI thread only.
+  void removeTake(int track, int i);
 
   // Worker threads for parallel track/bus processing (-1 = automatic: cores-1, max 7; 0 = single-threaded).
   // Not real-time safe: call while audio is stopped. Output is bit-identical for any thread count.
@@ -129,7 +137,10 @@ class Engine {
   int latencySamples() const { return 0; }
 
  private:
-  struct Cmd { int channelId; int slot; InsertProcessor* fx; };
+  // slot >= 0: put `fx` in that slot (the old one is handed back to be freed).
+  // slot == kChainCmd: replace the whole chain with `chain` (a reorder: same instances, nothing freed).
+  static constexpr int kChainCmd = -1;
+  struct Cmd { int channelId; int slot; InsertProcessor* fx; std::array<InsertProcessor*, kMaxInserts> chain{}; };
   struct SegCtx;
   void processTrack(int ti, const SegCtx& c);
   void processBus(int bi, int n, bool anyBusSolo);
@@ -146,6 +157,7 @@ class Engine {
   std::unique_ptr<DiskWriter> writer_;
   std::array<std::vector<std::unique_ptr<Take>>, kMaxTracks> takes_;
   std::array<int, kMaxTracks> takeBase_{};  // first take of the current session's list
+  std::vector<std::unique_ptr<Take>> removedTakes_;  // kept alive until the engine is destroyed
   std::array<Channel, kMaxTracks> tracks_;
   std::array<Channel, kNumBuses> buses_;
   Channel master_;

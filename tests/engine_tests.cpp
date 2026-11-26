@@ -11,6 +11,7 @@
 #include <cstring>
 #include "airdaw/engine.h"
 #include "airdaw/session.h"
+#include "airdaw/render.h"
 #include "airdaw/work_pool.h"
 #include <filesystem>
 #include <fstream>
@@ -169,6 +170,93 @@ static void testMonitoringAndLayering() {
     std::printf("monitoring: heard only when armed + monitoring; layering: track 2 overdubs while track 1 plays back\n"); }
 }
 
+// Takes bar: loop passes as takes, keep one, remove the others (also the one playing), keep survives save/load.
+static void testKeepAndRemoveTakes() {
+  Engine e(SR); auto dir = tmpDir(); auto& tk = e.track(0); tk.inputL = 0; tk.armed = true; tk.pan = -1.f;
+  auto& t = e.transport(); t.loopOn = true; t.loopIn = 1000; t.loopOut = 3000; t.seek(1000);
+  long k = 0; stream(e, k, 0);
+  e.startRecording(dir); stream(e, k, 6000); e.transport().stop(); stream(e, k, 100); e.flushRecording();
+  auto f = e.pollFinishedTakes(); std::sort(f.begin(), f.end(), [](auto& a, auto& b) { return a.path < b.path; });
+  CHECK(f.size() == 3, "3 loop passes, got %zu", f.size()); if (f.size() != 3) return;
+  for (auto& x : f) e.setActiveTake(0, e.addTake(0, x.path, x.start));  // like the app: the newest pass is active
+  const Take* playing = e.takeAt(0, 2);
+  e.setTakeKeep(0, 1, true);
+  for (int i = e.numTakes(0) - 1; i >= 0; --i) if (!e.takeAt(0, i)->keep) e.removeTake(0, i);
+  CHECK(e.numTakes(0) == 1 && e.takeAt(0, 0)->keep && e.takeAt(0, 0)->path == f[1].path, "only the kept take remains");
+  CHECK(e.track(0).take.load() == nullptr, "removing the playing take must deactivate it");
+  CHECK(playing->l.size() == 2000, "a removed take's audio stays valid in memory");
+  e.setActiveTake(0, 0); tk.armed = false;
+  CHECK(saveSession(e, dir + "/k.airdaw").ok, "save kept");
+  Engine b(SR); auto r = loadSession(b, dir + "/k.airdaw");
+  CHECK(r.ok && b.numTakes(0) == 1 && b.takeAt(0, 0)->keep && b.track(0).take.load() == b.takeAt(0, 0), "keep flag and active take survive save/load");
+  std::printf("takes: keep / remove unkept / save and reload OK\n");
+}
+
+// Mix export: sample-exact against the take, 24-bit within rounding, ranges, no click/live input, cancel.
+static void testRenderMix() {
+  auto dir = tmpDir();
+  { WavWriter w; w.open(dir + "/src.wav", 1, (int)SR); std::vector<float> s(20000); for (size_t i = 0; i < s.size(); ++i) s[i] = sigAt((long)i);
+    w.write(s.data(), s.size()); w.close(); }
+  Engine e(SR); auto& t = e.track(0); t.pan = -1.f;
+  e.setActiveTake(0, e.addTake(0, dir + "/src.wav", 1000));
+  t.inputL = 0; t.armed = true; e.metronome().enabled = true; e.metronome().levelDb = 0;  // must not end up in the export
+  CHECK(songEnd(e) == 21000, "song end %lld", (long long)songEnd(e));
+  RenderOptions o; o.start = 0; o.end = songEnd(e); o.tailSeconds = 0.01; o.bits = 32; o.blockSize = 333;
+  auto r = renderMix(e, dir + "/mix32.wav", o);
+  WavData w; bool ok = r.ok && readWav(dir + "/mix32.wav", w) && w.channels == 2 && (int64_t)w.left.size() == 21000 + 960;
+  for (size_t i = 0; ok && i < w.left.size(); ++i) {
+    const float want = (i >= 1000 && i < 21000) ? sigAt((long)i - 1000) : 0.f;
+    ok = w.left[i] == want && w.right[i] == 0.f;
+  }
+  CHECK(ok, "32-bit export must equal the take sample for sample (ok=%d frames=%zu err=%s)", (int)r.ok, w.left.size(), r.error.c_str());
+  CHECK(std::fabs(r.peak - 0.5f) < 0.001f, "export peak %f", r.peak);
+  o.bits = 24; r = renderMix(e, dir + "/mix24.wav", o);
+  WavData w24; ok = r.ok && readWav(dir + "/mix24.wav", w24) && w24.left.size() == w.left.size();
+  for (size_t i = 0; ok && i < w24.left.size(); ++i) ok = std::fabs(w24.left[i] - w.left[i]) <= 1.0f / 8388608.f;
+  CHECK(ok, "24-bit export within one LSB");
+  o.start = 5000; o.end = 8000; o.tailSeconds = 0; o.bits = 32; r = renderMix(e, dir + "/part.wav", o);
+  WavData wp; ok = r.ok && readWav(dir + "/part.wav", wp) && wp.left.size() == 3000;
+  for (size_t i = 0; ok && i < 3000; ++i) ok = wp.left[i] == sigAt(4000 + (long)i);
+  CHECK(ok, "range export");
+  int calls = 0; o.start = 0; o.end = songEnd(e);
+  r = renderMix(e, dir + "/cancel.wav", o, [&](double) { return ++calls < 3; });
+  CHECK(!r.ok && r.error == "cancelled" && !std::filesystem::exists(dir + "/cancel.wav"), "cancel removes the partial file");
+  std::printf("export: 32-bit sample-exact, 24-bit within 1 LSB, ranges, no click/live input, cancel cleans up\n");
+}
+
+// Insert reordering: same instances, new order, each insert processed exactly once per block.
+struct Affine : InsertProcessor {
+  float a, b; std::string nm; std::vector<FxParamInfo> ps; long calls = 0;
+  Affine(float a_, float b_, std::string n) : a(a_), b(b_), nm(std::move(n)) {}
+  const std::string& name() const override { return nm; }
+  int numParams() const override { return 0; } const std::vector<FxParamInfo>& params() const override { return ps; }
+  void setParam(int, float) override {} float getParam(int) const override { return 0; }
+  std::string paramDisplay(int) override { return {}; } void setBypass(bool) override {} bool bypassed() const override { return false; }
+  void process(float* l, float* r, int n) override { ++calls; for (int i = 0; i < n; ++i) { l[i] = l[i] * a + b; r[i] = r[i] * a + b; } }
+};
+static void testInsertReorder() {
+  Engine e(SR); auto& t = e.track(0); t.inputL = 0; t.armed = true; t.pan = -1.f;
+  auto A = std::make_unique<Affine>(2.f, 0.f, "A"), B = std::make_unique<Affine>(1.f, 0.1f, "B"), C = std::make_unique<Affine>(0.5f, 0.f, "C");
+  Affine *pa = A.get(), *pb = B.get(), *pc = C.get();
+  e.setInsertProcessor(0, 0, std::move(A)); e.setInsertProcessor(0, 1, std::move(B)); e.setInsertProcessor(0, 3, std::move(C));
+  std::vector<float> in(N, 0.25f), l(N), r(N); const float* ip[1] = {in.data()}; float* op[2] = {l.data(), r.data()};
+  auto run = [&](int blocks) { for (int i = 0; i < blocks; ++i) e.process(ip, 1, op, 2, N); return l[N - 1]; };
+  float y = run(4);
+  CHECK(std::fabs(y - ((0.25f * 2.f + 0.1f) * 0.5f)) < 1e-6f, "chain A,B,-,C gives %f", y);
+  CHECK(e.moveInsert(0, 0, 3), "move A to the end");
+  CHECK(e.insertAt(0, 0) == pb && e.insertAt(0, 1) == nullptr && e.insertAt(0, 2) == pc && e.insertAt(0, 3) == pa, "UI view after move");
+  const long ca = pa->calls, cb = pb->calls, cc = pc->calls;
+  y = run(10);
+  CHECK(std::fabs(y - (0.25f + 0.1f) * 0.5f * 2.f) < 1e-6f, "chain B,-,C,A gives %f", y);
+  CHECK(pa->calls - ca == 10 && pb->calls - cb == 10 && pc->calls - cc == 10, "each insert must run exactly once per block (A %ld B %ld C %ld)",
+        pa->calls - ca, pb->calls - cb, pc->calls - cc);
+  CHECK(e.moveInsert(0, 3, 0) && e.insertAt(0, 0) == pa && e.insertAt(0, 1) == pb, "move back to the front");
+  CHECK(!e.moveInsert(0, 2, 0), "moving an empty slot is refused");
+  run(2); e.setInsert(0, 0, ""); run(2); e.collectGarbage();  // replacing after a reorder still frees the right instance
+  CHECK(e.insertAt(0, 0) == nullptr && e.insertAt(0, 1) == pb, "remove after reorder");
+  std::printf("insert reorder: same instances, new order, each insert runs once per block\n");
+}
+
 // Project folders with spaces and non-ASCII letters (the "My Song1" overdub bug: the space-to-underscore
 // rule was applied to the whole path, so takes went to a folder that did not exist and were silently lost).
 static void testRecordingPaths() {
@@ -324,6 +412,9 @@ int main() {
   testTakeLists();
   testMonitoringAndLayering();
   testRecordingPaths();
+  testInsertReorder();
+  testKeepAndRemoveTakes();
+  testRenderMix();
 
   // 14. Session save/load round trip, including plugin parameters, takes, loop/punch
   { auto dir = tmpDir(); std::string sess = dir + "/song.airdaw";

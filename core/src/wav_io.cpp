@@ -1,4 +1,6 @@
 #include "airdaw/wav_io.h"
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 
@@ -17,31 +19,47 @@ std::FILE* openFile(const std::string& utf8Path, const char* mode) {
 static void w32(std::FILE* f, uint32_t v) { std::fwrite(&v, 4, 1, f); }
 static void w16(std::FILE* f, uint16_t v) { std::fwrite(&v, 2, 1, f); }
 
-bool WavWriter::open(const std::string& path, int channels, int sampleRate) {
+bool WavWriter::open(const std::string& path, int channels, int sampleRate, int bits) {
   close();
+  if (bits != 32 && bits != 24) return false;
   f_ = openFile(path, "wb");
   if (!f_) return false;
-  ch_ = channels; frames_ = 0;
+  ch_ = channels; frames_ = 0; bytes_ = bits / 8;
   std::fwrite("RIFF", 1, 4, f_); w32(f_, 0);
   std::fwrite("WAVE", 1, 4, f_);
   std::fwrite("fmt ", 1, 4, f_); w32(f_, 16);
-  w16(f_, 3); w16(f_, (uint16_t)channels); w32(f_, (uint32_t)sampleRate);
-  w32(f_, (uint32_t)(sampleRate * channels * 4)); w16(f_, (uint16_t)(channels * 4)); w16(f_, 32);
-  std::fwrite("fact", 1, 4, f_); w32(f_, 4); w32(f_, 0);
+  w16(f_, bits == 32 ? 3 : 1); w16(f_, (uint16_t)channels); w32(f_, (uint32_t)sampleRate);  // 3 = IEEE float, 1 = PCM
+  w32(f_, (uint32_t)(sampleRate * channels * bytes_)); w16(f_, (uint16_t)(channels * bytes_)); w16(f_, (uint16_t)bits);
+  std::fwrite("fact", 1, 4, f_); w32(f_, 4); w32(f_, 0);  // also kept for PCM (optional there) so the layout is fixed
   std::fwrite("data", 1, 4, f_); w32(f_, 0);
   return true;
 }
 
 bool WavWriter::write(const float* d, size_t frames) {
   if (!f_) return false;
-  if (std::fwrite(d, sizeof(float) * ch_, frames, f_) != frames) return false;
+  if (bytes_ == 4) {
+    if (std::fwrite(d, sizeof(float) * ch_, frames, f_) != frames) return false;
+  } else {  // 24-bit PCM, clipped to full scale
+    unsigned char buf[3 * 1024];
+    const size_t total = frames * (size_t)ch_;
+    for (size_t i = 0; i < total;) {
+      const size_t n = std::min<size_t>(1024, total - i);
+      for (size_t k = 0; k < n; ++k) {
+        const float x = std::max(-1.f, std::min(d[i + k], 8388607.f / 8388608.f));
+        const int32_t v = (int32_t)std::lrint((double)x * 8388608.0);
+        buf[3 * k] = (unsigned char)(v & 0xff); buf[3 * k + 1] = (unsigned char)((v >> 8) & 0xff); buf[3 * k + 2] = (unsigned char)((v >> 16) & 0xff);
+      }
+      if (std::fwrite(buf, 3, n, f_) != n) return false;
+      i += n;
+    }
+  }
   frames_ += frames;
   return true;
 }
 
 void WavWriter::close() {
   if (!f_) return;
-  const uint32_t dataBytes = (uint32_t)(frames_ * ch_ * 4);
+  const uint32_t dataBytes = (uint32_t)(frames_ * ch_ * bytes_);
   std::fseek(f_, 4, SEEK_SET);  w32(f_, 4 + 8 + 16 + 12 + 8 + dataBytes);  // RIFF size
   std::fseek(f_, 44, SEEK_SET); w32(f_, (uint32_t)frames_);               // fact sample count
   std::fseek(f_, 52, SEEK_SET); w32(f_, dataBytes);                       // data size

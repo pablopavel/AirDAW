@@ -12,10 +12,12 @@
 #include "ui/Mixer.h"
 #include "ui/Overview.h"
 #include "ui/SettingsWindow.h"
+#include "ui/TakesBar.h"
 
 // The AirDAW main window (layout and look from docs/airdaw-v4.html):
 // deck | song overview | insert panel (when open) | mixer | meter dock | footer.
-class MainComponent : public juce::Component, private juce::Timer, private juce::ChangeListener, private juce::KeyListener {
+class MainComponent : public juce::Component, public juce::DragAndDropContainer, private juce::Timer, private juce::ChangeListener,
+                      private juce::KeyListener {
  public:
   explicit MainComponent(bool snapshotMode = false);
   ~MainComponent() override;
@@ -50,6 +52,8 @@ class MainComponent : public juce::Component, private juce::Timer, private juce:
   void applyTheme();
   void note(const juce::String& s, bool warn = false);
   void runScenario(const juce::String& name);
+  void exportMix();  // options + file dialog, then startExport
+  void startExport(const juce::File& out, bool loopRange, int bits);
   juce::File sessionFolder() const;
   juce::String sessionName() const;
   static juce::File projectsRoot();   // Documents/AirDAW
@@ -66,6 +70,7 @@ class MainComponent : public juce::Component, private juce::Timer, private juce:
 
   ui::Deck deck_{ctx_};
   ui::Overview overview_{ctx_};
+  ui::TakesBar takes_{ctx_};
   ui::InsertPanel inserts_{ctx_, presets_};
   ui::Mixer mixer_{ctx_};
   ui::MeterDock dock_{ctx_};

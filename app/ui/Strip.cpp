@@ -81,8 +81,8 @@ Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
     };
     in_.onClick = [this] { chooseInput(); };
     route_.onClick = [this] { chooseRoute(); };
-    t_.setTooltip("Choose which recorded take plays on this track");
-    t_.onClick = [this] { chooseTake(); };
+    t_.setTooltip("Show this track's takes in the takes bar (no arming needed)");
+    t_.onClick = [this] { ctx_.viewTrack = ctx_.viewTrack == id_ ? -1 : id_; if (ctx_.layoutChanged) ctx_.layoutChanged(); };
     r_.onClick = [this] {
       auto* e = ctx_.engine(); if (!e) return;
       auto& c = e->track(id_);
@@ -99,8 +99,11 @@ Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
   addAndMakeVisible(gain_);
   gain_.onChange = [this](float v) { if (auto* e = ctx_.engine()) if (auto* c = channelOf(*e, id_)) c->trimDb = v; };
   for (int i = 0; i < (int)slots_.size(); ++i) {
-    addChildComponent(slots_[(size_t)i]);
-    slots_[(size_t)i].onClick = [this, i] { ctx_.showInserts(id_, i); };
+    auto& sl = slots_[(size_t)i];
+    addChildComponent(sl);
+    sl.channelId = id; sl.slot = i;
+    sl.onClick = [this, i] { ctx_.showInserts(id_, i); };
+    sl.onDropFrom = [this, i](int from) { if (ctx_.moveInsert) ctx_.moveInsert(id_, from, i); };
   }
   addChildComponent(summary_);
   summary_.onClick = [this] { ctx_.showInserts(id_, -1); };
@@ -173,7 +176,8 @@ void Strip::sync() {
     route_.setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x86\x92 ")) + (rt == 0 ? "Master" : "Bus " + juce::String(rt)));
     r_.setToggleState(c.armed.load(), juce::dontSendNotification);
     mon_.setToggleState(c.monitor.load(), juce::dontSendNotification);
-    t_.setColour(juce::TextButton::textColourOffId, e->numTakes(id_) > 0 ? T().am() : Theme::tx());
+    t_.setColour(juce::TextButton::textColourOffId, e->numTakes(id_) > 0 ? T().am() : Theme::tx());  // amber: has takes
+    t_.setToggleState(ctx_.viewTrack == id_, juce::dontSendNotification);
   }
   m_.setToggleState(c.mute.load(), juce::dontSendNotification);
   s_.setToggleState(c.solo.load(), juce::dontSendNotification);
@@ -231,8 +235,11 @@ MasterStrip::MasterStrip(AppCtx& ctx) : ctx_(ctx) {
   plate_.onClick = [this] { ctx_.showInserts(kMasterId, -1); };
   addAndMakeVisible(plate_);
   for (int i = 0; i < (int)slots_.size(); ++i) {
-    addChildComponent(slots_[(size_t)i]);
-    slots_[(size_t)i].onClick = [this, i] { ctx_.showInserts(kMasterId, i); };
+    auto& sl = slots_[(size_t)i];
+    addChildComponent(sl);
+    sl.channelId = kMasterId; sl.slot = i;
+    sl.onClick = [this, i] { ctx_.showInserts(kMasterId, i); };
+    sl.onDropFrom = [this, i](int from) { if (ctx_.moveInsert) ctx_.moveInsert(kMasterId, from, i); };
   }
   for (auto* c : std::initializer_list<juce::Component*>{&vuL_, &vuR_, &pkL_, &pkR_, &rms_, &clip_, &fader_}) addAndMakeVisible(c);
   clip_.setTooltip("Lights when the master output reaches 0 dBFS. Click to reset.");

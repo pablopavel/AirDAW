@@ -26,10 +26,12 @@ struct AppCtx {
   juce::PropertiesFile& props;
   airdaw::Engine* engine() const { return bridge.engine(); }
   bool audioRunning = false;                                  // updated by MainComponent
+  int viewTrack = -1;                                         // track whose takes the takes bar shows (T button)
   std::function<void(const juce::String&)> note;              // short message in the footer
   std::function<void(int channelId, int slot)> showInserts;   // open the insert panel (slot -1: just the chain)
   std::function<bool(int channelId, int slot)> isCardOpen;    // insert card expanded in the panel
   std::function<void(int channelId, int slot)> openPluginWindow;  // a hosted VST3's own editor window
+  std::function<void(int channelId, int from, int to)> moveInsert;  // reorder a chain (drag and drop)
   std::function<void()> layoutChanged;                        // a panel changed its preferred size
   std::function<bool(const char*)> requireAudio;              // false + explanation if no audio is running
 };
