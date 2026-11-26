@@ -462,6 +462,7 @@ void MainComponent::collectTakes() {
     if (idx >= 0) e->setActiveTake(t.track, idx);
     if (t.droppedFrames) note("WARNING: disk fell behind, " + juce::String((int)t.droppedFrames) + " frames dropped on track " + juce::String(t.track + 1));
   }
+  for (auto& err : e->pollRecordingErrors()) note("RECORDING FAILED: " + juce::String::fromUTF8(err.c_str()) + " - the take was not saved", true);
 }
 
 // ---------------------------------------------------------------- plugins

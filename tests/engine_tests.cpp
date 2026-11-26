@@ -169,6 +169,31 @@ static void testMonitoringAndLayering() {
     std::printf("monitoring: heard only when armed + monitoring; layering: track 2 overdubs while track 1 plays back\n"); }
 }
 
+// Project folders with spaces and non-ASCII letters (the "My Song1" overdub bug: the space-to-underscore
+// rule was applied to the whole path, so takes went to a folder that did not exist and were silently lost).
+static void testRecordingPaths() {
+  const std::string proj = tmpDir() + "/My Song 1 Caf\xc3\xa9", audio = proj + "/audio";
+  std::filesystem::create_directories(std::filesystem::u8path(audio));
+  Engine e(SR); auto& t = e.track(1); t.inputL = 0; t.armed = true; t.name = "Lead Vox: take/1?";
+  long k = 0; e.startRecording(audio); stream(e, k, 3000); e.transport().stop(); stream(e, k, 64); e.flushRecording();
+  auto f = e.pollFinishedTakes(); auto errs = e.pollRecordingErrors();
+  CHECK(f.size() == 1 && errs.empty(), "take in a folder with spaces/accents: takes=%zu errors=%zu %s", f.size(), errs.size(), errs.empty() ? "" : errs[0].c_str());
+  if (f.size() != 1) return;
+  const auto file = std::filesystem::u8path(f[0].path);
+  CHECK(std::filesystem::exists(file) && file.parent_path() == std::filesystem::u8path(audio), "take must be in the project's own audio folder: %s", f[0].path.c_str());
+  CHECK(file.filename().u8string() == "Lead_Vox__take_1_take001.wav", "file-safe take name, got %s", file.filename().u8string().c_str());
+  e.setActiveTake(1, e.addTake(1, f[0].path, f[0].start));
+  CHECK(e.numTakes(1) == 1, "take with a non-ASCII path must load");
+  CHECK(saveSession(e, proj + "/My Song 1 Caf\xc3\xa9.airdaw").ok, "save into non-ASCII folder");
+  Engine b(SR); auto r = loadSession(b, proj + "/My Song 1 Caf\xc3\xa9.airdaw");
+  CHECK(r.ok && r.warnings.empty() && b.numTakes(1) == 1 && b.takeAt(1, 0)->l.size() == 3000, "reload from non-ASCII folder (warnings=%zu)", r.warnings.size());
+  // A folder that does not exist: the take is lost, but it must be reported, not silent.
+  Engine c(SR); c.track(0).inputL = 0; c.track(0).armed = true;
+  long k2 = 0; c.startRecording(proj + "/no such folder"); stream(c, k2, 1000); c.transport().stop(); stream(c, k2, 64); c.flushRecording();
+  CHECK(c.pollFinishedTakes().empty() && c.pollRecordingErrors().size() == 1, "an unwritable take must be reported");
+  std::printf("recording paths: spaces, accents and odd track names work; unwritable takes are reported\n");
+}
+
 // Loading a session (or New) replaces the take list instead of appending to it, so takes never leak
 // from one project into the next. Moved take files keep working via setTakePath.
 static void testTakeLists() {
@@ -298,6 +323,7 @@ int main() {
   testMetronome();
   testTakeLists();
   testMonitoringAndLayering();
+  testRecordingPaths();
 
   // 14. Session save/load round trip, including plugin parameters, takes, loop/punch
   { auto dir = tmpDir(); std::string sess = dir + "/song.airdaw";

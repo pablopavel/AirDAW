@@ -96,6 +96,7 @@ class Engine {
   void startRecording(const std::string& folder);
   void stopRecording() { transport_.recording = false; }
   std::vector<FinishedTake> pollFinishedTakes() { return writer_->pollFinished(); }
+  std::vector<std::string> pollRecordingErrors() { return writer_->pollErrors(); }  // takes that could not be written
   void flushRecording() { writer_->flushAndWait(); }
   uint64_t droppedFrames() const { return writer_->droppedFrames(); }
   // Loads a WAV as a take for a track; returns its index or -1. Takes live until the engine is destroyed.

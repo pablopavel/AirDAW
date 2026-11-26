@@ -1,13 +1,25 @@
 #include "airdaw/wav_io.h"
 #include <cstring>
+#include <filesystem>
 
 namespace airdaw {
+
+std::FILE* openFile(const std::string& utf8Path, const char* mode) {
+#ifdef _WIN32
+  const std::wstring wpath = std::filesystem::u8path(utf8Path).wstring();
+  std::wstring wmode; for (const char* m = mode; *m; ++m) wmode += (wchar_t)*m;
+  return _wfopen(wpath.c_str(), wmode.c_str());
+#else
+  return std::fopen(utf8Path.c_str(), mode);
+#endif
+}
+
 static void w32(std::FILE* f, uint32_t v) { std::fwrite(&v, 4, 1, f); }
 static void w16(std::FILE* f, uint16_t v) { std::fwrite(&v, 2, 1, f); }
 
 bool WavWriter::open(const std::string& path, int channels, int sampleRate) {
   close();
-  f_ = std::fopen(path.c_str(), "wb");
+  f_ = openFile(path, "wb");
   if (!f_) return false;
   ch_ = channels; frames_ = 0;
   std::fwrite("RIFF", 1, 4, f_); w32(f_, 0);
@@ -38,7 +50,7 @@ void WavWriter::close() {
 }
 
 bool readWav(const std::string& path, WavData& o) {
-  std::FILE* f = std::fopen(path.c_str(), "rb");
+  std::FILE* f = openFile(path, "rb");
   if (!f) return false;
   auto rd32 = [&](uint32_t& v) { return std::fread(&v, 4, 1, f) == 1; };
   char id[4]; uint32_t sz;

@@ -12,6 +12,10 @@
 namespace fs = std::filesystem;
 namespace airdaw {
 
+// Paths in AirDAW are UTF-8 strings; std::filesystem on Windows would read a plain std::string in the ANSI code page.
+static fs::path P(const std::string& s) { return fs::u8path(s); }
+static std::string S(const fs::path& p) { return p.u8string(); }
+
 static std::vector<int> allIds() {
   std::vector<int> v; for (int i = 0; i < kMaxTracks; ++i) v.push_back(i);
   for (int i = 0; i < kNumBuses; ++i) v.push_back(100 + i);
@@ -21,8 +25,8 @@ static Channel& chan(Engine& e, int id) { return id < 100 ? e.track(id) : id < 2
 
 static std::string relPath(const std::string& p, const std::string& base) {
   if (base.empty()) return p;
-  std::error_code ec; auto r = fs::relative(p, base, ec);
-  return (!ec && !r.empty() && *r.begin() != "..") ? r.generic_string() : p;
+  std::error_code ec; auto r = fs::relative(P(p), P(base), ec);
+  return (!ec && !r.empty() && *r.begin() != "..") ? r.generic_u8string() : p;
 }
 
 std::string sessionToJson(Engine& e, const std::string& baseDir) {
@@ -73,11 +77,11 @@ std::string sessionToJson(Engine& e, const std::string& baseDir) {
 
 SessionResult saveSession(Engine& e, const std::string& path) {
   SessionResult r;
-  fs::path p(path); std::error_code ec;
+  fs::path p = P(path); std::error_code ec;
   if (p.has_parent_path()) fs::create_directories(p.parent_path(), ec);
-  std::string text = sessionToJson(e, p.parent_path().string());
+  std::string text = sessionToJson(e, S(p.parent_path()));
   fs::path tmp = p; tmp += ".tmp";
-  { std::ofstream f(tmp, std::ios::binary | std::ios::trunc); f << text; f.flush(); if (!f) { r.error = "cannot write " + tmp.string(); return r; } }
+  { std::ofstream f(tmp, std::ios::binary | std::ios::trunc); f << text; f.flush(); if (!f) { r.error = "cannot write " + S(tmp); return r; } }
   if (fs::exists(p)) { fs::path bak = p; bak += ".bak"; fs::copy_file(p, bak, fs::copy_options::overwrite_existing, ec); }
   fs::rename(tmp, p, ec);
   if (ec) { r.error = "rename failed: " + ec.message(); return r; }
@@ -86,13 +90,13 @@ SessionResult saveSession(Engine& e, const std::string& path) {
 
 SessionResult loadSession(Engine& e, const std::string& path) {
   SessionResult r;
-  std::ifstream f(path, std::ios::binary); if (!f) { r.error = "cannot open " + path; return r; }
+  std::ifstream f(P(path), std::ios::binary); if (!f) { r.error = "cannot open " + path; return r; }
   std::stringstream ss; ss << f.rdbuf();
   JVal root; if (!JVal::parse(ss.str(), root) || root.text("format") != "airdaw-session") { r.error = "not a valid AirDAW session"; return r; }
   if (root.num("version", 0) > 1) r.warnings.push_back("session is from a newer AirDAW; some settings may be ignored");
   if ((int)root.num("sampleRate", 0) != (int)e.sampleRate())
     r.warnings.push_back("session sample rate differs from the audio device; takes will play at the wrong speed until sample-rate conversion exists");
-  std::string baseDir = fs::path(path).parent_path().string();
+  std::string baseDir = S(P(path).parent_path());
   if (auto* t = root.get("transport")) {
     auto& tr = e.transport();
     tr.loopIn = (int64_t)t->num("loopIn", 0); tr.loopOut = (int64_t)t->num("loopOut", 0); tr.loopOn = t->flag("loopOn", false);
@@ -138,7 +142,7 @@ SessionResult loadSession(Engine& e, const std::string& path) {
     if (id < kMaxTracks) {
       std::vector<int> mapIdx;  // saved take index -> loaded index (a missing file shifts later ones)
       if (auto* tk = j.get("takes")) for (auto& q : tk->a) {
-        std::string p = q.text("path"); if (!fs::path(p).is_absolute()) p = (fs::path(baseDir) / p).string();
+        std::string p = q.text("path"); if (!P(p).is_absolute()) p = S(P(baseDir) / P(p));
         int idx = e.addTake(id, p, (int64_t)q.num("start", 0));
         if (idx < 0) r.warnings.push_back("missing take: " + p);
         mapIdx.push_back(idx);
@@ -159,7 +163,7 @@ void AutoSaver::setLocation(const std::string& dir, const std::string& base) { d
 std::string AutoSaver::saveNow() {
   if (dir_.empty()) return {};
   std::string text = sessionToJson(e_, dir_);
-  std::error_code ec; fs::create_directories(dir_, ec);
+  std::error_code ec; fs::create_directories(P(dir_), ec);
   char stamp[32]; std::time_t t = std::time(nullptr); std::tm tmv{};
 #ifdef _WIN32
   localtime_s(&tmv, &t);
@@ -167,14 +171,14 @@ std::string AutoSaver::saveNow() {
   localtime_r(&t, &tmv);
 #endif
   std::strftime(stamp, sizeof stamp, "%Y%m%d_%H%M%S", &tmv);
-  fs::path p = fs::path(dir_) / (base_ + "_autosave_" + stamp + ".airdaw");
-  for (int n = 2; fs::exists(p); ++n) p = fs::path(dir_) / (base_ + "_autosave_" + stamp + "_" + std::to_string(n) + ".airdaw");
+  fs::path p = P(dir_) / P(base_ + "_autosave_" + stamp + ".airdaw");
+  for (int n = 2; fs::exists(p); ++n) p = P(dir_) / P(base_ + "_autosave_" + stamp + "_" + std::to_string(n) + ".airdaw");
   fs::path tmp = p; tmp += ".tmp";
   { std::ofstream f(tmp, std::ios::binary | std::ios::trunc); f << text; f.flush(); if (!f) return {}; }
   fs::rename(tmp, p, ec); if (ec) return {};
   lastHash_ = std::hash<std::string>{}(text); haveHash_ = true;
   prune();
-  return p.string();
+  return S(p);
 }
 
 std::string AutoSaver::tick(double now) {
@@ -190,8 +194,8 @@ std::string AutoSaver::tick(double now) {
 
 static std::vector<fs::path> listAutosaves(const std::string& dir, const std::string& base) {
   std::vector<fs::path> v; std::error_code ec;
-  for (auto& d : fs::directory_iterator(dir, ec)) {
-    auto n = d.path().filename().string();
+  for (auto& d : fs::directory_iterator(P(dir), ec)) {
+    auto n = S(d.path().filename());
     if (n.rfind(base + "_autosave_", 0) == 0 && d.path().extension() == ".airdaw") v.push_back(d.path());
   }
   std::sort(v.begin(), v.end());  // timestamped names sort chronologically
@@ -202,6 +206,6 @@ void AutoSaver::prune() {
   while ((int)v.size() > s_.keep) { fs::remove(v.front(), ec); v.erase(v.begin()); }
 }
 std::string AutoSaver::latestAutosave(const std::string& dir, const std::string& base) {
-  auto v = listAutosaves(dir, base); return v.empty() ? std::string() : v.back().string();
+  auto v = listAutosaves(dir, base); return v.empty() ? std::string() : S(v.back());
 }
 }  // namespace airdaw

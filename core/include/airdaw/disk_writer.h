@@ -45,6 +45,7 @@ class DiskWriter {
 
   // UI thread
   std::vector<FinishedTake> pollFinished();
+  std::vector<std::string> pollErrors();  // e.g. a take file that could not be created
   uint64_t droppedFrames() const { return dropped_.load(); }
   void flushAndWait();  // blocks until everything queued so far is on disk (UI thread / tests)
 
@@ -66,7 +67,7 @@ class DiskWriter {
   std::vector<std::unique_ptr<Rec>> recs_;
   std::string dir_; std::vector<std::string> names_;
   std::atomic<uint64_t> dropped_{0};
-  std::mutex mu_; std::vector<FinishedTake> finished_;
+  std::mutex mu_; std::vector<FinishedTake> finished_; std::vector<std::string> errors_;
   std::atomic<bool> run_{true};
   std::thread th_;
 };

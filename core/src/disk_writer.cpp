@@ -33,17 +33,32 @@ void DiskWriter::push(int t, const float* l, const float* r, int n, int ch) {
   }
 }
 
+// Track name -> file name: spaces become '_', characters Windows forbids in file names become '_'.
+// Only the name is changed; the folder (which may contain spaces, e.g. "My Song 1") is used as is.
+static std::string fileSafe(std::string name) {
+  for (char& c : name)
+    if (c == ' ' || c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|' ||
+        (unsigned char)c < 32)
+      c = '_';
+  while (!name.empty() && (name.back() == '.' || name.back() == '_')) name.pop_back();
+  return name.empty() ? std::string("track") : name;
+}
+
 std::string DiskWriter::nextPath(int t) {
   std::string base;
-  { std::lock_guard<std::mutex> l(mu_); base = dir_ + "/" + names_[t]; }
-  for (char& c : base) if (c == ' ') c = '_';
+  { std::lock_guard<std::mutex> l(mu_); base = dir_ + "/" + fileSafe(names_[t]); }
   Rec& rc = *recs_[t];
   for (;;) {
     char suffix[32]; std::snprintf(suffix, sizeof suffix, "_take%03d.wav", ++rc.takeNo);
     std::string p = base + suffix;
-    if (std::FILE* f = std::fopen(p.c_str(), "rb")) { std::fclose(f); continue; }  // never overwrite
+    if (std::FILE* f = openFile(p, "rb")) { std::fclose(f); continue; }  // never overwrite
     return p;
   }
+}
+
+std::vector<std::string> DiskWriter::pollErrors() {
+  std::lock_guard<std::mutex> l(mu_);
+  auto out = std::move(errors_); errors_.clear(); return out;
 }
 
 void DiskWriter::sweep(int t, std::vector<float>& tmp) {
@@ -69,7 +84,9 @@ void DiskWriter::sweep(int t, std::vector<float>& tmp) {
       if (rc.pending.start >= 0) {
         rc.channels = rc.pending.channels; rc.start = rc.pending.start;
         rc.path = nextPath(t); rc.droppedTake = 0;
-        if (!rc.wav.open(rc.path, rc.channels, sr_)) std::fprintf(stderr, "AirDAW: cannot open %s\n", rc.path.c_str());
+        if (!rc.wav.open(rc.path, rc.channels, sr_)) {  // reported to the UI: this take is lost
+          std::lock_guard<std::mutex> l(mu_); errors_.push_back("cannot create " + rc.path);
+        }
       }
       rc.hasPending = false;
       continue;

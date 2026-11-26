@@ -8,6 +8,10 @@
 
 namespace airdaw {
 
+// fopen for UTF-8 paths. On Windows plain fopen reads paths in the ANSI code page, so names like
+// "Café" would fail; this uses the wide-character API there.
+std::FILE* openFile(const std::string& utf8Path, const char* mode);
+
 class WavWriter {
  public:
   ~WavWriter() { close(); }
