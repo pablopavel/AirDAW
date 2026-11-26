@@ -49,6 +49,30 @@ class NamePlate : public juce::Component {
   std::unique_ptr<juce::TextEditor> ed_;
 };
 
+// Draggable divider between two areas (mixer / meter dock, dock columns). The groove runs the whole length and can be
+// grabbed anywhere; it lights up while hovered or dragged. Drag updates are applied at most ~60 times a second
+// (always the newest position, and once more on release), so heavy layouts follow the mouse instead of lagging.
+class Divider : public juce::Component, public juce::SettableTooltipClient, private juce::Timer {
+ public:
+  explicit Divider(bool vertical) : vertical_(vertical) {
+    setMouseCursor(vertical ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::UpDownResizeCursor);
+    setRepaintsOnMouseActivity(true);
+  }
+  std::function<int()> current;          // the size being dragged, read when the drag starts
+  std::function<void(int)> onDrag;       // new size: start + horizontal distance, or start - vertical distance
+  std::function<void(bool)> onDragState; // true when a drag starts, false when it ends
+  void paint(juce::Graphics&) override;
+  void mouseDown(const juce::MouseEvent&) override;
+  void mouseDrag(const juce::MouseEvent&) override;
+  void mouseUp(const juce::MouseEvent&) override;
+  bool dragging() const { return dragging_; }
+ private:
+  void timerCallback() override;
+  void flush() { if (dirty_) { dirty_ = false; if (onDrag) onDrag(pending_); } }
+  bool vertical_, dragging_ = false, dirty_ = false;
+  int start_ = 0, pending_ = 0;
+};
+
 // Base for drag/wheel/double-click value controls. Value range [min,max], `def` on double-click.
 class DragControl : public juce::Component {
  public:

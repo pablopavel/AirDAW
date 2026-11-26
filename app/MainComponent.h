@@ -96,14 +96,7 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   ui::PluginsPanel pluginsPanel_{ctx_};
   void togglePluginsPanel();
   bool pluginsChecked_ = false;
-  struct Splitter : juce::Component, juce::SettableTooltipClient {
-    std::function<void(int)> onDrag; int start = 0; std::function<int()> current;
-    void paint(juce::Graphics&) override;
-    void mouseDown(const juce::MouseEvent&) override { start = current ? current() : 0; }
-    void mouseDrag(const juce::MouseEvent& e) override { if (onDrag) onDrag(start - e.getDistanceFromDragStartY()); }
-    void mouseEnter(const juce::MouseEvent&) override { repaint(); }
-    void mouseExit(const juce::MouseEvent&) override { repaint(); }
-  } splitter_;
+  ui::Divider splitter_{false};  // between the mixer and the meter dock
   std::unique_ptr<ui::SettingsWindow> settings_;
   std::unique_ptr<PluginWindow> pluginWindow_;
   std::unique_ptr<ui::PluginInfoWindow> pluginInfo_;

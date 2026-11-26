@@ -166,6 +166,37 @@ void PanSlider::paint(juce::Graphics& g) {
   g.fillEllipse(th);
 }
 
+// ---------------- Divider ----------------
+void Divider::paint(juce::Graphics& g) {
+  auto& t = T();
+  const bool hot = isMouseOverOrDragging() || dragging_;
+  auto b = getLocalBounds().toFloat();
+  // groove along the whole length
+  auto groove = vertical_ ? b.withSizeKeepingCentre(2.f, b.getHeight() - 8.f) : b.withSizeKeepingCentre(b.getWidth() - 8.f, 2.f);
+  if (hot) t.drawGlow(g, groove, t.am(), 8.f, 0.55f);
+  g.setColour(hot ? t.am().withAlpha(0.85f) : juce::Colour(0xff3c3c41)); g.fillRect(groove);  // visible at rest: grab anywhere
+  // grip in the middle
+  auto grip = vertical_ ? b.withSizeKeepingCentre(4.f, 46.f) : b.withSizeKeepingCentre(90.f, 5.f);
+  g.setColour(hot ? t.am() : juce::Colour(0xff5a5a60)); g.fillRoundedRectangle(grip, 2.f);
+}
+void Divider::mouseDown(const juce::MouseEvent&) {
+  start_ = current ? current() : 0; dragging_ = true; dirty_ = false;
+  if (onDragState) onDragState(true);
+  repaint();
+}
+void Divider::mouseDrag(const juce::MouseEvent& e) {
+  pending_ = start_ + (vertical_ ? e.getDistanceFromDragStartX() : -e.getDistanceFromDragStartY());
+  dirty_ = true;
+  if (!isTimerRunning()) { flush(); startTimerHz(60); }  // first move at once, then the screen rate
+}
+void Divider::mouseUp(const juce::MouseEvent&) {
+  stopTimer(); flush();
+  dragging_ = false;
+  if (onDragState) onDragState(false);
+  repaint();
+}
+void Divider::timerCallback() { if (dirty_) flush(); else stopTimer(); }
+
 // ---------------- FaderBlock ----------------
 static constexpr float kScaleW = 24.f, kFaderW = 34.f, kLadW = 22.f, kGap = 4.f, kReadH = 24.f;
 

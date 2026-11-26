@@ -102,7 +102,7 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   inserts_.setVisible(false);
   splitter_.current = [this] { return dockHeight_; };
   splitter_.onDrag = [this](int h) { dockHeight_ = juce::jlimit(150, 900, h); props_->setValue("dockHeight", dockHeight_); resized(); };
-  splitter_.setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+  splitter_.onDragState = [this](bool on) { dock_.setLiveResize(on); };
   splitter_.setTooltip("Drag to resize the meter section");
   display_.setVisible(false);
   pluginsPanel_.setVisible(false);
@@ -219,15 +219,6 @@ void MainComponent::showAudioSettings() {
 }
 
 // ---------------------------------------------------------------- layout & paint
-void MainComponent::Splitter::paint(juce::Graphics& g) {
-  auto r = getLocalBounds().toFloat().withSizeKeepingCentre(90.f, 5.f);
-  const bool over = isMouseOver();
-  if (over) T().drawGlow(g, r, T().am(), 12.f, 0.8f);
-  g.setGradientFill(juce::ColourGradient(over ? T().am() : juce::Colours::black, 0, r.getY(),
-                                         over ? T().am() : juce::Colour(0xff3a3a3c), 0, r.getBottom(), false));
-  g.fillRoundedRectangle(r, 3.f);
-}
-
 void MainComponent::paint(juce::Graphics& g) {
   auto& t = T();
   auto r = getLocalBounds();
@@ -1000,6 +991,28 @@ void MainComponent::runScenario(const juce::String& name) {
   e->track(0).route = 1; e->track(1).route = 2; e->track(0).trimDb = 6.f; e->track(3).pan = -0.4f; e->track(2).gainDb = -4.5f;
   e->track(1).mute = true; e->track(2).solo = true; e->track(0).armed = true; e->track(0).inputL = 0;
   if (name == "inserts") { inserts_.show(0, 0); inserts_.show(0, 1); }
+  if (name == "picker") {  // test hook: the plugin picker's list (opened like a click on it)
+    inserts_.show(0, 0);
+    juce::Component::SafePointer<MainComponent> sp(this);
+    juce::Timer::callAfterDelay(400, [sp] {
+      if (!sp) return;
+      std::function<juce::ComboBox*(juce::Component*)> find = [&](juce::Component* c) -> juce::ComboBox* {
+        if (auto* b = dynamic_cast<juce::ComboBox*>(c)) if (b->getTextWhenNothingSelected().startsWith("Choose Airwindows")) return b;
+        for (auto* k : c->getChildren()) if (auto* f = find(k)) return f;
+        return nullptr;
+      };
+      if (auto* box = find(&sp->inserts_)) {
+        juce::String out;  // the list's structure, for checking (a menu window cannot be pictured)
+        for (juce::PopupMenu::MenuItemIterator it(*box->getRootMenu()); it.next();) {
+          auto& item = it.getItem();
+          out << (item.isSectionHeader ? "# " : item.subMenu ? "> " : "  ") << item.text
+              << (item.subMenu ? " [" + juce::String(item.subMenu->getNumItems()) + " items]" : juce::String()) << "\n";
+        }
+        juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw-picker.txt").replaceWithText(out);
+        box->showPopup();
+      }
+    });
+  }
   if (name == "inserts-tape") { inserts_.show(4, 2); }
   if (name == "takes") {  // three loop passes on Kick, the second one starred, the third one playing
     auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw_snap_takes");
@@ -1161,11 +1174,13 @@ void MainComponent::runScenario(const juce::String& name) {
 void MainComponent::takeSnapshot(const juce::File& png, const juce::String& scenario) {
   juce::Timer::callAfterDelay(1500, [this, png, scenario] {
     runScenario(scenario);
-    juce::Timer::callAfterDelay(scenario == "export" || scenario == "plugins-install" || scenario == "plugins-check" ? 12000 : 1500, [this, png] {  // an export needs time to finish
+    juce::Timer::callAfterDelay(scenario == "export" || scenario == "plugins-install" || scenario == "plugins-check" ? 12000 : 1500, [this, png, scenario] {  // an export needs time to finish
       juce::Component* top = getTopLevelComponent();
       if (pluginInfo_ && pluginInfo_->isVisible()) top = pluginInfo_.get();  // "info" scenario: picture the About window
       if (midiWindow_ && midiWindow_->isVisible()) top = midiWindow_.get();
-      if (settings_ && settings_->isVisible()) top = settings_.get();  // "settings" scenario: the Audio window  // "midimap" scenario: the mappings window
+      if (settings_ && settings_->isVisible()) top = settings_.get();  // "settings" scenario: the Audio window
+      if (scenario == "picker")  // the newest desktop window: the open menu
+        if (auto* m = juce::Desktop::getInstance().getComponent(juce::Desktop::getInstance().getNumComponents() - 1); m && m != top) top = m;  // "midimap" scenario: the mappings window
       auto img = top->createComponentSnapshot(top->getLocalBounds(), true, 1.f);
       png.deleteFile();
       juce::FileOutputStream out(png);

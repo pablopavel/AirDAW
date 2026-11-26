@@ -309,13 +309,19 @@ class AddCard : public juce::Component {
       for (auto& f : favs) if (airdaw::effectExists(f.toStdString())) { box_.addItem(f, 10000 + names_.size()); names_.add(f); }
     }
     const int favCount = names_.size();
+    // Categories are collapsed: each one is a submenu that opens to its plugins (favourites stay on top, open).
+    if (!favs.isEmpty()) box_.addSectionHeading("Categories");
     std::string cat;
+    juce::PopupMenu sub; int inSub = 0;
+    auto flush = [&] { if (inSub > 0) box_.getRootMenu()->addSubMenu(juce::String(cat) + "  (" + juce::String(inSub) + ")", sub); sub = {}; inSub = 0; };
     for (int i = 0; i < (int)list.size(); ++i) {
-      if (list[(size_t)i].category != cat) { cat = list[(size_t)i].category; box_.addSectionHeading(cat); }
+      if (list[(size_t)i].category != cat) { flush(); cat = list[(size_t)i].category; }
       const juce::String nm(list[(size_t)i].name);
-      box_.addItem(pluginlib::newEffects().contains(nm) ? nm + juce::String(juce::CharPointer_UTF8("  \xe2\x80\x94 new")) : nm, favCount + i + 1);
+      sub.addItem(favCount + i + 1, pluginlib::newEffects().contains(nm) ? nm + juce::String(juce::CharPointer_UTF8("  \xe2\x80\x94 new")) : nm);
+      ++inSub;
       names_.add(list[(size_t)i].name);
     }
+    flush();
     box_.onChange = [this] {
       const int id = box_.getSelectedId(); if (id <= 0) return;
       const int i = id >= 10000 ? id - 10000 : id - 1;  // index into names_
@@ -473,7 +479,7 @@ void InsertPanel::resized() {
   auto r = getLocalBounds().reduced(10);
   auto hd = r.removeFromLeft(122);
   close1_.setBounds(hd.withTrimmedTop(62).removeFromTop(30).removeFromLeft(100));
-  close2_.setBounds(r.removeFromRight(96).removeFromTop(30));
+  close2_.setBounds(r.removeFromRight(96).withSizeKeepingCentre(96, 30));  // vertically centred on the panel
   r.removeFromRight(8);
   view_.setBounds(r);
   int x = 0, h = 120;

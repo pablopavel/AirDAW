@@ -92,7 +92,7 @@ Deck::Deck(AppCtx& ctx) : ctx_(ctx) {
   tap_.setTooltip("Tap tempo: tap in time (2 taps or more) to set the metronome tempo. Shows the current tempo.");
   tap_.onClick = [this] { ctx_.tapTempo(); };
   tap_.setButtonText("Tap 120.0");
-  for (auto* b : buttons_) addAndMakeVisible(*b);
+  for (auto* b : buttons_) { addAndMakeVisible(*b); b->getProperties().set("kind", "key"); b->getProperties().set("fontH", 11.0); }
   midi_.setTooltip("MIDI Learn: click a control, then move a knob, fader or pad on your controller. Right-click a control to unmap it.");
   midi_.onClick = [this] { if (onMidi) onMidi(); };
   plugins_.setTooltip("Airwindows plugin library: installed build, updates and roll back");
@@ -117,7 +117,7 @@ std::vector<std::pair<juce::String, juce::Rectangle<int>>> TransportKeys::midiRe
 
 void Deck::setMidiState(bool learning, bool armed) {
   midi_.setToggleState(learning, juce::dontSendNotification);
-  const juce::String t = armed ? juce::String(juce::CharPointer_UTF8("\xe2\x97\x8f Move a controller\xe2\x80\xa6")) : juce::String("MIDI Learn");
+  const juce::String t = armed ? juce::String(juce::CharPointer_UTF8("\xe2\x97\x8f Move a knob\xe2\x80\xa6")) : juce::String("MIDI Learn");
   if (midi_.getButtonText() != t) { midi_.setButtonText(t); resized(); }
 }
 
@@ -181,43 +181,16 @@ void Deck::paint(juce::Graphics& g) {
   g.drawText("Airwindows Preferred Recording", lg, juce::Justification::topLeft, false);
 }
 
-// Right-aligned rows of readouts and buttons (mockup .dr2: flex-wrap, justify flex-end); returns the height used.
-struct FlowItem { juce::Component* c; int w, h; };
-static int flow(const std::vector<FlowItem>& items, juce::Rectangle<int> area, bool place, int vgap = 8) {
-  const int gap = 8;
-  int y = area.getY(), total = 0;
-  std::vector<FlowItem> row; int rowW = 0;
-  auto flush = [&] {
-    int rowH = 0; for (auto& i : row) rowH = juce::jmax(rowH, i.h);
-    int x = area.getRight() - rowW;
-    for (auto& i : row) { if (place) i.c->setBounds(x, y + (rowH - i.h) / 2, i.w, i.h); x += i.w + gap; }
-    y += rowH + vgap; total += rowH + vgap; row.clear(); rowW = 0;
-  };
-  for (auto& i : items) {
-    const int need = (row.empty() ? 0 : gap) + i.w;
-    if (!row.empty() && rowW + need > area.getWidth()) flush();
-    rowW += (row.empty() ? 0 : gap) + i.w; row.push_back(i);
-  }
-  if (!row.empty()) flush();
-  return total - vgap;
-}
-
 static constexpr int kKeysW = TransportKeys::kNum * TransportKeys::kKeyW + (TransportKeys::kNum - 1) * TransportKeys::kGap + 60;
-
-static std::vector<FlowItem> deckItems(std::vector<juce::Component*> lcds, std::vector<juce::TextButton*>& buttons, bool narrow) {
-  std::vector<FlowItem> v;
-  const int lw[] = {108, 182, 64};
-  for (size_t i = 0; i < lcds.size(); ++i) v.push_back({lcds[i], lw[i], 40});
-  for (auto* b : buttons) v.push_back({b, b->getBestWidthForHeight(30) + (narrow ? 10 : 18), narrow ? 26 : 30});
-  return v;
-}
+// Right side of the deck: the readouts centred on top, below them the menu keys, all the same size and evenly spread
+// (one row of eight, or two rows of four when the window is narrow).
+static constexpr int kLcdH = 40, kMenuKeyH = 34, kMenuGap = 6, kMenuKeyMinW = 76;
+static int menuCols(int width, int n) { return width >= n * kMenuKeyMinW + (n - 1) * kMenuGap ? n : (n + 1) / 2; }
+static int rightWidth(int deckWidth) { return (deckWidth - 32 - kKeysW) / 2 - 12; }
 
 int Deck::preferredHeight(int width) const {
-  auto bs = buttons_;
-  const bool narrow = width < 1500;
-  auto items = deckItems({const_cast<Lcd*>(&rate_), const_cast<Lcd*>(&lat_), const_cast<Lcd*>(&dsp_)}, bs, narrow);
-  const int rightW = juce::jmax(300, (width - 32 - kKeysW) / 2);
-  return juce::jmax(100, 20 + flow(items, {0, 0, rightW, 1000}, false, narrow ? 5 : 8));
+  const int n = (int)buttons_.size(), cols = menuCols(rightWidth(width), n), rows = (n + cols - 1) / cols;
+  return juce::jmax(100, 20 + kLcdH + 8 + rows * kMenuKeyH + (rows - 1) * kMenuGap);
 }
 
 void Deck::resized() {
@@ -231,10 +204,17 @@ void Deck::resized() {
   if (left.getWidth() >= 420 && T().reels) { reels_.setVisible(true); reels_.setBounds(left.removeFromLeft(150).withSizeKeepingCentre(150, 70)); left.removeFromLeft(14); }
   else reels_.setVisible(false);  // narrow window: the reels make way for the position readout
   pos_.setBounds(left.withSizeKeepingCentre(juce::jmin(left.getWidth(), 300), 74));
-  // right: readouts and buttons flowing in right-aligned rows
-  auto right = r.withLeft(centre.getRight());
-  const bool narrow = getWidth() < 1500;
-  flow(deckItems({&rate_, &lat_, &dsp_}, buttons_, narrow), right, true, narrow ? 5 : 8);
+  // right: readouts centred, menu keys below
+  auto right = r.withLeft(centre.getRight() + 12);
+  auto lcds = right.removeFromTop(kLcdH);
+  const int lw[3] = {108, 182, 64}, lcdTotal = lw[0] + lw[1] + lw[2] + 2 * 8;
+  int x = lcds.getCentreX() - lcdTotal / 2, k = 0;
+  for (auto* l : {&rate_, &lat_, &dsp_}) { l->setBounds(x, lcds.getY(), lw[k], kLcdH); x += lw[k++] + 8; }
+  right.removeFromTop(8);
+  const int n = (int)buttons_.size(), cols = menuCols(right.getWidth(), n);
+  const int kw = (right.getWidth() - (cols - 1) * kMenuGap) / cols;
+  for (int i = 0; i < n; ++i)
+    buttons_[(size_t)i]->setBounds(right.getX() + (i % cols) * (kw + kMenuGap), right.getY() + (i / cols) * (kMenuKeyH + kMenuGap), kw, kMenuKeyH);
 }
 
 }  // namespace ui

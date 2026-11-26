@@ -64,6 +64,31 @@ void AirLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, co
     g.setColour(Theme::dim().withAlpha(over ? 0.9f : 0.5f)); g.fillPath(p);
     return;
   }
+  if (kind == "key") {  // deck menu keys: the transport keys' look at button size
+    auto& t = T();
+    const bool on = b.getToggleState(), pressed = on || down;
+    auto k = r.withTrimmedBottom(4.f);
+    const float kc = T().rad(4.f);
+    if (!pressed) { g.setColour(juce::Colour(0xff070708)); g.fillRoundedRectangle(k.translated(0, 2), kc);
+                    g.setColour(juce::Colours::black.withAlpha(0.7f)); g.fillRoundedRectangle(k.translated(0, 4), kc); }
+    else k = k.translated(0, 3);
+    if (on) {
+      t.drawGlow(g, k, t.am(), 14.f, 0.5f);
+      juce::ColourGradient cg(t.c(0xffffe3a3), 0, k.getY(), t.c(0xffe3952a), 0, k.getBottom(), false); cg.addColour(0.45, t.c(0xffffbe55));
+      g.setGradientFill(cg);
+    } else {
+      const bool hot = over && b.isEnabled();
+      juce::ColourGradient cg(juce::Colour(hot ? 0xff66666c : 0xff5c5c62), 0, k.getY(), juce::Colour(0xff252528), 0, k.getBottom(), false);
+      cg.addColour(0.14, juce::Colour(hot ? 0xff4a4a50 : 0xff404045)); cg.addColour(0.58, juce::Colour(0xff303034));
+      g.setGradientFill(cg);
+    }
+    g.fillRoundedRectangle(k, kc);
+    g.setColour(juce::Colour(on ? 0x1f000000 : 0x2a000000));
+    for (float y = k.getY() + 3.f; y < k.getBottom(); y += 4.f) g.fillRect(k.getX() + 1.f, y, k.getWidth() - 2.f, 1.f);
+    g.setColour(juce::Colour(on ? 0xccffffff : 0x6effffff)); g.drawHorizontalLine((int)k.getY() + 1, k.getX() + 3, k.getRight() - 3);
+    g.setColour(juce::Colours::black); g.drawRoundedRectangle(k, kc, 1.f);
+    return;
+  }
   if (down) r = r.translated(0.f, 1.f);
   const bool on = b.getToggleState();
   if (on) {
@@ -98,7 +123,10 @@ void AirLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& b, bool
   auto text = b.getButtonText();
   if (!b.getProperties()["noUpper"]) text = text.toUpperCase();
   auto r = b.getLocalBounds().reduced(4, 1);
-  if (down) r = r.translated(0, 1);
+  if (b.getProperties()["kind"].toString() == "key") {  // follows the key face (see drawButtonBackground)
+    r = r.withTrimmedBottom(4);
+    if (down || b.getToggleState()) r = r.translated(0, 3);
+  } else if (down) r = r.translated(0, 1);
   g.setColour(col);
   g.drawFittedText(text, r, juce::Justification::centred, 3, 0.7f);
 }

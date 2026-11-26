@@ -5,7 +5,13 @@ namespace ui {
 static juce::String mmss(double sec) { const int s = (int)sec; return juce::String::formatted("%02d:%02d", s / 60, s % 60); }
 
 TakesBar::TakesBar(AppCtx& ctx) : ctx_(ctx) {
-  for (juce::Component* c : std::initializer_list<juce::Component*>{&region_, &loop_, &keep_, &del_, &clear_, &view_}) addAndMakeVisible(c);
+  for (juce::Component* c : std::initializer_list<juce::Component*>{&region_, &loop_, &keep_, &del_, &clear_, &view_, &closeL_, &closeR_}) addAndMakeVisible(c);
+  for (auto* b : {&closeL_, &closeR_}) {  // close on both ends (like the insert panel)
+    b->setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x9c\x95")));
+    b->getProperties().set("noUpper", true); b->getProperties().set("fontH", 12.0);
+    b->setTooltip("Close the takes bar (the loop region and takes stay; it comes back for a new region or a T button)");
+    b->onClick = [this] { ctx_.viewTrack = -1; closedFor_ = placeKey(); if (ctx_.layoutChanged) ctx_.layoutChanged(); };
+  }
   view_.setViewedComponent(&row_, false);
   view_.setScrollBarsShown(false, true, false, true);
   view_.setScrollBarThickness(6);
@@ -44,8 +50,14 @@ int TakesBar::track() const {
   return -1;
 }
 
+juce::String TakesBar::placeKey() const {
+  auto* e = ctx_.engine(); if (!e) return {};
+  return juce::String(e->transport().loopIn.load()) + "|" + juce::String(e->transport().loopOut.load()) + "|" + juce::String(ctx_.viewTrack);
+}
+
 bool TakesBar::wanted() const {
   auto* e = ctx_.engine(); if (!e) return false;
+  if (closedFor_.isNotEmpty() && closedFor_ == placeKey()) return false;
   return ctx_.viewTrack >= 0 || e->transport().loopOut.load() > e->transport().loopIn.load();
 }
 
@@ -226,7 +238,7 @@ void TakesBar::paint(juce::Graphics& g) {
   g.setColour(juce::Colours::black); g.fillRect(r.removeFromBottom(2.f));
   auto in = getLocalBounds().reduced(16, 0);
   g.setColour(Theme::cream()); g.setFont(Theme::spaced(Theme::uiFont(13.f, true), 0.16f));
-  g.drawText("LOOP", in.removeFromLeft(56), juce::Justification::centredLeft);
+  g.drawText("LOOP", in.withLeft(labelX_).removeFromLeft(56), juce::Justification::centredLeft);
   g.setColour(Theme::dim()); g.setFont(Theme::spaced(Theme::uiFont(10.5f), 0.14f));
   g.drawText(title_, titleArea_, juce::Justification::centredLeft, true);
   if (hint_.isNotEmpty() && chips_.empty()) {
@@ -236,7 +248,10 @@ void TakesBar::paint(juce::Graphics& g) {
 }
 
 void TakesBar::resized() {
-  auto r = getLocalBounds().reduced(16, 8);
+  auto r = getLocalBounds().reduced(10, 8);
+  closeL_.setBounds(r.removeFromLeft(30).withSizeKeepingCentre(30, 26)); r.removeFromLeft(8);
+  closeR_.setBounds(r.removeFromRight(30).withSizeKeepingCentre(30, 26)); r.removeFromRight(10);
+  labelX_ = r.getX();
   r.removeFromLeft(60);
   if (region_.isVisible()) { region_.setBounds(r.removeFromLeft(120)); r.removeFromLeft(8); loop_.setBounds(r.removeFromLeft(90).reduced(0, 2)); r.removeFromLeft(12); }
   for (auto* b : {&clear_, &del_, &keep_, &clearComp_, &outside_}) if (b->isVisible()) { b->setBounds(r.removeFromRight(b->getBestWidthForHeight(28) + 20).reduced(0, 2)); r.removeFromRight(8); }

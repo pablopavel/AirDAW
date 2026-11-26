@@ -15,7 +15,7 @@ namespace ui {
 class TakesBar : public juce::Component {
  public:
   explicit TakesBar(AppCtx& ctx);
-  bool wanted() const;  // should the bar be visible?
+  bool wanted() const;  // should the bar be visible? (not after a close, until the region or the viewed track changes)
   void sync();          // ~10x/s
   void paint(juce::Graphics&) override;
   void resized() override;
@@ -41,13 +41,16 @@ class TakesBar : public juce::Component {
   void pick(int t, int idx, int how);  // how: 0 = automatic, 1 = whole track, 2 = this region only
   AppCtx& ctx_;
   Lcd region_{"Region", 14.f};
-  juce::TextButton loop_, keep_, del_{"Delete unkept"}, clear_{"Clear loop"}, outside_, clearComp_{"Clear comp"};
+  juce::TextButton closeL_, closeR_, loop_, keep_, del_{"Delete unkept"}, clear_{"Clear loop"}, outside_, clearComp_{"Clear comp"};
   juce::Slider xfade_{juce::Slider::LinearBar, juce::Slider::TextBoxLeft};
   juce::Viewport view_;
   juce::Component row_;
   std::vector<std::unique_ptr<Chip>> chips_;
   juce::String key_, title_, hint_;
+  juce::String closedFor_;  // region / track the bar was closed for
+  juce::String placeKey() const;
   juce::Rectangle<int> titleArea_;
+  int labelX_ = 16;
 };
 
 }  // namespace ui

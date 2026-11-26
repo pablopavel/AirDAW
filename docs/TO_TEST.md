@@ -5,7 +5,15 @@ When something works, it is removed from this list; when it doesn't, it gets a n
 
 Last updated: 2026-11-26
 
-## Comping (new)
+## Layout and menus (new)
+- [ ] Insert slot > "Choose Airwindows plugin...": the list shows categories (with counts); each opens to its plugins; favourites stay on top.
+- [ ] Dragging the divider between mixer and meters, and between meter / tool columns: follows the mouse smoothly; can be grabbed anywhere along its line (it lights up).
+- [ ] The Hit Record Meter's display catches up to its final size when you let go.
+- [ ] Deck: readouts centred, the eight menu keys the same size; keys press down, Listen / Meters / Display / MIDI Learn stay lit when on.
+- [ ] Takes bar: the ✕ at either end closes it (loop and takes stay); it comes back for a new loop region or a T button.
+- [ ] Insert panel: the right ✕ Close sits in the middle of the panel's right edge.
+
+## Comping
 - [ ] Record a full take on a track, then loop a region and record passes: each pass plays only in that region, the rest of the song keeps the full take.
 - [ ] In the takes bar, click a pass to hear it in the region; click the track's own take (listed first, by time) to hand the region back.
 - [ ] Comp two different regions with different passes; both picks play.

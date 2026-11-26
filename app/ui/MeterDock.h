@@ -9,24 +9,7 @@
 namespace ui {
 
 // Vertical divider between dock columns; drag to resize the column on its left.
-class ColumnSplitter : public juce::Component {
- public:
-  std::function<int()> currentWidth;
-  std::function<void(int)> setWidth;
-  ColumnSplitter() { setMouseCursor(juce::MouseCursor::LeftRightResizeCursor); }
-  void paint(juce::Graphics& g) override {
-    auto r = getLocalBounds().toFloat().withSizeKeepingCentre(4.f, 46.f);
-    const bool over = isMouseOverOrDragging();
-    if (over) T().drawGlow(g, r, T().am(), 10.f, 0.8f);
-    g.setColour(over ? T().am() : juce::Colour(0xff2a2a2c)); g.fillRoundedRectangle(r, 2.f);
-  }
-  void mouseEnter(const juce::MouseEvent&) override { repaint(); }
-  void mouseExit(const juce::MouseEvent&) override { repaint(); }
-  void mouseDown(const juce::MouseEvent&) override { start_ = currentWidth ? currentWidth() : 0; }
-  void mouseDrag(const juce::MouseEvent& e) override { if (setWidth) setWidth(start_ + e.getDistanceFromDragStartX()); }
- private:
-  int start_ = 0;
-};
+struct ColumnSplitter : Divider { ColumnSplitter() : Divider(true) {} };  // a vertical divider (Widgets.h)
 
 // The reference-suite part of the dock: chosen tools in order; tools can be dropped in from Listen mode.
 class SuiteArea : public juce::Component, public juce::DragAndDropTarget {
@@ -45,8 +28,8 @@ class SuiteArea : public juce::Component, public juce::DragAndDropTarget {
     for (size_t i = 0; i + 1 < tools_.suite().size(); ++i) {
       auto sp = std::make_unique<ColumnSplitter>();
       const juce::String id = tools_.suite()[i];
-      sp->currentWidth = [this, id] { return tools_.card(id).getWidth(); };
-      sp->setWidth = [this, id](int w) { tools_.setWidth(id, juce::jlimit(160, 2600, w)); resized(); };
+      sp->current = [this, id] { return tools_.card(id).getWidth(); };
+      sp->onDrag = [this, id](int w) { tools_.setWidth(id, juce::jlimit(160, 2600, w)); resized(); };
       addAndMakeVisible(*sp); splitters_.push_back(std::move(sp));
     }
     resized(); repaint();
@@ -135,9 +118,10 @@ class MeterDock : public juce::Component {
     toolsBtn_.setButtonText(juce::String(juce::CharPointer_UTF8("\xef\xbc\x8b Tools")));
     toolsBtn_.setTooltip("Choose the reference tools shown here (all tools are in Listen mode)");
     toolsBtn_.onClick = [this] { toolsMenu(); };
-    meterSplit_.currentWidth = [this] { return meterW_; };
+    meterSplit_.current = [this] { return meterW_; };
     // The meter may be dragged all the way across; the suite tools fold away as it grows.
-    meterSplit_.setWidth = [this](int w) { meterW_ = juce::jlimit(260, juce::jmax(260, bodyWidth() - 14), w); ctx_.props.setValue("dock.meterWidth", meterW_); resized(); };
+    meterSplit_.onDragState = [this](bool on) { setLiveResize(on); };
+    meterSplit_.onDrag = [this](int w) { meterW_ = juce::jlimit(260, juce::jmax(260, bodyWidth() - 14), w); ctx_.props.setValue("dock.meterWidth", meterW_); resized(); };
     meterW_ = ctx_.props.getIntValue("dock.meterWidth", 440);
     for (juce::Component* c : std::initializer_list<juce::Component*>{&load_, &toolsBtn_, &meterSplit_, &suite_}) addAndMakeVisible(c);
     // Monitor section (mockup .mon): Mono / Dim / Pol are switches; L / R / Mid / Side choose one, click again for stereo.
@@ -177,6 +161,8 @@ class MeterDock : public juce::Component {
   void setMeterWidth(int w) { meterW_ = juce::jmax(260, w); resized(); }  // (test hook; users drag the divider)
 
   // Shows this plugin's editor (or the "load" prompt when null). Keeps the plugin alive while its editor exists.
+  // A divider is being dragged (true) or was released (false): see resized().
+  void setLiveResize(bool on) { live_ = on; if (!on) { lastEditorResize_ = 0; resized(); } }
   void setPlugin(std::shared_ptr<juce::AudioPluginInstance> p) {
     if (p == plugin_) return;
     editor_.reset();      // the editor must go before the plugin reference is released
@@ -233,7 +219,12 @@ class MeterDock : public juce::Component {
     auto m = body.removeFromLeft(juce::jmin(meterW_, body.getWidth() - 14));
     meterSplit_.setBounds(body.removeFromLeft(14));
     suite_.setBounds(body);
-    if (editor_) {
+    // While a divider is dragged, the plugin's own window (slow to resize) follows only every ~120 ms; the final size is
+    // applied when the drag ends (setLiveResize(false)).
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    const bool skipEditor = live_ && now - lastEditorResize_ < 120.0;
+    if (editor_ && !skipEditor) {
+      lastEditorResize_ = now;
       if (editor_->isResizable()) editor_->setBounds(m);
       else editor_->setTopLeftPosition(m.getX() + juce::jmax(0, (m.getWidth() - editor_->getWidth()) / 2), m.getY());
     }
@@ -260,6 +251,8 @@ class MeterDock : public juce::Component {
   ToolSet& tools_;
   std::shared_ptr<juce::AudioPluginInstance> plugin_;
   std::unique_ptr<juce::AudioProcessorEditor> editor_;
+  bool live_ = false;
+  double lastEditorResize_ = 0;
   juce::TextButton load_, toolsBtn_;
   std::array<juce::TextButton, 7> mon_;
   ColumnSplitter meterSplit_;
