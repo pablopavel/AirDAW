@@ -40,6 +40,13 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   void showProjectMenu();
   void newSession();
   void openSession();
+  void openSessionFile(const juce::File& f);
+ public:
+  // A project opened from Explorer (double-click / "Open with"): loaded once the audio engine is up.
+  void openOnStart(const juce::File& f) { pendingOpen_ = f; }
+  void openFromOtherInstance(const juce::File& f) { if (autoEngine_) openSessionFile(f); else pendingOpen_ = f; }
+ private:
+  juce::File pendingOpen_;
   void saveSession(bool saveAs);
   void saveProjectAs(const juce::File& chosen);
   void setSessionFile(const juce::File& f);

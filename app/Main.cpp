@@ -1,13 +1,34 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "MainComponent.h"
 
-// Command line (test hook, not needed in normal use):
-//   --snapshot <file.png> [--scenario <name>] [--size <W>x<H>]   set up a UI state, save a picture of the window, quit.
+// Command line:
+//   AirDAW.exe <project.airdaw>   open that project (what Explorer passes on double-click / "Open with").
+//   --snapshot <file.png> [--scenario <name>] [--size <W>x<H>]   test hook: set up a UI state, save a picture, quit.
+
+// The first argument that names an existing .airdaw file (Explorer quotes paths with spaces).
+static juce::File projectArg(const juce::String& commandLine) {
+  juce::StringArray a; a.addTokens(commandLine, true);
+  for (auto t : a) {
+    t = t.trim().unquoted();
+    const juce::File f = juce::File::isAbsolutePath(t) ? juce::File(t) : juce::File::getCurrentWorkingDirectory().getChildFile(t);
+    if (f.hasFileExtension("airdaw") && f.existsAsFile()) return f;
+  }
+  return {};
+}
+
 class AirDawApp : public juce::JUCEApplication {
  public:
   const juce::String getApplicationName() override { return "AirDAW"; }
   const juce::String getApplicationVersion() override { return "0.1.0"; }
-  bool moreThanOneInstanceAllowed() override { return true; }
+  // One AirDAW at a time (two would fight over the ASIO driver): opening another project from Explorer hands it to the
+  // running window. Snapshot test runs are separate instances.
+  bool moreThanOneInstanceAllowed() override { return getCommandLineParameters().contains("--snapshot"); }
+  void anotherInstanceStarted(const juce::String& commandLine) override {
+    if (!window_) return;
+    window_->toFront(true);
+    const auto f = projectArg(commandLine);
+    if (f != juce::File()) window_->content->openFromOtherInstance(f);
+  }
   void initialise(const juce::String&) override {
     const auto args = getCommandLineParameterArray();
     auto arg = [&](const char* key) { const int i = args.indexOf(key); return i >= 0 && i + 1 < args.size() ? args[i + 1] : juce::String(); };
@@ -15,6 +36,7 @@ class AirDawApp : public juce::JUCEApplication {
     window_ = std::make_unique<Window>(snap.isNotEmpty());
     if (size.containsChar('x')) window_->setSize(size.upToFirstOccurrenceOf("x", false, false).getIntValue(),
                                                  size.fromFirstOccurrenceOf("x", false, false).getIntValue());
+    if (const auto f = projectArg(getCommandLineParameters()); f != juce::File()) window_->content->openOnStart(f);
     if (snap.isNotEmpty()) window_->content->takeSnapshot(juce::File(snap), arg("--scenario"));
   }
   void shutdown() override { window_.reset(); }

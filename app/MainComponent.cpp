@@ -481,15 +481,17 @@ void MainComponent::saveProjectAs(const juce::File& chosen) {
 void MainComponent::openSession() {
   chooser_ = std::make_shared<juce::FileChooser>("Open project", sessionFile_ == juce::File() ? projectsRoot() : sessionFolder().getParentDirectory(), "*.airdaw");
   chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-      [this](const juce::FileChooser& c) {
-        auto f = c.getResult(); auto* e = bridge_.engine(); if (f == juce::File() || !e) return;
-        auto r = airdaw::loadSession(*e, f.getFullPathName().toStdString());
-        if (!r.ok) { note("OPEN FAILED: " + r.error); return; }
-        inserts_.close(); ctx_.viewTrack = -1; resetMeters();
-        setSessionFile(f);
-        note(r.warnings.empty() ? "Opened " + f.getFileName() : "Opened with " + juce::String((int)r.warnings.size()) + " warning(s): " + r.warnings[0],
-             !r.warnings.empty());
-      });
+      [this](const juce::FileChooser& c) { auto f = c.getResult(); if (f != juce::File()) openSessionFile(f); });
+}
+
+void MainComponent::openSessionFile(const juce::File& f) {
+  auto* e = bridge_.engine(); if (!e) return;
+  auto r = airdaw::loadSession(*e, f.getFullPathName().toStdString());
+  if (!r.ok) { note("OPEN FAILED: " + r.error); return; }
+  inserts_.close(); ctx_.viewTrack = -1; resetMeters();
+  setSessionFile(f);
+  note(r.warnings.empty() ? "Opened " + f.getFileName() : "Opened with " + juce::String((int)r.warnings.size()) + " warning(s): " + r.warnings[0],
+       !r.warnings.empty());
 }
 
 void MainComponent::checkRecovery() {
@@ -656,6 +658,7 @@ void MainComponent::timerCallback() {
     if (!snapshotMode_) { const juce::File rf(props_->getValue("reference.path")); if (rf.existsAsFile()) decodeReference(rf, true); }
     setSessionFile(sessionFile_);
     applyAutoSaveSettings();
+    if (pendingOpen_ != juce::File()) { const auto f = pendingOpen_; pendingOpen_ = juce::File(); openSessionFile(f); }
     if (!snapshotMode_ && !recoveryChecked_) { recoveryChecked_ = true; checkRecovery(); }
     // Bring the Hit Record Meter back if it was set up before and the session has none.
     const juce::File mp(props_->getValue("meterPath"));
@@ -805,6 +808,8 @@ void MainComponent::decodeReference(const juce::File& f, bool quiet) {
 // ---------------------------------------------------------------- snapshots (test hook)
 void MainComponent::runScenario(const juce::String& name) {
   auto* e = bridge_.engine(); if (!e) return;
+  if (name == "asis") return;  // test hook: picture the window exactly as it opened (e.g. a project from the command line)
+  if (name == "open") { openSessionFile(juce::File(juce::SystemStats::getEnvironmentVariable("AIRDAW_OPEN", {}))); return; }  // test hook
   const char* names[] = {"Kick", "Snare", "OH L", "OH R", "Bass DI", "Gtr L", "Gtr R", "Keys"};
   for (int t = 0; t < 8; ++t) e->track(t).name = names[t];
   for (int t : {2, 3, 5, 6}) e->track(t).stereo = true;
