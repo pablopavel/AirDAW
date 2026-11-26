@@ -1,0 +1,233 @@
+// Headless engine tests + real-time load benchmark. No audio hardware needed.
+#include <algorithm>
+#include <chrono>
+#include <thread>
+#include <cmath>
+#include <cstdio>
+#include <string>
+#include <vector>
+#include <cstdlib>
+#include <unistd.h>
+#include "airdaw/engine.h"
+#include "airdaw/session.h"
+#include <filesystem>
+#include <fstream>
+
+using namespace airdaw;
+static int failures = 0;
+#define CHECK(c, ...) do { if (!(c)) { ++failures; std::printf("FAIL %s:%d  ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
+
+static const double SR = 96000.0;
+static const int N = 64;
+
+struct Rig {
+  Engine e{SR};
+  std::vector<std::vector<float>> in, out;
+  Rig() : in(8, std::vector<float>(N)), out(2, std::vector<float>(N)) {}
+  void sine(int ch, float amp, int offset = 0) {
+    for (int i = 0; i < N; ++i) in[ch][i] = amp * std::sin(2 * M_PI * 1000.0 * (offset + i) / SR);
+  }
+  // run `blocks` blocks of sine on input 0 and return last block peak L,R
+  void run(int blocks, float amp, float& pl, float& pr) {
+    const float* ip[8]; float* op[2] = {out[0].data(), out[1].data()};
+    for (int c = 0; c < 8; ++c) ip[c] = in[c].data();
+    for (int b = 0; b < blocks; ++b) { sine(0, amp, b * N); e.process(ip, 8, op, 2, N); }
+    pl = pr = 0;
+    for (int i = 0; i < N; ++i) { pl = std::max(pl, std::fabs(out[0][i])); pr = std::max(pr, std::fabs(out[1][i])); }
+  }
+};
+
+// ---- recording helpers ----
+static float sigAt(long k) { return 0.5f * std::sin(2 * M_PI * 1000.0 * k / SR); }
+// Feeds sigAt(k) on input 0 for `frames` frames in odd-sized blocks; returns left output.
+static std::vector<float> stream(Engine& e, long& k, int frames, int blk = 100) {
+  std::vector<float> outL; std::vector<float> in(blk), l(blk), r(blk);
+  for (int done = 0; done < frames; done += blk) {
+    int n = std::min(blk, frames - done);
+    for (int i = 0; i < n; ++i) in[i] = sigAt(k + i);
+    const float* ip[1] = {in.data()}; float* op[2] = {l.data(), r.data()};
+    e.process(ip, 1, op, 2, n); k += n;
+    outL.insert(outL.end(), l.begin(), l.begin() + n);
+  }
+  return outL;
+}
+static std::string tmpDir() { char t[] = "/tmp/airdawXXXXXX"; return mkdtemp(t); }
+static float db(float x) { return 20 * std::log10(std::max(x, 1e-9f)); }
+
+int main() {
+  // 1. Registry
+  auto fx = listEffects();
+  std::printf("Airwindows effects in registry: %zu\n", fx.size());
+  CHECK(fx.size() > 400, "registry too small");
+  CHECK(effectExists("ToTape8") && effectExists("Console7Channel") && effectExists("Monitoring3"), "key plugins missing");
+  { auto t = FxInstance::create("ToTape8", SR);
+    CHECK(t && t->numParams() > 4, "ToTape8 should expose more than 4 knobs");
+    if (t) { std::printf("ToTape8 params (%d):", t->numParams()); for (auto& p : t->params()) std::printf(" %s", p.name.c_str()); std::printf("\n"); } }
+
+  // 2. Unity: mono track at centre pan -> -3 dB each side
+  { Rig r; auto& t = r.e.track(0); t.inputL = 0; t.stereo = false; t.pan = 0.f;
+    float pl, pr; r.run(30, 0.5f, pl, pr);
+    CHECK(std::fabs(db(pl) - (db(0.5f) - 3.01f)) < 0.1f, "centre pan law L=%f", db(pl));
+    CHECK(std::fabs(pl - pr) < 1e-5f, "centre symmetric"); }
+  // 3. Hard pan
+  { Rig r; auto& t = r.e.track(0); t.inputL = 0; t.pan = -1.f;
+    float pl, pr; r.run(30, 0.5f, pl, pr);
+    CHECK(pl > 0.49f && pr < 1e-4f, "hard left L=%f R=%f", pl, pr); }
+  // 4. Fader -6 dB
+  { Rig r; auto& t = r.e.track(0); t.inputL = 0; t.pan = -1.f; t.gainDb = -6.f;
+    float pl, pr; r.run(30, 0.5f, pl, pr);
+    CHECK(std::fabs(db(pl) - db(0.25f)) < 0.2f, "fader -6 got %f", db(pl)); }
+  // 5. Mute & solo
+  { Rig r; r.e.track(0).inputL = 0; r.e.track(0).mute = true; float pl, pr; r.run(30, 0.5f, pl, pr);
+    CHECK(pl < 1e-6f, "mute"); }
+  { Rig r; r.e.track(0).inputL = 0; r.e.track(1).inputL = 0; r.e.track(1).solo = true; r.e.track(0).pan = -1; r.e.track(1).pan = 1;
+    float pl, pr; r.run(30, 0.5f, pl, pr);
+    CHECK(pl < 1e-5f && pr > 0.49f, "solo isolates track 2 (L=%f R=%f)", pl, pr); }
+  // 6. Bus routing: track -> bus1 with bus fader -6, master unity
+  { Rig r; auto& t = r.e.track(0); t.inputL = 0; t.pan = -1; t.route = 1; r.e.bus(0).gainDb = -6.f;
+    float pl, pr; r.run(30, 0.5f, pl, pr);
+    CHECK(std::fabs(db(pl) - db(0.25f)) < 0.2f, "bus -6 got %f", db(pl));
+    CHECK(r.e.bus(0).meter.peakL > 0.2f, "bus meter"); }
+  // 7. Hot-insert Airwindows plugins while running; output must stay finite
+  { Rig r; auto& t = r.e.track(0); t.inputL = 0;
+    bool a = r.e.setInsert(0, 0, "Console7Channel"), b = r.e.setInsert(0, 1, "ToTape8"), c = r.e.setInsert(200, 0, "Console7Buss");
+    CHECK(a && b && c, "insert create");
+    CHECK(!r.e.setInsert(0, 2, "NotARealPlugin"), "unknown plugin rejected");
+    float pl, pr; r.run(200, 0.5f, pl, pr);
+    CHECK(std::isfinite(pl) && std::isfinite(pr) && pl > 0.05f, "chain output L=%f", pl);
+    // swap + remove while running, then collect garbage
+    CHECK(r.e.setInsert(0, 0, "Density2"), "swap");
+    r.run(5, 0.5f, pl, pr);
+    CHECK(r.e.setInsert(0, 1, ""), "remove");
+    r.run(5, 0.5f, pl, pr);
+    r.e.collectGarbage();
+    CHECK(std::isfinite(pl), "after swap"); }
+  // 8. Parameter change is applied
+  { Rig r; r.e.track(0).inputL = 0; r.e.setInsert(0, 0, "ToTape8");
+    float pl, pr; r.run(100, 0.5f, pl, pr); float before = pl;
+    auto* fxp = r.e.insertAt(0, 0); fxp->setParam(0, 1.0f); fxp->setBypass(false);
+    r.run(100, 0.5f, pl, pr);
+    CHECK(std::fabs(pl - before) > 1e-4f, "param change had no effect"); }
+
+
+  // 11. Recording: plain take, bit-exact
+  { Engine e(SR); auto dir = tmpDir(); e.track(0).inputL = 0; e.track(0).armed = true; e.track(0).name = "Kick";
+    long k = 0; e.startRecording(dir); stream(e, k, 20000); e.stopRecording(); stream(e, k, 200); e.flushRecording();
+    auto f = e.pollFinishedTakes();
+    CHECK(f.size() == 1, "expected 1 take, got %zu", f.size());
+    if (f.size() == 1) {
+      WavData w; CHECK(readWav(f[0].path, w), "read wav"); CHECK(w.channels == 1 && w.sampleRate == 96000, "wav format");
+      CHECK(w.left.size() == 20000 && f[0].start == 0, "len=%zu start=%lld", w.left.size(), (long long)f[0].start);
+      bool exact = w.left.size() == 20000; for (size_t i = 0; exact && i < w.left.size(); ++i) exact = w.left[i] == sigAt((long)i);
+      CHECK(exact, "recorded audio is not bit-exact");
+      std::printf("record: %s (%zu frames, 32-bit float, bit-exact)\n", f[0].path.c_str(), w.left.size()); } }
+  // 12. Punch in/out lands on exact samples
+  { Engine e(SR); auto dir = tmpDir(); e.track(0).inputL = 0; e.track(0).armed = true;
+    auto& t = e.transport(); t.punchOn = true; t.punchIn = 1000; t.punchOut = 3000;
+    long k = 0; e.startRecording(dir); stream(e, k, 5000); e.stopRecording(); stream(e, k, 100); e.flushRecording();
+    auto f = e.pollFinishedTakes(); CHECK(f.size() == 1, "punch: takes=%zu", f.size());
+    if (f.size() == 1) { WavData w; readWav(f[0].path, w);
+      CHECK(f[0].start == 1000 && w.left.size() == 2000, "punch start=%lld len=%zu", (long long)f[0].start, w.left.size());
+      bool ex = w.left.size() == 2000; for (size_t i = 0; ex && i < 2000; ++i) ex = w.left[i] == sigAt(1000 + (long)i);
+      CHECK(ex, "punch content"); } }
+  // 13. Loop recording: each pass is a separate take; pick one and play it back in the loop
+  { Engine e(SR); auto dir = tmpDir(); auto& tk = e.track(0); tk.inputL = 0; tk.armed = true; tk.pan = -1.f;
+    auto& t = e.transport(); t.loopOn = true; t.loopIn = 1000; t.loopOut = 3000; t.seek(1000);
+    long k = 0; stream(e, k, 0);  // apply seek
+    e.startRecording(dir); stream(e, k, 6000); e.stopRecording(); stream(e, k, 100); e.flushRecording();
+    auto f = e.pollFinishedTakes(); CHECK(f.size() == 3, "loop takes=%zu", f.size());
+    std::sort(f.begin(), f.end(), [](auto& a, auto& b) { return a.path < b.path; });
+    bool ok = f.size() == 3;
+    for (size_t j = 0; ok && j < 3; ++j) { WavData w; readWav(f[j].path, w); ok = w.left.size() == 2000 && f[j].start == 1000;
+      for (size_t i = 0; ok && i < 2000; ++i) ok = w.left[i] == sigAt((long)(j * 2000 + i)); }
+    CHECK(ok, "loop takes content/start");
+    if (f.size() == 3) {
+      for (auto& x : f) e.addTake(0, x.path, x.start);
+      e.setActiveTake(0, 1);                // second pass
+      tk.armed = false; t.punchOn = false; t.seek(1000);
+      long k2 = 0; auto out = stream(e, k2, 5000);
+      bool pb = true; for (size_t i = 0; pb && i < out.size(); ++i) pb = std::fabs(out[i] - sigAt(2000 + (long)(i % 2000))) < 1e-6f;
+      CHECK(pb, "take playback through loop"); std::printf("loop record: 3 takes, pass 2 plays back sample-exact across loop wraps\n"); } }
+
+  // 14. Session save/load round trip, including plugin parameters, takes, loop/punch
+  { auto dir = tmpDir(); std::string sess = dir + "/song.airdaw";
+    Engine a(SR); a.track(2).name = "Snare"; a.track(2).gainDb = -4.5f; a.track(2).pan = 0.25f; a.track(2).stereo = true; a.track(2).route = 2; a.track(2).mute = true;
+    a.track(2).inputL = 3; a.track(2).inputR = 4; a.bus(1).gainDb = -2.f; a.master().gainDb = -0.5f;
+    a.setInsert(2, 0, "ToTape8"); a.setInsert(2, 1, "Density2"); a.setInsert(200, 0, "Console7Buss");
+    a.insertAt(2, 0)->setParam(3, 0.321f); a.insertAt(2, 1)->setBypass(true);
+    a.transport().loopOn = true; a.transport().loopIn = 500; a.transport().loopOut = 4500; a.transport().punchIn = 10; a.transport().punchOut = 90;
+    // a take on disk
+    { Engine r(SR); r.track(0).inputL = 0; r.track(0).armed = true; r.track(0).name = "Vox"; long k = 0; r.startRecording(dir); stream(r, k, 3000); r.stopRecording(); stream(r, k, 100); r.flushRecording();
+      auto f = r.pollFinishedTakes(); a.track(5).name = "Vox2"; if (!f.empty()) { a.addTake(5, f[0].path, 777); a.setActiveTake(5, 0); } }
+    auto sr = saveSession(a, sess); CHECK(sr.ok, "save: %s", sr.error.c_str());
+    Engine b(SR); auto lr = loadSession(b, sess); CHECK(lr.ok, "load: %s", lr.error.c_str());
+    for (auto& w : lr.warnings) std::printf("  warning: %s\n", w.c_str());
+    CHECK(b.track(2).name == "Snare" && std::fabs(b.track(2).gainDb - (-4.5f)) < 1e-6f && std::fabs(b.track(2).pan - 0.25f) < 1e-6f, "channel fields");
+    CHECK(b.track(2).stereo && b.track(2).route == 2 && b.track(2).mute && b.track(2).inputL == 3 && b.track(2).inputR == 4, "channel flags");
+    CHECK(std::fabs(b.bus(1).gainDb - (-2.f)) < 1e-6f && std::fabs(b.master().gainDb - (-0.5f)) < 1e-6f, "bus/master");
+    CHECK(b.insertAt(2, 0) && b.insertAt(2, 0)->name() == "ToTape8" && std::fabs(b.insertAt(2, 0)->getParam(3) - 0.321f) < 1e-6f, "insert param");
+    CHECK(b.insertAt(2, 1) && b.insertAt(2, 1)->bypassed() && b.insertAt(200, 0), "bypass/master insert");
+    CHECK(b.transport().loopOn && b.transport().loopIn == 500 && b.transport().loopOut == 4500 && b.transport().punchOut == 90, "transport");
+    CHECK(b.numTakes(5) == 1 && b.takeAt(5, 0)->start == 777 && b.track(5).take.load() == b.takeAt(5, 0), "takes restored");
+    CHECK(sessionToJson(a, dir) == sessionToJson(b, dir), "re-serialised session is identical");
+    // corrupt file must fail cleanly, not crash
+    { std::ofstream bad(dir + "/bad.airdaw"); bad << "{ not json"; } Engine c(SR); CHECK(!loadSession(c, dir + "/bad.airdaw").ok, "corrupt rejected");
+    // missing plugin + missing take -> warnings, still loads
+    { auto txt = sessionToJson(a, dir); size_t p = txt.find("Density2"); txt.replace(p, 8, "GoneFX999"); std::ofstream o(dir + "/old.airdaw"); o << txt; }
+    Engine d(SR); auto lr2 = loadSession(d, dir + "/old.airdaw"); CHECK(lr2.ok && !lr2.warnings.empty(), "missing plugin should warn, not fail");
+    std::printf("session: save/load round trip OK (%zu bytes)\n", sessionToJson(a, dir).size()); }
+  // 15. Auto-save: interval, skip-while-recording, skip-if-unchanged, rotation, recovery
+  { auto dir = tmpDir(); Engine e(SR); AutoSaver as(e); as.setLocation(dir + "/autosave", "Song");
+    as.configure({true, 30, 3});
+    CHECK(as.tick(0).empty(), "first tick only starts the timer");
+    CHECK(as.tick(29).empty(), "before interval");
+    std::string p1 = as.tick(31); CHECK(!p1.empty() && std::filesystem::exists(p1), "saves when due");
+    CHECK(as.tick(70).empty(), "unchanged -> no new file");
+    e.track(0).gainDb = -3.f; e.transport().recording = true;
+    CHECK(as.tick(100).empty(), "never saves while recording");
+    e.transport().recording = false;
+    std::string p2 = as.tick(131); CHECK(!p2.empty() && p2 != p1, "saves after change once recording stops");
+    for (int i = 0; i < 4; ++i) { e.track(0).gainDb = -10.f - i; std::this_thread::sleep_for(std::chrono::milliseconds(1100)); as.tick(200 + 40 * i); }
+    int count = 0; for (auto& f : std::filesystem::directory_iterator(dir + "/autosave")) count += f.path().extension() == ".airdaw";
+    CHECK(count == 3, "rotation keeps newest 3, found %d", count);
+    auto latest = AutoSaver::latestAutosave(dir + "/autosave", "Song"); Engine r(SR);
+    CHECK(!latest.empty() && loadSession(r, latest).ok && std::fabs(r.track(0).gainDb - (-13.f)) < 1e-6f, "recover latest autosave");
+    as.configure({false, 30, 3}); e.track(0).gainDb = -1.f; CHECK(as.tick(1000).empty() && as.tick(2000).empty(), "disabled saves nothing");
+    std::printf("autosave: interval, change detection, recording guard, rotation, recovery OK\n"); }
+
+  // 9. Load benchmark: 24 tracks x 4 inserts + 4 buses x 2 + master x 2, 96 kHz, 64-sample blocks
+  { Engine e(SR);
+    const char* chain[4] = {"Console7Channel", "Density2", "ToTape8", "Pressure5"};
+    for (int t = 0; t < 24; ++t) { e.track(t).inputL = t % 8; e.track(t).stereo = (t % 2); e.track(t).route = 1 + t % 4;
+      for (int s = 0; s < 4; ++s) e.setInsert(t, s, chain[s]); }
+    for (int b = 0; b < 4; ++b) { e.setInsert(100 + b, 0, "Console7Buss"); e.setInsert(100 + b, 1, "Density2"); }
+    e.setInsert(200, 0, "Console7Buss"); e.setInsert(200, 1, "ADClip8");
+    std::vector<std::vector<float>> in(8, std::vector<float>(N)), out(2, std::vector<float>(N));
+    const float* ip[8]; float* op[2] = {out[0].data(), out[1].data()};
+    for (int c = 0; c < 8; ++c) ip[c] = in[c].data();
+    int blocks = 3000;
+    auto t0 = std::chrono::steady_clock::now(); double worst = 0;
+    for (int b = 0; b < blocks; ++b) {
+      for (int c = 0; c < 8; ++c) for (int i = 0; i < N; ++i) in[c][i] = 0.3f * std::sin(2 * M_PI * (200 + 150 * c) * (b * N + i) / SR);
+      auto a = std::chrono::steady_clock::now();
+      e.process(ip, 8, op, 2, N);
+      worst = std::max(worst, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a).count());
+    }
+    double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    double budget = 1000.0 * N / SR;
+    std::printf("FULL LOAD (24 trk x4 inserts + 4 bus x2 + master x2 = 108 inserts): avg %.3f ms/block, worst %.3f ms, budget %.3f ms -> avg DSP %.1f%%\n",
+                ms / blocks, worst, budget, 100.0 * (ms / blocks) / budget);
+    CHECK(std::isfinite(out[0][0]), "bench finite"); }
+
+  // 10. Per-effect cost (one stereo instance, 96 kHz, 64-sample blocks) for the benchmark chain
+  for (const char* nm : {"Console7Channel", "Density2", "ToTape8", "Pressure5", "Console7Buss", "ADClip8"}) {
+    auto f = FxInstance::create(nm, SR); std::vector<float> l(N, 0.2f), r(N, 0.2f);
+    for (int i = 0; i < N; ++i) l[i] = r[i] = 0.3f * std::sin(i * 0.1f);
+    auto t0 = std::chrono::steady_clock::now();
+    for (int b = 0; b < 5000; ++b) f->process(l.data(), r.data(), N);
+    double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count() / 5000;
+    std::printf("  %-16s %6.2f us/block  (%.2f%% of one core)\n", nm, us, 100 * us / (1e6 * N / SR));
+  }
+  std::printf(failures ? "\n%d FAILURE(S)\n" : "\nALL TESTS PASSED\n", failures);
+  return failures ? 1 : 0;
+}

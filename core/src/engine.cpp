@@ -1,0 +1,270 @@
+#include "airdaw/engine.h"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#if defined(__SSE__) || defined(_M_X64) || defined(_M_IX86)
+#include <xmmintrin.h>
+#define AIRDAW_X86 1
+#endif
+
+namespace airdaw {
+
+static inline float dbToLin(float db) { return db <= -100.f ? 0.f : std::pow(10.f, db * 0.05f); }
+
+Engine::Engine(double sampleRate) : sr_(sampleRate) {
+  for (auto& b : busBuf_) for (auto& c : b) c.assign(kMaxBlock, 0.f);
+  for (auto& c : masterBuf_) c.assign(kMaxBlock, 0.f);
+  for (auto& c : work_) c.assign(kMaxBlock, 0.f);
+  for (int i = 0; i < kMaxTracks; ++i) tracks_[i].name = "TRACK " + std::to_string(i + 1);
+  for (int i = 0; i < kNumBuses; ++i) { buses_[i].name = "BUS " + std::to_string(i + 1); buses_[i].stereo = true; }
+  master_.name = "MASTER"; master_.stereo = true;
+  writer_ = std::make_unique<DiskWriter>(kMaxTracks, (int)sampleRate);
+}
+
+Engine::~Engine() = default;
+
+void Engine::startRecording(const std::string& folder) {
+  std::vector<std::string> names;
+  for (auto& t : tracks_) names.push_back(t.name);
+  writer_->setFolder(folder, names);
+  transport_.record();
+}
+
+int Engine::addTake(int track, const std::string& path, int64_t start) {
+  if (track < 0 || track >= kMaxTracks) return -1;
+  WavData w;
+  if (!readWav(path, w)) return -1;
+  auto t = std::make_unique<Take>();
+  t->l = std::move(w.left); t->r = std::move(w.right); t->start = start; t->path = path;
+  takes_[track].push_back(std::move(t));
+  return (int)takes_[track].size() - 1;
+}
+
+void Engine::setActiveTake(int track, int i) {
+  if (track < 0 || track >= kMaxTracks) return;
+  tracks_[track].take.store(i >= 0 && i < (int)takes_[track].size() ? takes_[track][i].get() : nullptr);
+}
+
+Channel* Engine::resolve(int id) {
+  if (id >= 0 && id < kMaxTracks) return &tracks_[id];
+  if (id >= 100 && id < 100 + kNumBuses) return &buses_[id - 100];
+  if (id == 200) return &master_;
+  return nullptr;
+}
+
+static int ownedIndex(int id) {
+  if (id >= 0 && id < kMaxTracks) return id;
+  if (id >= 100 && id < 104) return kMaxTracks + (id - 100);
+  return kMaxTracks + kNumBuses;  // master
+}
+
+bool Engine::setInsert(int channelId, int slot, const std::string& effect) {
+  if (!resolve(channelId) || slot < 0 || slot >= kMaxInserts) return false;
+  std::unique_ptr<FxInstance> fresh;
+  if (!effect.empty()) {
+    fresh = FxInstance::create(effect, sr_);
+    if (!fresh) return false;
+  }
+  auto& own = owned_[ownedIndex(channelId)][slot];
+  FxInstance* raw = fresh.get();
+  if (!toAudio_.push({channelId, slot, raw})) return false;  // queue full: nothing changed
+  if (own) retiring_.push_back(std::move(own));
+  own = std::move(fresh);
+  return true;
+}
+
+FxInstance* Engine::insertAt(int channelId, int slot) {
+  if (!resolve(channelId) || slot < 0 || slot >= kMaxInserts) return nullptr;
+  return owned_[ownedIndex(channelId)][slot].get();
+}
+
+void Engine::collectGarbage() {
+  FxInstance* p;
+  while (fromAudio_.pop(p)) {
+    retiring_.erase(std::remove_if(retiring_.begin(), retiring_.end(),
+                                   [p](const auto& u) { return u.get() == p; }),
+                    retiring_.end());
+  }
+}
+
+void Engine::applyCommands() {
+  Cmd c;
+  while (toAudio_.pop(c)) {
+    Channel* ch = resolve(c.channelId);
+    if (!ch) continue;
+    FxInstance* old = ch->insert[c.slot];
+    ch->insert[c.slot] = c.fx;
+    if (old) fromAudio_.push(old);
+  }
+}
+
+void Engine::runChain(Channel& c, float* l, float* r, int n) {
+  for (auto* fx : c.insert)
+    if (fx) fx->process(l, r, n);
+}
+
+void Engine::updateMeter(Meter& m, const float* l, const float* r, int n) {
+  float pl = 0, pr = 0; double sl = 0, sr = 0;
+  for (int i = 0; i < n; ++i) {
+    float a = std::fabs(l[i]), b = std::fabs(r[i]);
+    pl = std::max(pl, a); pr = std::max(pr, b);
+    sl += double(l[i]) * l[i]; sr += double(r[i]) * r[i];
+  }
+  m.peakL.store(pl, std::memory_order_relaxed);
+  m.peakR.store(pr, std::memory_order_relaxed);
+  m.rmsL.store(float(std::sqrt(sl / n)), std::memory_order_relaxed);
+  m.rmsR.store(float(std::sqrt(sr / n)), std::memory_order_relaxed);
+}
+
+// Linear gain ramp from the previous block's value to the new target (click-free faders).
+static void applyGain(float* l, float* r, int n, float& state, float target) {
+  if (state == target) {
+    if (target == 1.f) return;
+    for (int i = 0; i < n; ++i) { l[i] *= target; r[i] *= target; }
+    return;
+  }
+  float step = (target - state) / n, g = state;
+  for (int i = 0; i < n; ++i) { g += step; l[i] *= g; r[i] *= g; }
+  state = target;
+}
+
+void Engine::process(const float* const* in, int nIn, float* const* out, int nOut, int total) {
+#ifdef AIRDAW_X86
+  unsigned oldCsr = _mm_getcsr();
+  _mm_setcsr(oldCsr | 0x8040);  // flush-to-zero + denormals-are-zero: no CPU spikes in reverb tails
+#endif
+  applyCommands();
+
+  Transport& tr = transport_;
+  int done = 0;
+  while (done < total) {
+    { int64_t sk = tr.seekReq.exchange(-1); if (sk >= 0) tr.pos.store(sk); }
+    const bool playing = tr.playing.load(), recordingOn = tr.recording.load();
+    const int64_t pos = tr.pos.load();
+    const int64_t loopIn = tr.loopIn.load(), loopOut = tr.loopOut.load();
+    const bool loopActive = tr.loopOn.load() && loopOut > loopIn;
+    const bool punchOn = tr.punchOn.load();
+    const int64_t pIn = tr.punchIn.load(), pOut = tr.punchOut.load();
+    int n = std::min(kMaxBlock, total - done);
+    if (playing) {  // split blocks at loop end and punch points so they land on the exact sample
+      auto lim = [&](int64_t b) { if (b > pos) n = (int)std::min<int64_t>(n, b - pos); };
+      if (loopActive && pos < loopOut) lim(loopOut);
+      if (punchOn) { lim(pIn); lim(pOut); }
+    }
+    const bool inRange = !punchOn || (pos >= pIn && pos < pOut);
+    for (auto& b : busBuf_) { std::fill_n(b[0].data(), n, 0.f); std::fill_n(b[1].data(), n, 0.f); }
+    std::fill_n(masterBuf_[0].data(), n, 0.f);
+    std::fill_n(masterBuf_[1].data(), n, 0.f);
+
+    bool anySolo = false;
+    for (auto& t : tracks_) anySolo |= t.solo.load(std::memory_order_relaxed);
+
+    float* wl = work_[0].data();
+    float* wr = work_[1].data();
+
+    for (int ti = 0; ti < kMaxTracks; ++ti) {
+      Channel& t = tracks_[ti];
+      const int il = t.inputL.load(std::memory_order_relaxed);
+      const bool hasInput = il >= 0 && il < nIn;
+      const bool stereo = t.stereo.load(std::memory_order_relaxed);
+      const bool armed = t.armed.load(std::memory_order_relaxed);
+      const Take* tk = t.take.load(std::memory_order_acquire);
+      const bool rec = playing && recordingOn && armed && inRange;
+      const bool useTake = playing && tk && !(armed && (!recordingOn || inRange));
+
+      if (rec && !t.recActive) { writer_->beginTake(ti, pos, stereo ? 2 : 1); t.recActive = true; }
+      else if (!rec && t.recActive) { writer_->endTake(ti); t.recActive = false; }
+
+      if (!hasInput && !useTake && !rec) {
+        t.meter.peakL = t.meter.peakR = t.meter.rmsL = t.meter.rmsR = 0.f;
+        bool hasFx = false; for (auto* f : t.insert) hasFx |= (f != nullptr);
+        if (!hasFx) continue;  // idle track, nothing to ring out
+      }
+      if (useTake) {
+        const bool tStereo = !tk->r.empty();
+        const int64_t base = pos - tk->start, len = (int64_t)tk->l.size();
+        for (int i = 0; i < n; ++i) {
+          int64_t p = base + i; bool ok = p >= 0 && p < len;
+          wl[i] = ok ? tk->l[(size_t)p] : 0.f;
+          wr[i] = ok ? (tStereo ? tk->r[(size_t)p] : wl[i]) : 0.f;
+        }
+      } else {
+        if (hasInput) std::memcpy(wl, in[il] + done, n * sizeof(float)); else std::fill_n(wl, n, 0.f);
+        int ir = t.inputR.load(std::memory_order_relaxed);
+        if (stereo && ir >= 0 && ir < nIn) std::memcpy(wr, in[ir] + done, n * sizeof(float));
+        else std::memcpy(wr, wl, n * sizeof(float));
+        if (rec) writer_->push(ti, wl, wr, n, stereo ? 2 : 1);
+      }
+
+      applyGain(wl, wr, n, t.smoothTrim, dbToLin(t.trimDb.load(std::memory_order_relaxed)));
+      runChain(t, wl, wr, n);
+
+      bool muted = t.mute.load(std::memory_order_relaxed) ||
+                   (anySolo && !t.solo.load(std::memory_order_relaxed));
+      float fader = muted ? 0.f : dbToLin(t.gainDb.load(std::memory_order_relaxed));
+      float pan = std::clamp(t.pan.load(std::memory_order_relaxed), -1.f, 1.f);
+      float gl, gr;
+      if (stereo) { gl = std::min(1.f, 1.f - pan); gr = std::min(1.f, 1.f + pan); }
+      else { float a = (pan + 1.f) * 0.7853981634f; gl = std::cos(a); gr = std::sin(a); }  // -3 dB law
+      // Fold pan into the fader ramp on each side.
+      float target = fader;
+      // Left/right need different gains but share one smoothed fader value.
+      float sg = t.smoothGain, step = (target - sg) / n;
+      for (int i = 0; i < n; ++i) { sg += step; wl[i] *= sg * gl; wr[i] *= sg * gr; }
+      t.smoothGain = target;
+
+      updateMeter(t.meter, wl, wr, n);
+
+      int rt = t.route.load(std::memory_order_relaxed);
+      float* dl; float* dr;
+      if (rt >= 1 && rt <= kNumBuses) { dl = busBuf_[rt - 1][0].data(); dr = busBuf_[rt - 1][1].data(); }
+      else { dl = masterBuf_[0].data(); dr = masterBuf_[1].data(); }
+      for (int i = 0; i < n; ++i) { dl[i] += wl[i]; dr[i] += wr[i]; }
+    }
+
+    bool anyBusSolo = false;
+    for (auto& b : buses_) anyBusSolo |= b.solo.load(std::memory_order_relaxed);
+    for (int bi = 0; bi < kNumBuses; ++bi) {
+      Channel& b = buses_[bi];
+      float* bl = busBuf_[bi][0].data(); float* br = busBuf_[bi][1].data();
+      applyGain(bl, br, n, b.smoothTrim, dbToLin(b.trimDb.load(std::memory_order_relaxed)));
+      runChain(b, bl, br, n);
+      bool muted = b.mute.load(std::memory_order_relaxed) ||
+                   (anyBusSolo && !b.solo.load(std::memory_order_relaxed));
+      float target = muted ? 0.f : dbToLin(b.gainDb.load(std::memory_order_relaxed));
+      applyGain(bl, br, n, b.smoothGain, target);
+      updateMeter(b.meter, bl, br, n);
+      float* ml = masterBuf_[0].data(); float* mr = masterBuf_[1].data();
+      for (int i = 0; i < n; ++i) { ml[i] += bl[i]; mr[i] += br[i]; }
+    }
+
+    float* ml = masterBuf_[0].data(); float* mr = masterBuf_[1].data();
+    runChain(master_, ml, mr, n);
+    applyGain(ml, mr, n, master_.smoothGain,
+              master_.mute.load(std::memory_order_relaxed) ? 0.f
+                  : dbToLin(master_.gainDb.load(std::memory_order_relaxed)));
+    updateMeter(master_.meter, ml, mr, n);
+
+    for (int o = 0; o < nOut; ++o) {
+      if (o == 0) std::memcpy(out[0] + done, ml, n * sizeof(float));
+      else if (o == 1) std::memcpy(out[1] + done, mr, n * sizeof(float));
+      else std::fill_n(out[o] + done, n, 0.f);
+    }
+
+    if (playing) {
+      int64_t np = pos + n;
+      if (loopActive && np >= loopOut) {  // loop wrap: every recording pass becomes its own take
+        for (int ti = 0; ti < kMaxTracks; ++ti)
+          if (tracks_[ti].recActive) { writer_->endTake(ti); tracks_[ti].recActive = false; }
+        np = loopIn;
+      }
+      tr.pos.store(np);
+    }
+    done += n;
+  }
+#ifdef AIRDAW_X86
+  _mm_setcsr(oldCsr);
+#endif
+}
+
+}  // namespace airdaw

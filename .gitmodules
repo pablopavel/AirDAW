@@ -1,0 +1,6 @@
+[submodule "third_party/JUCE"]
+	path = third_party/JUCE
+	url = https://github.com/juce-framework/JUCE
+[submodule "third_party/airwin2rack"]
+	path = third_party/airwin2rack
+	url = https://github.com/baconpaul/airwin2rack
