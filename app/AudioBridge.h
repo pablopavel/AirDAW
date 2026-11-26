@@ -7,16 +7,14 @@
 #include "airdaw/engine.h"
 #include "airdaw/session.h"
 
+void raiseWorkerThreadPriority();  // Platform.cpp
+
 class AudioBridge : public juce::AudioIODeviceCallback {
  public:
   AudioBridge() {
     // Mixer worker threads get raised priority so the OS does not starve them next to the audio thread.
     // (Windows: highest non-realtime priority. Linux/Mac: left at default for now; needs rtkit/entitlements.)
-    airdaw::Engine::workerInit = [] {
-#if JUCE_WINDOWS
-      ::SetThreadPriority(::GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
-#endif
-    };
+    airdaw::Engine::workerInit = &raiseWorkerThreadPriority;
     owned_ = std::make_unique<airdaw::Engine>(48000.0);
     owned_->setWorkerThreads(-1);
     engine_.store(owned_.get());

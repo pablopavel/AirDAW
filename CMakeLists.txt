@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
+cmake_policy(SET CMP0091 NEW)
+# Airwindows Consolidated is built against the static MSVC runtime; use it everywhere to avoid link mismatches.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 project(AirDAW VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,7 +36,7 @@ set(AIRDAW_ASIO_SDK "" CACHE PATH "Path to the Steinberg ASIO SDK (GPLv3 option)
 if(AIRDAW_BUILD_APP)
   add_subdirectory(third_party/JUCE EXCLUDE_FROM_ALL)
   juce_add_gui_app(AirDAW PRODUCT_NAME "AirDAW" COMPANY_NAME "trashmannightcrawler")
-  target_sources(AirDAW PRIVATE app/Main.cpp app/MainComponent.cpp app/MainComponent.h app/AudioBridge.h app/Vst3Insert.h app/PluginWindow.h)
+  target_sources(AirDAW PRIVATE app/Main.cpp app/MainComponent.cpp app/MainComponent.h app/AudioBridge.h app/Platform.cpp app/Vst3Insert.h app/PluginWindow.h)
   target_include_directories(AirDAW PRIVATE app)
   target_compile_definitions(AirDAW PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_VST=0 JUCE_PLUGINHOST_LADSPA=0 JUCE_PLUGINHOST_LV2=0 JUCE_PLUGINHOST_AU=0 JUCE_APPLICATION_NAME_STRING="AirDAW" JUCE_APPLICATION_VERSION_STRING="0.1.0")

@@ -1,3 +1,4 @@
+#define _USE_MATH_DEFINES
 // Headless engine tests + real-time load benchmark. No audio hardware needed.
 #include <algorithm>
 #include <chrono>
@@ -8,7 +9,6 @@
 #include <vector>
 #include <cstdlib>
 #include <cstring>
-#include <unistd.h>
 #include "airdaw/engine.h"
 #include "airdaw/session.h"
 #include "airdaw/work_pool.h"
@@ -54,7 +54,12 @@ static std::vector<float> stream(Engine& e, long& k, int frames, int blk = 100) 
   return outL;
 }
 static std::vector<std::string> g_tmpDirs;
-static std::string tmpDir() { char t[] = "/tmp/airdawXXXXXX"; std::string d = mkdtemp(t); g_tmpDirs.push_back(d); return d; }
+static std::string tmpDir() {
+  static int n = 0;
+  auto p = std::filesystem::temp_directory_path() /
+           ("airdaw_test_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "_" + std::to_string(n++));
+  std::filesystem::create_directories(p); g_tmpDirs.push_back(p.string()); return p.string();
+}
 static const bool kQuick = std::getenv("AIRDAW_QUICK") != nullptr;  // short runs (for sanitizers)
 static float db(float x) { return 20 * std::log10(std::max(x, 1e-9f)); }
 
