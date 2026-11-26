@@ -30,9 +30,9 @@ void ToolCard::paint(juce::Graphics& g) {
   auto& t = T();
   auto r = getLocalBounds().toFloat();
   g.setGradientFill(juce::ColourGradient(juce::Colour(0xff0c0b0a), 0, r.getY(), juce::Colour(0xff050505), 0, r.getBottom(), false));
-  g.fillRoundedRectangle(r, 5.f);
+  g.fillRoundedRectangle(r, T().rad(5.f));
   g.setColour(juce::Colour(0x14ffffff)); g.drawHorizontalLine(1, r.getX() + 5.f, r.getRight() - 5.f);
-  g.setColour(juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), 5.f, 1.f);
+  g.setColour(juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), T().rad(5.f), 1.f);
   if (folded()) {  // squeezed by a wide Hit Record Meter: a slim tab with the title written upwards
     g.setColour(Theme::dim()); g.setFont(Theme::uiFont(14.f));
     g.drawText(juce::String(juce::CharPointer_UTF8("\xe2\xa0\xbf")), getLocalBounds().removeFromTop(kHeader), juce::Justification::centred);
@@ -45,7 +45,7 @@ void ToolCard::paint(juce::Graphics& g) {
   }
   auto head = getLocalBounds().removeFromTop(kHeader).reduced(8, 0);
   if (place_ == Place::Listen) {  // Listen cards: a brushed title bar like the mockup's .tch
-    juce::Path p; p.addRoundedRectangle(0.f, 0.f, r.getWidth(), (float)kHeader, 5.f, 5.f, true, true, min_, min_);
+    juce::Path p; p.addRoundedRectangle(0.f, 0.f, r.getWidth(), (float)kHeader, T().rad(5.f), T().rad(5.f), true, true, min_, min_);
     g.saveState(); g.reduceClipRegion(p); t.drawBrush(g, r.withHeight((float)kHeader)); g.restoreState();
   }
   g.setColour(Theme::dim()); g.setFont(Theme::uiFont(14.f));

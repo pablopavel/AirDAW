@@ -156,6 +156,10 @@ class Engine {
   // the engine is destroyed, because the audio thread may still be reading it. UI thread only.
   void removeTake(int track, int i);
 
+  // App-side per-project data (a JSON object as text; UI thread only). Sessions save it under "app" and restore it
+  // on load ("" when the session predates it). The engine never reads it.
+  std::string appData;
+
   // Master tap for metering/analysis: a copy of the master output (after the master chain, before the click),
   // interleaved stereo, in a lock-free ring. Off by default; if the reader falls behind, frames are dropped
   // (counted) rather than ever blocking the audio thread. UI thread reads.

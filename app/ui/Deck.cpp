@@ -22,14 +22,14 @@ void TransportKeys::paint(juce::Graphics& g) {
   // recessed well
   auto well = all.expanded(10.f, 8.f).withTrimmedBottom(-2.f);
   g.setGradientFill(juce::ColourGradient(juce::Colour(0xff040404), 0, well.getY(), juce::Colour(0xff0f0f11), 0, well.getBottom(), false));
-  g.fillRoundedRectangle(well, 9.f);
+  g.fillRoundedRectangle(well, T().rad(9.f));
   g.setColour(juce::Colour(0x1affffff)); g.drawHorizontalLine((int)well.getBottom(), well.getX() + 8, well.getRight() - 8);
 
   for (int k = 0; k < kNum; ++k) {
     const bool on = lit_[k], pressed = on || down_ == k;
     auto r = keyRect(k);
-    if (!pressed) { g.setColour(juce::Colour(0xff070708)); g.fillRoundedRectangle(r.translated(0, 4), 5.f);
-                    g.setColour(juce::Colours::black.withAlpha(0.7f)); g.fillRoundedRectangle(r.translated(0, 7), 5.f); }
+    if (!pressed) { g.setColour(juce::Colour(0xff070708)); g.fillRoundedRectangle(r.translated(0, 4), T().rad(5.f));
+                    g.setColour(juce::Colours::black.withAlpha(0.7f)); g.fillRoundedRectangle(r.translated(0, 7), T().rad(5.f)); }
     else r = r.translated(0, 3);
     if (on) {
       const bool rec = k == Rec;
@@ -43,11 +43,11 @@ void TransportKeys::paint(juce::Graphics& g) {
       cg.addColour(0.14, juce::Colour(0xff404045)); cg.addColour(0.58, juce::Colour(0xff303034));
       g.setGradientFill(cg);
     }
-    g.fillRoundedRectangle(r, 5.f);
+    g.fillRoundedRectangle(r, T().rad(5.f));
     g.setColour(juce::Colour(on ? 0x1f000000 : 0x2a000000));
     for (float y = r.getY() + 3.f; y < r.getBottom(); y += 4.f) g.fillRect(r.getX() + 1.f, y, r.getWidth() - 2.f, 1.f);
     g.setColour(juce::Colour(on ? 0xccffffff : 0x6effffff)); g.drawHorizontalLine((int)r.getY() + 1, r.getX() + 3, r.getRight() - 3);
-    g.setColour(juce::Colours::black); g.drawRoundedRectangle(r, 5.f, 1.f);
+    g.setColour(juce::Colours::black); g.drawRoundedRectangle(r, T().rad(5.f), 1.f);
     // symbol
     const auto c = r.getCentre();
     const juce::Colour sym = on ? (k == Rec ? juce::Colours::white : juce::Colour(0xff2a1800)) : Theme::cream();
@@ -93,7 +93,11 @@ Deck::Deck(AppCtx& ctx) : ctx_(ctx) {
   tap_.onClick = [this] { ctx_.tapTempo(); };
   tap_.setButtonText("Tap 120.0");
   for (auto* b : buttons_) addAndMakeVisible(*b);
-  for (auto* b : {&midi_, &plugins_}) { b->setEnabled(false); b->setTooltip("Coming in a later phase of the mixer port"); }
+  midi_.setTooltip("MIDI Learn: click a control, then move a knob, fader or pad on your controller. Right-click a control to unmap it.");
+  midi_.onClick = [this] { if (onMidi) onMidi(); };
+  plugins_.setTooltip("Airwindows plugin library: installed build, updates and roll back");
+  plugins_.onClick = [this] { if (onPlugins) onPlugins(); };
+  tagMidi(tap_, "tap"); tagMidi(listen_, "listen");
   listen_.setTooltip("Listen mode: big master, the reference suite and every listening tool (drag tools to arrange)");
   listen_.onClick = [this] { if (onListen) onListen(); };
   projectBtn.setTooltip("New, open and save projects (Ctrl+N / Ctrl+O / Ctrl+S), audio settings");
@@ -102,6 +106,29 @@ Deck::Deck(AppCtx& ctx) : ctx_(ctx) {
   metersBtn.onClick = [this] { if (onMeters) onMeters(); };
   displayBtn.onClick = [this] { if (onDisplay) onDisplay(); };
   full_.onClick = [this] { if (onFull) onFull(); };
+}
+
+std::vector<std::pair<juce::String, juce::Rectangle<int>>> TransportKeys::midiRegions() const {
+  static const char* ids[kNum] = {"transport.rtz", "transport.play", "transport.stop", "transport.rec", "transport.loop", "transport.click"};
+  std::vector<std::pair<juce::String, juce::Rectangle<int>>> v;
+  for (int k = 0; k < kNum; ++k) v.push_back({ids[k], keyRect(k).toNearestInt()});
+  return v;
+}
+
+void Deck::setMidiState(bool learning, bool armed) {
+  midi_.setToggleState(learning, juce::dontSendNotification);
+  const juce::String t = armed ? juce::String(juce::CharPointer_UTF8("\xe2\x97\x8f Move a controller\xe2\x80\xa6")) : juce::String("MIDI Learn");
+  if (midi_.getButtonText() != t) { midi_.setButtonText(t); resized(); }
+}
+
+void Deck::paintOverChildren(juce::Graphics& g) {
+  auto& t = T();
+  if (t.screws) { t.drawScrew(g, {11.f, 11.f}); t.drawScrew(g, {(float)getWidth() - 11.f, 11.f}); }  // mockup body.scr #deck
+  if (!pluginsBadge_ || !plugins_.isVisible()) return;  // amber dot on Plugins when an update is available (mockup #upd)
+  const auto b = plugins_.getBounds().toFloat();
+  juce::Rectangle<float> d(b.getRight() - 14.f, b.getCentreY() - 4.f, 8.f, 8.f);
+  t.drawGlow(g, d, t.am(), 9.f, 0.8f);
+  g.setColour(t.am()); g.fillEllipse(d);
 }
 
 static juce::String clockText(double sec) {
@@ -201,7 +228,7 @@ void Deck::resized() {
   // left: logo (painted), reels, position LCD
   auto left = r.withRight(centre.getX());
   left.removeFromLeft(200);
-  if (left.getWidth() >= 420) { reels_.setVisible(true); reels_.setBounds(left.removeFromLeft(150).withSizeKeepingCentre(150, 70)); left.removeFromLeft(14); }
+  if (left.getWidth() >= 420 && T().reels) { reels_.setVisible(true); reels_.setBounds(left.removeFromLeft(150).withSizeKeepingCentre(150, 70)); left.removeFromLeft(14); }
   else reels_.setVisible(false);  // narrow window: the reels make way for the position readout
   pos_.setBounds(left.withSizeKeepingCentre(juce::jmin(left.getWidth(), 300), 74));
   // right: readouts and buttons flowing in right-aligned rows

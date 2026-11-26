@@ -2,12 +2,14 @@
 #pragma once
 #include "AppCtx.h"
 #include "Widgets.h"
+#include "../midi/MidiControl.h"
 
 namespace ui {
 
 // The five tape-style transport keys (mockup .tp).
-class TransportKeys : public juce::Component {
+class TransportKeys : public juce::Component, public MidiRegionProvider {
  public:
+  std::vector<std::pair<juce::String, juce::Rectangle<int>>> midiRegions() const override;
   enum Key { Rtz, Play, Stop, Rec, Loop, Click, kNum };
   std::function<void(Key)> onKey;
   void setLit(Key k, bool on) { if (lit_[k] != on) { lit_[k] = on; repaint(); } }
@@ -29,7 +31,11 @@ class Deck : public juce::Component {
   int preferredHeight(int width) const;
 
   std::function<void(TransportKeys::Key)> onTransport;
-  std::function<void()> onProject, onAudio, onDisplay, onMeters, onFull, onListen;
+  std::function<void()> onProject, onAudio, onDisplay, onMeters, onFull, onListen, onMidi, onPlugins;
+  void setMidiState(bool learning, bool armed);
+  void setPluginsBadge(bool on) { if (pluginsBadge_ != on) { pluginsBadge_ = on; repaint(); } }
+  juce::Component& midiButton() { return midi_; }
+  juce::Component& pluginsButton() { return plugins_; }
   void setListenLit(bool on) { listen_.setToggleState(on, juce::dontSendNotification); }
   juce::TextButton displayBtn{juce::String(juce::CharPointer_UTF8("\xe2\x9a\x99 Display"))};
   juce::TextButton metersBtn{juce::String(juce::CharPointer_UTF8("\xe2\x97\x94 Meters"))};
@@ -43,6 +49,8 @@ class Deck : public juce::Component {
   juce::TextButton listen_{juce::String(juce::CharPointer_UTF8("\xe2\x97\x89 Listen"))}, midi_{"MIDI Learn"},
       plugins_{juce::String(juce::CharPointer_UTF8("\xe2\x9f\xb3 Plugins"))}, full_{juce::String(juce::CharPointer_UTF8("\xe2\x9b\xb6 Full"))};
   std::vector<juce::TextButton*> buttons_;
+  bool pluginsBadge_ = false;
+  void paintOverChildren(juce::Graphics&) override;
 };
 
 }  // namespace ui

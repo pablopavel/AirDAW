@@ -74,7 +74,7 @@ void Overview::resized() {
 
 void Overview::paint(juce::Graphics& g) {
   auto& t = T();
-  g.fillAll(juce::Colour(Theme::kPb));
+  g.fillAll(T().pb());
   g.setColour(juce::Colours::black); g.fillRect(0, getHeight() - 2, getWidth(), 2);
   auto b = bar();
   t.drawGlow(g, b, t.am(), 18.f, 0.06f);
@@ -120,7 +120,7 @@ void Overview::paint(juce::Graphics& g) {
     g.setColour(lc.withAlpha(loopOn_ ? 1.f : 0.5f));
     g.fillRect(x0 - 1.f, b.getY(), 2.f, b.getHeight()); g.fillRect(x1 - 1.f, b.getY(), 2.f, b.getHeight());
   }
-  g.setColour(juce::Colours::black); g.drawRoundedRectangle(b, 4.f, 1.f);
+  g.setColour(juce::Colours::black); g.drawRoundedRectangle(b, T().rad(4.f), 1.f);
 }
 
 void Overview::mouseMove(const juce::MouseEvent& e) {

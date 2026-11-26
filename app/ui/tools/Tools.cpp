@@ -12,7 +12,7 @@ static void row(juce::Graphics& g, juce::Rectangle<float> r, const juce::String&
   g.setColour(Theme::dim()); g.setFont(Theme::spaced(Theme::uiFont(11.f), 0.1f));
   g.drawText(label, r, juce::Justification::centredLeft);
   g.setFont(Theme::monoFont(valueH));
-  t.drawGlowText(g, value, r, juce::Justification::centredRight, valueCol.isTransparent() ? t.am() : valueCol, 0.5f);
+  t.drawGlowText(g, value, r, juce::Justification::centredRight, valueCol.isTransparent() ? t.readout() : valueCol, 0.5f);
   g.setColour(t.am().withAlpha(0.16f)); g.fillRect(r.getX(), r.getBottom() - 1.f, r.getWidth(), 1.f);
 }
 
@@ -514,6 +514,7 @@ class ReferenceAB : public Tool {
     for (juce::Component* c : std::initializer_list<juce::Component*>{&a_, &b_, &play_, &match_, &sync_, &load_}) addAndMakeVisible(c);
     for (auto* b : {&a_, &b_, &play_}) b->getProperties().set("noUpper", true);
     sync_.getProperties().set("fontH", 10.5);
+    tagMidi(a_, "ref.a"); tagMidi(b_, "ref.b"); tagMidi(play_, "ref.play"); tagMidi(match_, "ref.match"); tagMidi(sync_, "ref.sync");
   }
   void update(const AnalysisHub&) override {
     auto* m = mon(); auto* r = ref();

@@ -9,7 +9,13 @@
 #include <vector>
 #include <cstdlib>
 #include <cstring>
+#ifdef _WIN32
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 #include "airdaw/engine.h"
+#include "airdaw/fx_library.h"
 #include "airdaw/session.h"
 #include "airdaw/render.h"
 #include "airdaw/analysis.h"
@@ -370,6 +376,51 @@ static void testMonitor() {
   std::printf("monitor: L/R/Mid/Side/Mono/Pol/Dim on the speakers only; reference A/B with own transport, gain, end; taps, takes, exports clean\n");
 }
 
+// Airwindows library: the built-in table, and AirwindowsFX.dll (same code) loaded and used instead.
+static void testFxLibrary() {
+  const AwlApi& b = builtinFxLibrary();
+  CHECK(b.apiVersion == kFxLibApi && b.count() > 400 && std::string(b.buildId).size() > 4, "built-in library: %d effects, build '%s'", b.count(), b.buildId);
+#if defined(_WIN32) && defined(AIRDAW_FXLIB_PATH)
+  HMODULE h = LoadLibraryA(AIRDAW_FXLIB_PATH);
+  CHECK(h != nullptr, "load %s", AIRDAW_FXLIB_PATH); if (!h) return;
+  auto entry = reinterpret_cast<const AwlApi* (*)()>(GetProcAddress(h, kFxLibEntryPoint));
+  const AwlApi* d = entry ? entry() : nullptr;
+  CHECK(d && d != &b && d->apiVersion == kFxLibApi && d->count() == b.count() && std::string(d->buildId) == b.buildId,
+        "the DLL has the same build and effects (%d)", d ? d->count() : -1);
+  if (!d) return;
+  auto indexOf = [](const AwlApi& a, const char* n) { for (int i = 0; i < a.count(); ++i) if (std::string(a.name(i)) == n) return i; return -1; };
+  bool same = true;
+  for (const char* name : {"ToTape8", "Console7Channel", "Galactic3", "Pressure5"}) {
+    std::vector<float> out[2];
+    int k = 0;
+    for (const AwlApi* a : {&b, d}) {
+      a->seedRandom(77);  // each module has its own rand() (dither seeds)
+      void* fx = a->create(indexOf(*a, name), (float)SR);
+      for (int p = 0; p < 2; ++p) a->setParam(fx, p, 0.7f);
+      std::vector<float> l(4096), r(4096);
+      for (int i = 0; i < 4096; ++i) { l[(size_t)i] = sigAt(i); r[(size_t)i] = sig2At(i); }
+      for (int i = 0; i < 4096; i += 512) { float* io[2] = {l.data() + i, r.data() + i}; a->process(fx, io, io, 512); }
+      char disp[64] = {0}; a->paramDisplay(fx, 0, disp);
+      a->destroy(fx);
+      out[k++] = l;
+    }
+    for (size_t i = 0; same && i < out[0].size(); ++i) same = out[0][i] == out[1][i];
+    CHECK(same, "%s: the DLL must process exactly like the built-in copy", name);
+  }
+  AwlApi wrong = *d; wrong.apiVersion = kFxLibApi + 1;
+  CHECK(!useFxLibrary(nullptr) && !useFxLibrary(&wrong) && !fxLibraryLoaded(), "a missing library or another API version is refused");
+  CHECK(useFxLibrary(d) && fxLibraryLoaded() && &activeFxLibrary() == d, "the DLL becomes the active library");
+  { Engine e(SR); e.track(0).inputL = 0; e.track(0).armed = true; e.track(0).pan = -1.f;
+    CHECK(e.setInsert(0, 0, "ToTape8") && effectExists("Galactic3") && !effectDocumentation("ToTape8").empty() && listEffects().size() == (size_t)d->count(),
+          "effects, picker list and write-ups come from the DLL");
+    long kk = 0; std::vector<float> L, R; stream2(e, kk, 2048, L, R);
+    CHECK(peakOf(L) > 0.01f, "an insert from the DLL processes audio (peak %f)", peakOf(L)); }
+  std::printf("fx library: built-in %s (%d effects); AirwindowsFX.dll loads, matches bit for bit, becomes active\n", b.buildId, b.count());
+#else
+  std::printf("fx library: built-in %s (%d effects)\n", b.buildId, b.count());
+#endif
+}
+
 // Insert reordering: same instances, new order, each insert processed exactly once per block.
 struct Affine : InsertProcessor {
   float a, b; std::string nm; std::vector<FxParamInfo> ps; long calls = 0;
@@ -391,8 +442,14 @@ static void testPolarityAndReference() {
     CHECK(rec, "polarity must not reach the recorded take");
     t.polarity = false; e.track(0).route = (int)Route::Bus1; e.bus(0).polarity = true; L.clear(); R.clear(); stream2(e, k, 256, L, R);
     CHECK(std::fabs(L[200] + sigAt(k - 256 + 200)) < 1e-6f, "bus polarity must flip the bus");
+    e.appData = "{\"reference\": \"C:\\\\Mix refs\\\\Beer mix2.wav\", \"midi\": [{\"target\": \"fx.0.1.2\", \"num\": 21}]}";
     CHECK(saveSession(e, dir + "/p.airdaw").ok, "save polarity");
-    Engine b(SR); CHECK(loadSession(b, dir + "/p.airdaw").ok && b.bus(0).polarity.load() && !b.track(0).polarity.load(), "polarity survives save/load"); }
+    Engine b(SR); CHECK(loadSession(b, dir + "/p.airdaw").ok && b.bus(0).polarity.load() && !b.track(0).polarity.load(), "polarity survives save/load");
+    CHECK(b.appData.find("C:\\\\Mix refs\\\\Beer mix2.wav") != std::string::npos && b.appData.find("fx.0.1.2") != std::string::npos,
+          "app data survives save/load: %s", b.appData.c_str());
+    auto blank = std::make_unique<Engine>(SR); auto c = std::make_unique<Engine>(SR); c->appData = "x";
+    CHECK(saveSession(*blank, dir + "/blank.airdaw").ok && loadSession(*c, dir + "/blank.airdaw").ok && c->appData.find('{') == 0,
+          "a new session has empty app data {}: '%s'", c->appData.c_str()); }
 
   auto makeRef = [] { auto r = std::make_unique<Reference>(); for (int i = 0; i < 20000; ++i) { r->l.push_back(0.0001f * (float)(i % 3000)); r->r.push_back(-0.0001f * (float)(i % 3000)); } return r; };
   auto refL = [](long p) { return 0.0001f * (float)(p % 3000); };
@@ -619,6 +676,7 @@ int main() {
   testAnalysisTools();
   testMonitor();
   testPolarityAndReference();
+  testFxLibrary();
 
   // 14. Session save/load round trip, including plugin parameters, takes, loop/punch
   { auto dir = tmpDir(); std::string sess = dir + "/song.airdaw";
@@ -707,8 +765,8 @@ int main() {
       if (avgMs) *avgMs = total / blocks; if (worstMs) *worstMs = worst; };
     std::vector<float> ref, par;
     // Several Airwindows effects seed their dither from rand() at construction, so seed it identically per run.
-    { std::srand(1234); Engine e(SR); build(e); render(e, 300, &ref, nullptr, nullptr); }
-    { std::srand(1234); Engine e(SR); build(e); e.setWorkerThreads(3); render(e, 300, &par, nullptr, nullptr); }
+    { seedFxRandom(1234); Engine e(SR); build(e); render(e, 300, &ref, nullptr, nullptr); }
+    { seedFxRandom(1234); Engine e(SR); build(e); e.setWorkerThreads(3); render(e, 300, &par, nullptr, nullptr); }
     CHECK(ref.size() == par.size() && std::memcmp(ref.data(), par.data(), ref.size() * sizeof(float)) == 0, "multi-thread output differs from single-thread");
     if (ref.size() == par.size() && std::memcmp(ref.data(), par.data(), ref.size() * sizeof(float)) == 0) std::printf("multicore: output bit-identical with 0 and 3 workers over %zu samples\n", ref.size());
     for (int w : {0, 1, -1}) {

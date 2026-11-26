@@ -27,7 +27,8 @@ struct ListeningNotes {
   juce::File file;
   void load(const juce::File& f) {
     file = f; items.clear();
-    if (auto* a = juce::JSON::parse(f).getArray())
+    const juce::var parsed = juce::JSON::parse(f);  // keep it alive while reading
+    if (auto* a = parsed.getArray())
       for (auto& v : *a) items.push_back({(double)v["t"], v["text"].toString()});
   }
   void save() const {

@@ -1,4 +1,6 @@
 #include "InsertPanel.h"
+#include "../midi/MidiControl.h"
+#include "PluginsPanel.h"
 #include "airdaw/fx_host.h"
 
 namespace ui {
@@ -52,9 +54,9 @@ static void cardFrame(juce::Graphics& g, juce::Rectangle<float> r, bool active) 
   auto& t = T();
   if (active) t.drawGlow(g, r, t.am(), 26.f, 0.2f);
   g.setGradientFill(juce::ColourGradient(juce::Colour(0xff1b1a19), 0, r.getY(), juce::Colour(0xff0f0e0d), 0, r.getBottom(), false));
-  g.fillRoundedRectangle(r, 6.f);
-  if (active) { g.setColour(t.am().withAlpha(t.glowAlpha(0.06f))); g.fillRoundedRectangle(r.reduced(1.f), 6.f); }
-  g.setColour(active ? t.c(0xff3d2c12) : juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), 6.f, 1.f);
+  g.fillRoundedRectangle(r, T().rad(6.f));
+  if (active) { g.setColour(t.am().withAlpha(t.glowAlpha(0.06f))); g.fillRoundedRectangle(r.reduced(1.f), T().rad(6.f)); }
+  g.setColour(active ? t.c(0xff3d2c12) : juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), T().rad(6.f), 1.f);
 }
 
 // Favourite plugins: a ';'-separated list in the app settings, shown at the top of the picker.
@@ -106,6 +108,7 @@ class InsertCard : public juce::Component, public juce::DragAndDropTarget {
       info_.onClick = [this] { if (p_.ctx_.showPluginInfo) p_.ctx_.showPluginInfo(name_); };
     }
     byp_.setTooltip("Bypass on/off"); tog_.setTooltip("Show / hide the controls"); rm_.setTooltip("Remove from the chain");
+    tagMidi(byp_, "fx." + juce::String(p_.ch_) + "." + juce::String(slot_) + ".bypass");
     byp_.onClick = [this] { if (auto* f = fxNow()) f->setBypass(!f->bypassed()); sync(); };
     tog_.onClick = [this] { p_.setOpen(slot_, !open_); };
     rm_.onClick = [this] {
@@ -128,6 +131,7 @@ class InsertCard : public juce::Component, public juce::DragAndDropTarget {
       k->label = fx->params()[(size_t)i].name;
       k->setRange(0.f, 1.f, fx->params()[(size_t)i].defaultValue);
       k->onChange = [this, i](float v) { if (auto* f = fxNow()) f->setParam(i, v); };
+      tagMidi(*k, "fx." + juce::String(p_.ch_) + "." + juce::String(slot_) + "." + juce::String(i));
       addAndMakeVisible(*k); knobs_.push_back(std::move(k));
     }
     def_.setTooltip("Reset every knob to the plugin's default");
@@ -191,7 +195,7 @@ class InsertCard : public juce::Component, public juce::DragAndDropTarget {
     cardFrame(g, r, active_);
     auto head = r.removeFromTop((float)kHeaderH);
     g.saveState(); g.reduceClipRegion(head.toNearestInt());
-    juce::Path clip; clip.addRoundedRectangle(head.getX(), head.getY(), head.getWidth(), head.getHeight(), 6.f, 6.f, true, true, false, false);
+    juce::Path clip; clip.addRoundedRectangle(head.getX(), head.getY(), head.getWidth(), head.getHeight(), T().rad(6.f), T().rad(6.f), true, true, false, false);
     g.reduceClipRegion(clip);
     T().drawBrush(g, head); g.restoreState();
     g.setColour(juce::Colours::black); g.fillRect(head.getX(), head.getBottom() - 1.f, head.getWidth(), 1.f);
@@ -296,6 +300,7 @@ class AddCard : public juce::Component {
   AddCard(InsertPanel& p, AppCtx& ctx, int ch, int slot, bool& showOld, std::function<void(int)> refresh)
       : ctx_(ctx), ch_(ch), slot_(slot), showOld_(showOld), refresh_(std::move(refresh)) {
     juce::ignoreUnused(p);
+    showOld = ctx.props.getBoolValue("plugins.showOld", showOld);  // shared with the Plugins panel
     auto list = pickerList(showOld);
     box_.setTextWhenNothingSelected(juce::String(juce::CharPointer_UTF8("Choose Airwindows plugin\xe2\x80\xa6")));
     const auto favs = favourites(ctx);
@@ -307,7 +312,8 @@ class AddCard : public juce::Component {
     std::string cat;
     for (int i = 0; i < (int)list.size(); ++i) {
       if (list[(size_t)i].category != cat) { cat = list[(size_t)i].category; box_.addSectionHeading(cat); }
-      box_.addItem(list[(size_t)i].name, favCount + i + 1);
+      const juce::String nm(list[(size_t)i].name);
+      box_.addItem(pluginlib::newEffects().contains(nm) ? nm + juce::String(juce::CharPointer_UTF8("  \xe2\x80\x94 new")) : nm, favCount + i + 1);
       names_.add(list[(size_t)i].name);
     }
     box_.onChange = [this] {
@@ -326,7 +332,8 @@ class AddCard : public juce::Component {
     };
     old_.setButtonText(showOld ? "Hide older versions" : "Show older versions");
     old_.getProperties().set("fontH", 10.0);
-    old_.onClick = [this] { showOld_ = !showOld_; juce::MessageManager::callAsync([r = refresh_] { r(-1); }); };
+    old_.onClick = [this] { showOld_ = !showOld_; ctx_.props.setValue("plugins.showOld", showOld_);
+                            juce::MessageManager::callAsync([r = refresh_] { r(-1); }); };
     count_ = (int)list.size();
     addAndMakeVisible(box_); addAndMakeVisible(old_);
   }
@@ -450,7 +457,7 @@ int InsertPanel::preferredHeight() const {
 void InsertPanel::paint(juce::Graphics& g) {
   auto r = getLocalBounds().toFloat();
   T().drawBrush(g, r);
-  g.setColour(juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), 6.f, 1.f);
+  g.setColour(juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), T().rad(6.f), 1.f);
   auto* e = ctx_.engine();
   auto hd = getLocalBounds().reduced(14, 10).removeFromLeft(118);
   if (e && ch_ >= 0) {

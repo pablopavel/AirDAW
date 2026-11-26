@@ -9,7 +9,7 @@ namespace ui {
 
 class SettingsContent : public juce::Component, private juce::Timer {
  public:
-  SettingsContent(AppCtx& ctx) : ctx_(ctx), selector_(ctx.devices, 0, 2, 0, 2, false, false, true, false) {
+  SettingsContent(AppCtx& ctx) : ctx_(ctx), selector_(ctx.devices, 0, 2, 0, 2, true, false, true, false) {
     for (juce::Component* c : std::initializer_list<juce::Component*>{&selector_, &tone_, &bpm_, &tap_, &beats_, &countIn_, &level_,
                                                                       &autoSave_, &autoEvery_, &autoInfo_})
       addAndMakeVisible(c);
@@ -34,7 +34,7 @@ class SettingsContent : public juce::Component, private juce::Timer {
     autoInfo_.setColour(juce::Label::textColourId, Theme::dim());
     sync();
     startTimerHz(4);
-    setSize(640, 760);
+    setSize(640, 840);
   }
 
   std::function<void(bool on, int intervalId)> onAutoSave;
@@ -73,7 +73,7 @@ class SettingsContent : public juce::Component, private juce::Timer {
   void resized() override {
     auto r = getLocalBounds().reduced(16);
     r.removeFromTop(24);
-    selector_.setBounds(r.removeFromTop(390));
+    selector_.setBounds(r.removeFromTop(470));
     tone_.setBounds(r.removeFromTop(28).withTrimmedLeft(8));
     r.removeFromTop(22); metroY_ = r.getY(); r.removeFromTop(28);
     { auto br = r.removeFromTop(28).withTrimmedLeft(140); bpm_.setBounds(br.removeFromLeft(170)); br.removeFromLeft(8); tap_.setBounds(br.removeFromLeft(70)); }

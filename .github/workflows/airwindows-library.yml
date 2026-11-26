@@ -1,0 +1,77 @@
+# Builds AirwindowsFX.dll from the newest Airwindows Consolidated (github.com/baconpaul/airwin2rack) and publishes
+# it as a release ("airwindows-<date>-<commit>") that AirDAW's Plugins panel can install. Nothing is installed on
+# anyone's machine by this workflow: AirDAW only downloads a build when its user presses "Install update".
+# Runs weekly and on demand; skips when that Airwindows build has already been released.
+name: Airwindows plugin library
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild and replace the release even if this Airwindows build was already published
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the newest Airwindows Consolidated
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/baconpaul/airwin2rack airwin2rack-src
+          $id = git -C airwin2rack-src log -1 --format=%cd-%h --date=format:%Y.%m.%d
+          "BUILD_ID=$id" >> $env:GITHUB_ENV
+          "TAG=airwindows-$id" >> $env:GITHUB_ENV
+          Write-Host "Airwindows build $id"
+
+      - name: Already released?
+        id: check
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:TAG --repo $env:GITHUB_REPOSITORY *> $null
+          $exists = $LASTEXITCODE -eq 0
+          "exists=$($exists.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          if ($exists -and '${{ inputs.force }}' -ne 'true') { "skip=true" >> $env:GITHUB_OUTPUT; Write-Host "$env:TAG is already released" }
+          else { "skip=false" >> $env:GITHUB_OUTPUT }
+          exit 0
+
+      - name: Build AirwindowsFX.dll
+        if: steps.check.outputs.skip != 'true'
+        shell: pwsh
+        run: |
+          cmake -S fxlib -B build-fxlib -G "Visual Studio 17 2022" -A x64 -DAIRWIN2RACK_DIR="$pwd/airwin2rack-src" -DAIRDAW_FXLIB_BUILD="$env:BUILD_ID"
+          cmake --build build-fxlib --config Release --parallel
+
+      - name: Package (manifest with SHA-256 and effect list)
+        if: steps.check.outputs.skip != 'true'
+        shell: pwsh
+        run: |
+          $out = "build-fxlib/Release"
+          $sha = (Get-FileHash "$out/AirwindowsFX.dll" -Algorithm SHA256).Hash.ToLower()
+          # The manifest tool loads the DLL, so a broken build fails here instead of being published.
+          & "$out/airwindows_fxlib_manifest.exe" $sha | Out-File -Encoding utf8NoBOM manifest.json
+          if ($LASTEXITCODE -ne 0) { throw "manifest tool failed" }
+          Get-Content manifest.json -TotalCount 6
+          New-Item -ItemType Directory pkg | Out-Null
+          Copy-Item "$out/AirwindowsFX.dll", manifest.json pkg/
+          Compress-Archive -Path pkg/* -DestinationPath AirwindowsFX-win64.zip
+
+      - name: Publish release
+        if: steps.check.outputs.skip != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ('${{ steps.check.outputs.exists }}' -eq 'true') { gh release delete $env:TAG --yes --cleanup-tag --repo $env:GITHUB_REPOSITORY }
+          $notes = "Airwindows Consolidated $env:BUILD_ID (airwin2rack) built as AirwindowsFX.dll for AirDAW's Plugins panel.`nInstall it from AirDAW: Plugins > Install update. Previous builds stay installed so you can roll back."
+          gh release create $env:TAG AirwindowsFX-win64.zip manifest.json --repo $env:GITHUB_REPOSITORY --title "Airwindows plugin library $env:BUILD_ID" --notes $notes --latest=false

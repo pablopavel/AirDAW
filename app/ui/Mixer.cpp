@@ -60,9 +60,9 @@ void Mixer::resized() {
   relayout();
 }
 
-void Mixer::paint(juce::Graphics& g) { g.fillAll(juce::Colour(Theme::kPb)); }
+void Mixer::paint(juce::Graphics& g) { g.fillAll(T().pb()); }
 void Mixer::paintOverChildren(juce::Graphics& g) {
-  g.setColour(juce::Colours::black); g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), 6.f, 1.f);
+  g.setColour(juce::Colours::black); g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), T().rad(6.f), 1.f);
 }
 
 }  // namespace ui

@@ -43,6 +43,10 @@ std::string sessionToJson(Engine& e, const std::string& baseDir) {
   mj.set("enabled", JVal::boolean(m.enabled)).set("bpm", JVal::num(m.bpm)).set("beatsPerBar", JVal::num(m.beatsPerBar))
     .set("levelDb", JVal::num(m.levelDb)).set("countInBars", JVal::num(m.countInBars));
   root.set("metronome", mj);
+  {  // app-side per-project data (reference track, plugin MIDI mappings...), kept as a JSON object
+    JVal app; if (e.appData.empty() || !JVal::parse(e.appData, app) || app.type != JVal::Obj) app = JVal::obj();
+    root.set("app", app);
+  }
   JVal chs = JVal::arr();
   for (int id : allIds()) {
     Channel& c = chan(e, id);
@@ -111,6 +115,7 @@ SessionResult loadSession(Engine& e, const std::string& path) {
     m.beatsPerBar = std::clamp((int)mj->num("beatsPerBar", 4), 1, 16); m.levelDb = (float)mj->num("levelDb", -6);
     m.countInBars = std::clamp((int)mj->num("countInBars", 0), 0, 4);
   }
+  { const JVal* app = root.get("app"); e.appData = app && app->type == JVal::Obj ? app->dump() : std::string(); }  // "" = older session
   // The loaded session's takes replace the current ones (not appended to them).
   for (int t = 0; t < kMaxTracks; ++t) e.clearTakeList(t);
   // Clear existing inserts (only occupied slots, to keep the command queue small).

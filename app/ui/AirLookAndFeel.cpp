@@ -55,7 +55,7 @@ static void litColours(const juce::String& kind, juce::Colour& top, juce::Colour
 void AirLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool down) {
   auto r = b.getLocalBounds().toFloat().reduced(0.5f);
   const auto kind = b.getProperties()["kind"].toString();
-  const float corner = 4.f;
+  const float corner = T().rad(4.f);
   if (kind == "flat") {
     g.setColour(juce::Colour(over ? 0x22ffffff : 0x10ffffff));
     float dash[] = {5.f, 4.f};
@@ -118,8 +118,8 @@ void AirLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& b, 
 
 void AirLookAndFeel::drawComboBox(juce::Graphics& g, int w, int h, bool, int, int, int, int, juce::ComboBox& box) {
   juce::Rectangle<float> r(0.f, 0.f, (float)w, (float)h);
-  g.setColour(box.findColour(juce::ComboBox::backgroundColourId)); g.fillRoundedRectangle(r.reduced(0.5f), 4.f);
-  g.setColour(juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), 4.f, 1.f);
+  g.setColour(box.findColour(juce::ComboBox::backgroundColourId)); g.fillRoundedRectangle(r.reduced(0.5f), T().rad(4.f));
+  g.setColour(juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), T().rad(4.f), 1.f);
   juce::Path arrow; const float ax = (float)w - 14.f, ay = (float)h * 0.5f;
   arrow.addTriangle(ax - 4.f, ay - 2.f, ax + 4.f, ay - 2.f, ax, ay + 3.f);
   g.setColour(box.findColour(juce::ComboBox::arrowColourId).withAlpha(box.isEnabled() ? 1.f : 0.4f)); g.fillPath(arrow);

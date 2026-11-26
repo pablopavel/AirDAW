@@ -8,16 +8,16 @@ void Lcd::paint(juce::Graphics& g) {
   auto& t = T();
   t.drawGlow(g, r, t.am(), 12.f, 0.08f);
   t.drawWell(g, r, t.lcdBg(), 4.f);
-  g.setColour(juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), 4.f, 1.f);
+  g.setColour(juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), t.rad(4.f), 1.f);
   auto in = r.reduced(h_ > 30.f ? 22.f : 10.f, 4.f);
   auto cap = in.removeFromBottom(juce::jmax(10.f, h_ * 0.28f));
   auto font = Theme::spaced(Theme::monoFont(h_), 0.1f);
   const float tw = juce::GlyphArrangement::getStringWidth(font, text_);
   if (tw > in.getWidth() && tw > 0.f) font = font.withHeight(juce::jmax(9.f, h_ * in.getWidth() / tw));  // shrink to fit narrow windows
   g.setFont(font);
-  t.drawGlowText(g, text_, in, juce::Justification::centredLeft, col_.isTransparent() ? t.am() : col_, 1.f);
+  t.drawGlowText(g, text_, in, juce::Justification::centredLeft, col_.isTransparent() ? t.readout() : col_, 1.f);
   g.setFont(Theme::spaced(Theme::uiFont(juce::jmax(8.5f, h_ * 0.25f)), 0.2f));
-  g.setColour(t.amd());
+  g.setColour(t.readoutCaption());
   g.drawText(caption_, cap, juce::Justification::topLeft, false);
 }
 
@@ -72,7 +72,7 @@ void Reels::timerCallback() {
 void NamePlate::paint(juce::Graphics& g) {
   auto r = getLocalBounds().toFloat();
   T().drawGlow(g, r, Theme::cream(), 12.f, 0.09f);
-  g.setColour(Theme::cream()); g.fillRoundedRectangle(r, 3.f);
+  g.setColour(Theme::cream()); g.fillRoundedRectangle(r, T().rad(3.f));
   g.setColour(T().c(bar_)); g.fillRoundedRectangle(r.getX() + 14.f, r.getBottom() - 3.f, r.getWidth() - 28.f, 3.f, 1.5f);
   g.setColour(juce::Colour(0xff1b1b1b));
   g.setFont(Theme::spaced(Theme::uiFont(juce::jmin(15.f, r.getHeight() * 0.5f), true), 0.1f));
@@ -132,19 +132,21 @@ void GainKnob::paint(juce::Graphics& g) {
   const float ks = juce::jmin(32.f, r.getHeight() - 6.f);
   juce::Rectangle<float> k(r.getX() + 8.f, r.getCentreY() - ks / 2.f, ks, ks);
   g.setColour(juce::Colours::black.withAlpha(0.8f)); g.fillEllipse(k.translated(2.f, 4.f));
-  g.setGradientFill(juce::ColourGradient(juce::Colour(0xff4c4c50), k.getX() + ks * 0.35f, k.getY() + ks * 0.3f,
-                                         juce::Colour(0xff19191b), k.getX() + ks * 0.9f, k.getBottom(), true));
-  g.fillEllipse(k);
-  g.setColour(juce::Colour(0x33ffffff)); g.drawEllipse(k.reduced(0.5f), 0.7f);
+  if (!t.drawKnobCap(g, k)) {  // chrome
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff4c4c50), k.getX() + ks * 0.35f, k.getY() + ks * 0.3f,
+                                           juce::Colour(0xff19191b), k.getX() + ks * 0.9f, k.getBottom(), true));
+    g.fillEllipse(k);
+    g.setColour(juce::Colour(0x33ffffff)); g.drawEllipse(k.reduced(0.5f), 0.7f);
+  }
   const float ang = v_ / 24.f * 135.f * juce::MathConstants<float>::pi / 180.f;
   juce::Line<float> ptr(0, -ks / 2.f + 3.f, 0, -ks / 2.f + 12.f);
   ptr.applyTransform(juce::AffineTransform::rotation(ang).translated(k.getCentreX(), k.getCentreY()));
-  g.setColour(Theme::cream()); g.drawLine(ptr, 2.f);
+  g.setColour(t.knobPointer()); g.drawLine(ptr, 2.f);
   auto txt = r.withTrimmedLeft(ks + 14.f);
   g.setColour(Theme::dim()); g.setFont(Theme::spaced(Theme::uiFont(9.5f), 0.14f));
   g.drawText("GAIN", txt.removeFromTop(txt.getHeight() * 0.48f), juce::Justification::centredBottom);
   g.setFont(Theme::monoFont(12.5f));
-  t.drawGlowText(g, (v_ > 0 ? "+" : "") + juce::String(v_, 1), txt, juce::Justification::centredTop, t.am(), 0.6f);
+  t.drawGlowText(g, (v_ > 0 ? "+" : "") + juce::String(v_, 1), txt, juce::Justification::centredTop, t.readout(), 0.6f);
 }
 
 // ---------------- PanSlider ----------------
@@ -214,14 +216,7 @@ void FaderBlock::paint(juce::Graphics& g) {
   t.drawGlow(g, fill, t.am(), 5.f, 0.5f);
   g.setColour(t.am()); g.fillRect(fill);
   // fader cap
-  juce::Rectangle<float> cap(fx, y - 22.f, kFaderW, 44.f);
-  g.setColour(juce::Colours::black.withAlpha(0.85f)); g.fillRoundedRectangle(cap.translated(0.f, 6.f), 3.f);
-  juce::ColourGradient cg(juce::Colour(0xff161616), cap.getX(), 0, juce::Colour(0xff161616), cap.getRight(), 0, false);
-  cg.addColour(0.45, juce::Colour(0xff5e5e60));
-  g.setGradientFill(cg); g.fillRoundedRectangle(cap, 3.f);
-  g.setColour(juce::Colour(0xffcccccc)); g.fillRect(cap.getX() + 1.f, cap.getY(), cap.getWidth() - 2.f, 2.f);
-  g.setColour(t.am()); g.fillRect(cap.getX(), cap.getCentreY() - 1.75f, cap.getWidth(), 3.5f);
-  g.setColour(juce::Colour(0x88000000)); g.drawRoundedRectangle(cap, 3.f, 1.f);
+  t.drawFaderCap(g, juce::Rectangle<float>(fx, y - 22.f, kFaderW, 44.f));
   // ladder meters (aligned to the dB scale)
   const float lx = fx + kFaderW + kGap;
   for (int ch = 0; ch < 2; ++ch) {
@@ -243,7 +238,7 @@ void FaderBlock::paint(juce::Graphics& g) {
   auto rd = getLocalBounds().toFloat().removeFromBottom(bigReadout ? 52.f : kReadH).reduced(2.f, 0.f);
   t.drawWell(g, rd, t.lcdBg(), 3.f);
   g.setFont(Theme::monoFont(bigReadout ? 34.f : 14.f));
-  t.drawGlowText(g, dbText(dbOf(v_)), rd, juce::Justification::centred, t.am(), 0.8f);
+  t.drawGlowText(g, dbText(dbOf(v_)), rd, juce::Justification::centred, t.readout(), 0.8f);
 }
 
 // ---------------- PluginKnob ----------------
@@ -271,11 +266,13 @@ void PluginKnob::paint(juce::Graphics& g) {
   // chrome cap
   auto cap = k.reduced(8.f);
   g.setColour(juce::Colours::black.withAlpha(0.85f)); g.fillEllipse(cap.translated(4.f, 6.f));
-  juce::ColourGradient cg(juce::Colour(0xff9a9a9f), cap.getX() + cap.getWidth() * 0.3f, cap.getY() + cap.getHeight() * 0.25f,
-                          juce::Colour(0xff2b2b2d), cap.getRight(), cap.getBottom(), true);
-  cg.addColour(0.45, juce::Colour(0xff5d5d61));
-  g.setGradientFill(cg); g.fillEllipse(cap);
-  g.setColour(juce::Colour(0x66ffffff)); g.drawEllipse(cap.reduced(1.f), 0.8f);
+  if (!t.drawKnobCap(g, cap)) {  // chrome
+    juce::ColourGradient cg(juce::Colour(0xff9a9a9f), cap.getX() + cap.getWidth() * 0.3f, cap.getY() + cap.getHeight() * 0.25f,
+                            juce::Colour(0xff2b2b2d), cap.getRight(), cap.getBottom(), true);
+    cg.addColour(0.45, juce::Colour(0xff5d5d61));
+    g.setGradientFill(cg); g.fillEllipse(cap);
+    g.setColour(juce::Colour(0x66ffffff)); g.drawEllipse(cap.reduced(1.f), 0.8f);
+  }
   // pointer
   juce::Path p; p.addRoundedRectangle(-2.f, -D / 2.f + 10.f, 4.f, 11.f, 2.f);
   p.applyTransform(juce::AffineTransform::rotation(a0 + span * v).translated(c.x, c.y));
@@ -298,7 +295,7 @@ void VuMeter::paint(juce::Graphics& g) {
   auto P = [&](float x, float y) { return juce::Point<float>(ox + x * s, oy + y * s); };
   juce::Rectangle<float> face(ox, oy, 120.f * s, 70.f * s);
   t.drawGlow(g, face, t.am(), 16.f, 0.16f);
-  g.setColour(Theme::cream()); g.fillRoundedRectangle(face, 3.f);
+  g.setColour(t.vuFaceColour()); g.fillRoundedRectangle(face, 3.f);
   for (int k = 0; k < 11; ++k) {
     const float a = (-50.f + k * 10.f) * juce::MathConstants<float>::pi / 180.f;
     g.setColour(juce::Colour(k > 6 ? 0xffcc2222 : 0xff222222));

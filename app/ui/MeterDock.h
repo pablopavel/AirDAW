@@ -159,6 +159,8 @@ class MeterDock : public juce::Component {
         syncMonitor();
       };
       addAndMakeVisible(b);
+      static const char* mids[7] = {"mon.mono", "mon.dim", "mon.pol", "mon.left", "mon.right", "mon.mid", "mon.side"};
+      tagMidi(b, mids[i]);
     }
   }
   void syncMonitor() {  // reflect the engine's monitor state (~10x/s)
@@ -191,7 +193,7 @@ class MeterDock : public juce::Component {
     auto& t = T();
     auto r = getLocalBounds().toFloat();
     t.drawGlow(g, r, t.am(), 26.f, 0.09f);
-    g.setColour(juce::Colour(Theme::kBg)); g.fillRoundedRectangle(r, 6.f);
+    g.setColour(T().bg()); g.fillRoundedRectangle(r, T().rad(6.f));
     auto head = r.removeFromTop(kHead);
     t.drawBrush(g, head);
     g.setColour(juce::Colours::black); g.fillRect(head.removeFromBottom(1.f));
@@ -212,7 +214,7 @@ class MeterDock : public juce::Component {
                        "Load it once; it sits on the last master insert and its display shows here.",
                        meterArea().reduced(16).withTrimmedBottom(50), juce::Justification::centred, 4);
     }
-    g.setColour(juce::Colours::black); g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), 6.f, 1.f);
+    g.setColour(juce::Colours::black); g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), T().rad(6.f), 1.f);
   }
 
   void resized() override {

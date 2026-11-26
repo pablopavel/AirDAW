@@ -4,6 +4,7 @@
 #include "AppCtx.h"
 #include "airdaw/analysis.h"
 #include "Widgets.h"
+#include "../midi/MidiControl.h"
 
 namespace ui {
 

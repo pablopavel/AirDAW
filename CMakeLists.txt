@@ -12,9 +12,14 @@ endif()
 # Airwindows Consolidated (MIT) provides every Airwindows effect behind one registry API.
 # It is compiled straight into AirDAW: no VST wrapper, no per-plugin DLLs.
 add_subdirectory(third_party/airwin2rack EXCLUDE_FROM_ALL)
+# The same Airwindows code can also be built as a separate library (AirwindowsFX.dll) that AirDAW loads instead
+# of the built-in copy: the Plugins panel installs newer builds from the repo's releases (fxlib/, .github/workflows).
+include(cmake/AirwindowsFxLib.cmake)
+airdaw_airwin_build_id(${CMAKE_CURRENT_SOURCE_DIR}/third_party/airwin2rack AIRDAW_FXLIB_BUILD)
 
 add_library(airdaw_core STATIC
   core/src/fx_host.cpp
+  core/src/fxlib_api.cpp
   core/src/engine.cpp
   core/src/wav_io.cpp
   core/src/disk_writer.cpp
@@ -25,11 +30,15 @@ add_library(airdaw_core STATIC
 find_package(Threads REQUIRED)
 target_include_directories(airdaw_core PUBLIC core/include)
 target_link_libraries(airdaw_core PUBLIC airwin-registry Threads::Threads)
+target_compile_definitions(airdaw_core PRIVATE AIRDAW_FXLIB_BUILD="${AIRDAW_FXLIB_BUILD}")
+airdaw_add_fxlib(${CMAKE_CURRENT_SOURCE_DIR} "${AIRDAW_FXLIB_BUILD}")
 
 option(AIRDAW_BUILD_TESTS "Build headless engine tests" ON)
 if(AIRDAW_BUILD_TESTS)
   add_executable(engine_tests tests/engine_tests.cpp)
   target_link_libraries(engine_tests PRIVATE airdaw_core)
+  add_dependencies(engine_tests airwindows_fxlib)  # the tests load the DLL and compare it with the built-in copy
+  target_compile_definitions(engine_tests PRIVATE AIRDAW_FXLIB_PATH="$<TARGET_FILE:airwindows_fxlib>")
   # main() holds ~40 test engines (~34 KB each) in separate blocks; MSVC gives most their own stack
   # space, which overflows Windows' 1 MB default. Match the 8 MB Linux default.
   if(MSVC)
@@ -46,7 +55,7 @@ if(AIRDAW_BUILD_APP)
   target_sources(AirDAW PRIVATE app/Main.cpp app/MainComponent.cpp app/MainComponent.h app/AudioBridge.h app/Platform.cpp app/Vst3Insert.h app/PluginWindow.h
     app/ui/Theme.cpp app/ui/AirLookAndFeel.cpp app/ui/Widgets.cpp app/ui/Strip.cpp app/ui/Mixer.cpp app/ui/Deck.cpp
     app/ui/Overview.cpp app/ui/InsertPanel.cpp app/ui/DisplayPanel.cpp app/ui/TakesBar.cpp
-    app/ui/tools/ToolSet.cpp app/ui/tools/Tools.cpp)
+    app/ui/tools/ToolSet.cpp app/ui/tools/Tools.cpp app/midi/MidiControl.cpp app/ui/PluginsPanel.cpp)
   target_include_directories(AirDAW PRIVATE app)
   target_compile_definitions(AirDAW PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_USE_MP3AUDIOFORMAT=1 JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_VST=0 JUCE_PLUGINHOST_LADSPA=0 JUCE_PLUGINHOST_LV2=0 JUCE_PLUGINHOST_AU=0 JUCE_APPLICATION_NAME_STRING="AirDAW" JUCE_APPLICATION_VERSION_STRING="0.1.0")
@@ -67,6 +76,6 @@ if(AIRDAW_BUILD_APP)
   endif()
   target_link_libraries(AirDAW PRIVATE airdaw_core
     juce::juce_audio_basics juce::juce_audio_devices juce::juce_audio_processors juce::juce_audio_utils
-    juce::juce_gui_basics juce::juce_events juce::juce_core
+    juce::juce_gui_basics juce::juce_events juce::juce_core juce::juce_cryptography
     juce::juce_recommended_config_flags)
 endif()

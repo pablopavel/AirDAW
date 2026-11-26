@@ -34,10 +34,10 @@ void MiniReadout::paint(juce::Graphics& g) {
   auto r = getLocalBounds().toFloat();
   t.drawWell(g, r, t.lcdBg(), 3.f);
   auto cap = r.removeFromTop(r.getHeight() * 0.36f);
-  g.setColour(t.amd()); g.setFont(Theme::spaced(Theme::uiFont(juce::jmin(10.f, cap.getHeight() * 0.8f)), 0.1f));
+  g.setColour(t.readoutCaption()); g.setFont(Theme::spaced(Theme::uiFont(juce::jmin(10.f, cap.getHeight() * 0.8f)), 0.1f));
   g.drawText(cap_, cap, juce::Justification::centredBottom);
   g.setFont(Theme::monoFont(juce::jmin(26.f, r.getHeight() * 0.75f)));
-  t.drawGlowText(g, v_, r, juce::Justification::centred, c_.isTransparent() ? t.am() : c_, 0.7f);
+  t.drawGlowText(g, v_, r, juce::Justification::centred, c_.isTransparent() ? t.readout() : c_, 0.7f);
 }
 
 // ---------------- MonitorButton ----------------
@@ -116,6 +116,11 @@ Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
   pol_.getProperties().set("fontH", 11.0); pol_.getProperties().set("noUpper", true);
   pol_.setTooltip("Polarity: flip this channel (after its input and trim, before the inserts). Takes are still recorded as they come in.");
   pol_.onClick = [this] { if (auto* e = ctx_.engine()) if (auto* c = channelOf(*e, id_)) c->polarity = !c->polarity.load(); };
+  // MIDI Learn targets ("ch.<id>.<control>")
+  const juce::String mid = "ch." + juce::String(id) + ".";
+  tagMidi(fader_, mid + "fader"); tagMidi(pan_, mid + "pan"); tagMidi(gain_, mid + "trim");
+  tagMidi(m_, mid + "mute"); tagMidi(s_, mid + "solo"); tagMidi(pol_, mid + "polarity");
+  if (!isBus(id)) { tagMidi(r_, mid + "arm"); tagMidi(mon_, mid + "monitor"); }
   setSize(kWidth, 600);
 }
 
@@ -258,6 +263,7 @@ MasterStrip::MasterStrip(AppCtx& ctx) : ctx_(ctx) {
   auto reset = [this] { clipped_ = false; if (onResetLoudness) onResetLoudness(); };
   li_.onClick = reset; tp_.onClick = reset; clip_.onClick = reset;
   fader_.onChange = [this](float v) { if (auto* e = ctx_.engine()) e->master().gainDb = juce::jmax(-200.f, dbOf(v)); };
+  tagMidi(fader_, "ch.200.fader");
 }
 
 void MasterStrip::sync() {

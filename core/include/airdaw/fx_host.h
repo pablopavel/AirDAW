@@ -1,13 +1,13 @@
-// Hosts one Airwindows effect (from the Consolidated registry) as an insert.
+// Hosts one Airwindows effect as an insert. Effects come from the active Airwindows library
+// (built in, or a newer AirwindowsFX.dll: see fx_library.h).
 #pragma once
 #include <array>
 #include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
+#include "airdaw/fx_library.h"
 #include "airdaw/insert.h"
-
-struct AirwinConsolidatedBase;
 
 namespace airdaw {
 
@@ -50,7 +50,8 @@ class FxInstance : public InsertProcessor {
  private:
   FxInstance() = default;
   std::string name_;
-  std::unique_ptr<AirwinConsolidatedBase> fx_;
+  const AwlApi* api_ = nullptr;  // the library that made it (destroy / process go back to it)
+  void* fx_ = nullptr;
   int numParams_ = 0;
   bool isMono_ = false;
   std::vector<FxParamInfo> params_;

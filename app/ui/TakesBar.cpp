@@ -150,8 +150,8 @@ void TakesBar::Chip::paint(juce::Graphics& g) {
     t.drawGlow(g, r, t.am(), 12.f, 0.35f);
     g.setGradientFill(juce::ColourGradient(t.c(0xffffc46b), 0, r.getY(), t.c(0xffd98e24), 0, r.getBottom(), false));
   } else g.setGradientFill(juce::ColourGradient(juce::Colour(0xff3c3c3f), 0, r.getY(), juce::Colour(0xff262628), 0, r.getBottom(), false));
-  g.fillRoundedRectangle(r, 4.f);
-  g.setColour(juce::Colours::black); g.drawRoundedRectangle(r, 4.f, 1.f);
+  g.fillRoundedRectangle(r, T().rad(4.f));
+  g.setColour(juce::Colours::black); g.drawRoundedRectangle(r, T().rad(4.f), 1.f);
   const juce::Colour ink = active ? juce::Colour(0xff2a1800) : kept ? t.am() : Theme::tx();
   auto tr = r.reduced(9.f, 0.f);
   auto wave = tr.removeFromRight(72.f).reduced(0.f, 7.f);

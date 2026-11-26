@@ -12,11 +12,14 @@
 #include "ui/Mixer.h"
 #include "ui/Overview.h"
 #include "ui/PluginInfo.h"
+#include "ui/PluginsPanel.h"
 #include "ui/SettingsWindow.h"
 #include "ui/TakesBar.h"
 #include "ui/tools/AnalysisHub.h"
 #include "ui/tools/ToolSet.h"
 #include "ui/tools/ListenRow.h"
+#include "midi/MidiControl.h"
+#include "midi/MidiLearnOverlay.h"
 
 // The AirDAW main window (layout and look from docs/airdaw-v4.html):
 // deck | song overview | insert panel (when open) | mixer | meter dock | footer.
@@ -90,6 +93,9 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   bool listen_ = false;
   void setListen(bool on);
   ui::DisplayPanel display_;
+  ui::PluginsPanel pluginsPanel_{ctx_};
+  void togglePluginsPanel();
+  bool pluginsChecked_ = false;
   struct Splitter : juce::Component, juce::SettableTooltipClient {
     std::function<void(int)> onDrag; int start = 0; std::function<int()> current;
     void paint(juce::Graphics&) override;
@@ -114,8 +120,21 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   void resetMeters();
   void chooseReference();
   void decodeReference(const juce::File& f, bool quiet);
+  int refGen_ = 0;  // newest reference decode (an older one finishing later is dropped)
+  // Per-project app data (stored in the session's "app" object): reference track, plugin MIDI mappings.
+  juce::var projectData() const;
+  void setProjectValue(const juce::String& key, const juce::var& v);
+  // Loads the project's own reference (or none). `adoptGlobal`: a project saved before references were per
+  // project takes the last reference used app-wide.
+  void restoreProjectReference(bool adoptGlobal);
   void pumpAnalysis(airdaw::Engine& e);
   std::unique_ptr<juce::TooltipWindow> tooltips_;
+  // MIDI Learn
+  std::unique_ptr<ui::MidiControl> midi_;
+  std::unique_ptr<ui::MidiLearnOverlay> learnOverlay_;
+  std::unique_ptr<ui::MidiMappingsWindow> midiWindow_;
+  void midiChanged();
+  void showMidiMappings();
 
   int dockHeight_ = 330;
   bool dockShown_ = true;
@@ -129,6 +148,10 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   bool noticeWarn_ = false;
   juce::uint32 noticeUntil_ = 0, lastCallbacks_ = 0;
   double lastCallbackSeen_ = 0;
+  double lastReconnect_ = 0, reconnectDelay_ = 5000.0;  // automatic reopen of the saved device after it dropped out
+  bool reconnectStopped_ = false;
+  std::unique_ptr<juce::FileLogger> log_;  // %APPDATA%/AirDAW/AirDAW.log: startup, devices, MIDI (diagnostics)
+  bool reconnecting_ = false;
   int tick_ = 0;
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

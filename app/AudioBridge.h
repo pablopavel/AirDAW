@@ -3,6 +3,8 @@
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <atomic>
 #include <memory>
+#include <mutex>
+#include <vector>
 #include <filesystem>
 #include "airdaw/engine.h"
 #include "airdaw/session.h"
@@ -43,7 +45,11 @@ class AudioBridge : public juce::AudioIODeviceCallback {
         if (airdaw::saveSession(*owned_, tmp).ok) airdaw::loadSession(*fresh, tmp);
       }
       engine_.store(fresh.get(), std::memory_order_release);
-      owned_ = std::move(fresh);  // audio is stopped here, so the old engine can be destroyed
+      // Audio is stopped here, but the UI may still show the old engine's hosted plugins (the Hit Record Meter's
+      // display in the dock, a plugin window): the old engine is kept until the UI has let go (releaseRetired()).
+      std::lock_guard<std::mutex> lk(retiredLock_);
+      if (owned_) retired_.push_back(std::move(owned_));
+      owned_ = std::move(fresh);
     }
     sr_ = sr;
     phase_ = 0;
@@ -75,6 +81,12 @@ class AudioBridge : public juce::AudioIODeviceCallback {
     }
   }
 
+  // Message thread, after the UI has dropped everything that belonged to replaced engines.
+  void releaseRetired() {
+    std::vector<std::unique_ptr<airdaw::Engine>> old;
+    { std::lock_guard<std::mutex> lk(retiredLock_); old.swap(retired_); }
+  }
+
   int bufferSamples() const { return bufferSize_; }
   int deviceLatencySamples() const { return latency_; }
   double sampleRate() const { return sr_; }
@@ -83,6 +95,8 @@ class AudioBridge : public juce::AudioIODeviceCallback {
   airdaw::InsertFactory factory_;
   std::unique_ptr<airdaw::Engine> owned_;
   std::atomic<airdaw::Engine*> engine_{nullptr};
+  std::mutex retiredLock_;
+  std::vector<std::unique_ptr<airdaw::Engine>> retired_;  // replaced engines, freed by releaseRetired()
   std::vector<float> tone_;
   bool toneOn_ = false;
   int savedInput_ = -1;

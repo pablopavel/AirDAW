@@ -1,4 +1,4 @@
-// AirDAW look: palette, accent hue, glow strength and UI scale (ported from docs/airdaw-v4.html).
+// AirDAW look: palette, accent hue, glow, UI scale and every Display-panel option (ported from docs/airdaw-v4.html).
 // Every amber-family colour of the mockup goes through Theme::c(), which rotates it to the chosen accent
 // hue exactly like the mockup's mapHex(), so one accent recolours the whole UI uniformly.
 #pragma once
@@ -14,17 +14,33 @@ class Theme : public juce::ChangeBroadcaster {
   float hue = 37.f;   // accent hue in degrees; 37 = the mockup's amber
   float glow = 1.f;   // 0 Off, 0.5 Soft, 1 Normal, 1.6 Strong, 2.4 Max
   int scalePct = 100; // 100..200 in steps of 25
+  // Display-panel options. Values are the mockup's option ids (see Theme.cpp).
+  juce::String panel = "oled", faceplate = "brushed", tint = "charcoal", corners = "normal", knobs = "chrome",
+               faders = "chrome", vuFace = "cream", readouts = "accent", typeface = "modern", trimMat = "wood",
+               species = "walnut", grain = "fine", trimWidth = "normal";
+  bool screws = false, reels = true, trim = true, pixelShift = true;
 
   void load(juce::PropertiesFile& p);
   void save(juce::PropertiesFile& p) const;
-  void resetLook() { hue = 37.f; glow = 1.f; }
-  void changed() { sendChangeMessage(); }
+  void resetLook();                                   // the Studio look, 100% scale, pixel shift on
+  void changed() { tile_ = {}; sendChangeMessage(); }
+
+  // Generic option access for the Display panel. Keys: hue, glow, panel, fp, tint, rd, knob, fd, vu, lcd, font,
+  // mat, ws, gr, ww, scr, reels, wood, shift (booleans as "1" / "0").
+  juce::String option(const juce::String& key) const;
+  void setOption(const juce::String& key, const juce::String& value);
+  // Eras (e50 e60 e70 e80 e90 e00) and classics (amber neon ice lounge vintage): set a whole look at once.
+  void applyPreset(const juce::String& id);
+  bool presetActive(const juce::String& id) const;
 
   // Maps a mockup colour (0xAARRGGBB) to the current accent: amber-family hues are rotated.
   juce::Colour c(juce::uint32 argb) const;
 
-  // --- fixed palette (OLED theme of the mockup) ---
-  static constexpr juce::uint32 kBg = 0xff000000, kM1 = 0xff1b1b1d, kM2 = 0xff0b0b0c, kPb = 0xff050505;
+  // --- palette (OLED / Standard panel, tint) ---
+  juce::Colour m1() const;  // faceplate gradient top
+  juce::Colour m2() const;  // faceplate gradient bottom
+  juce::Colour pb() const;  // panel background (mixer, overview)
+  juce::Colour bg() const;  // window background
   static constexpr juce::uint32 kTx = 0xffe0d9c7, kDim = 0xff9a9486, kCream = 0xffe9dfc2;
   static constexpr juce::uint32 kAm = 0xffffb347, kAmd = 0xff8a5d26, kAmLight = 0xffffd27a, kLcdBg = 0xff100a03;
   static constexpr juce::uint32 kRed = 0xffe5484d;
@@ -32,17 +48,26 @@ class Theme : public juce::ChangeBroadcaster {
   juce::Colour am() const { return c(kAm); }
   juce::Colour amd() const { return c(kAmd); }
   juce::Colour amLight() const { return c(kAmLight); }
-  juce::Colour lcdBg() const { return juce::Colour(kLcdBg); }  // not remapped (dark, low saturation)
+  juce::Colour lcdBg() const;           // readout wells (dark amber, or near-black with a coloured readout)
+  juce::Colour readout() const;         // readout text: the accent, or Red LED / Green / VFD cyan / White
+  juce::Colour readoutCaption() const;  // small captions inside readouts
+  juce::Colour vuFaceColour() const;
   static juce::Colour tx() { return juce::Colour(kTx); }
   static juce::Colour dim() { return juce::Colour(kDim); }
   static juce::Colour cream() { return juce::Colour(kCream); }
+
+  // Corner radius following the Corners option (Sharp ~1 px, Normal as designed, Round much rounder).
+  float rad(float r) const;
+  // Side trim width and bottom rail height (0 when the trim is off).
+  int trimW() const;
+  int railH() const;
 
   // Glow alpha multiplier and blur radius following the Glow setting (mockup glowCss()).
   float glowAlpha(float a) const { return juce::jlimit(0.f, 1.f, a * glow); }
   int glowRadius(float r) const { return juce::roundToInt(r * (0.6f + 0.4f * glow)); }
 
   // --- drawing helpers shared by all components ---
-  // Brushed-metal faceplate (mockup .brush): vertical gradient + fine vertical hairlines.
+  // Faceplate (mockup .brush and the Faceplate option): palette gradient + texture.
   void drawBrush(juce::Graphics& g, juce::Rectangle<float> r, bool bus = false) const;
   // Soft glow around a rectangle in colour `col` (scaled by the Glow setting).
   void drawGlow(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour col, float radius, float alpha = 0.55f) const;
@@ -51,6 +76,13 @@ class Theme : public juce::ChangeBroadcaster {
                     juce::Colour col, float glowAmt = 1.f) const;
   // Inset dark well (meters, LCDs, readouts).
   void drawWell(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour fill, float corner = 3.f) const;
+  // Side trim / rail (wood species + grain, rack ears, tolex, chrome). `vertical`: a side piece.
+  void drawTrim(juce::Graphics& g, juce::Rectangle<int> r, bool vertical, bool leftSide) const;
+  void drawScrew(juce::Graphics& g, juce::Point<float> centre) const;
+  // Knob cap in the chosen material; false for Chrome (each knob keeps its own chrome drawing).
+  bool drawKnobCap(juce::Graphics& g, juce::Rectangle<float> cap) const;
+  juce::Colour knobPointer() const;  // pointer line on small knobs (dark on Ivory / Gold)
+  void drawFaderCap(juce::Graphics& g, juce::Rectangle<float> cap) const;
 
   static juce::Font uiFont(float h, bool bold = false);
   static juce::Font monoFont(float h, bool bold = true);
@@ -61,6 +93,10 @@ class Theme : public juce::ChangeBroadcaster {
                                                     0xffb38cff, 0xff5a8bff, 0xff6ec6ff, 0xff4fe0c8, 0xff6dff9a, 0xffb5e84f};
   static constexpr const char* kAccentNames[12] = {"Amber", "Gold", "Orange", "Red", "Rose", "Magenta",
                                                    "Violet", "Blue", "Ice", "Teal", "Phosphor", "Lime"};
+
+ private:
+  const juce::Image& texture() const;  // faceplate texture tile for the current faceplate / panel
+  mutable juce::Image tile_;
 };
 
 inline Theme& T() { return Theme::get(); }
