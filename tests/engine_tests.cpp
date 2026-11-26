@@ -63,7 +63,7 @@ static std::string tmpDir() {
 static const bool kQuick = std::getenv("AIRDAW_QUICK") != nullptr;  // short runs (for sanitizers)
 static float db(float x) { return 20 * std::log10(std::max(x, 1e-9f)); }
 
-// Own function (own stack frame): MSVC gives every block-scoped Engine in main() its own stack slot.
+// Metronome: clicks on the beat grid, accent on beat 1, output only (never recorded), count-in.
 static void testMetronome() {
   { const int beat = 48000;  // 120 BPM at 96 kHz
     const int clickLen = (int)(SR * 0.03);
@@ -111,6 +111,36 @@ static void testMetronome() {
       auto p = tmpDir() + "/metro.airdaw"; CHECK(saveSession(a, p).ok, "metro save");
       Engine b(SR); CHECK(loadSession(b, p).ok, "metro load"); auto& n = b.metronome();
       CHECK(n.enabled && n.bpm == 93.5f && n.beatsPerBar == 7 && n.levelDb == -12.f && n.countInBars == 2, "metronome settings round trip"); } }
+}
+
+// Loading a session (or New) replaces the take list instead of appending to it, so takes never leak
+// from one project into the next. Moved take files keep working via setTakePath.
+static void testTakeLists() {
+  auto dir = tmpDir();
+  Engine e(SR); e.track(0).inputL = 0; e.track(0).armed = true;
+  long k = 0; e.startRecording(dir); stream(e, k, 5000); e.transport().stop(); stream(e, k, 100); e.flushRecording();
+  auto f = e.pollFinishedTakes(); CHECK(f.size() == 1, "take lists: recorded %zu takes", f.size());
+  if (f.size() != 1) return;
+  e.track(0).armed = false;
+  CHECK(e.addTake(0, f[0].path, f[0].start) == 0, "first take index"); e.setActiveTake(0, 0);
+  const Take* first = e.takeAt(0, 0);
+  CHECK(saveSession(e, dir + "/a.airdaw").ok, "save a");
+  { Engine blank(SR); CHECK(saveSession(blank, dir + "/blank.airdaw").ok, "save blank"); }
+  CHECK(loadSession(e, dir + "/blank.airdaw").ok, "load blank");
+  CHECK(e.numTakes(0) == 0 && e.track(0).take.load() == nullptr, "new session must start with no takes (numTakes=%d)", e.numTakes(0));
+  CHECK(first->l.size() == 5000, "earlier take must stay in memory after the list is cleared");
+  CHECK(loadSession(e, dir + "/a.airdaw").ok && loadSession(e, dir + "/a.airdaw").ok, "load a twice");
+  CHECK(e.numTakes(0) == 1 && e.track(0).take.load() == e.takeAt(0, 0), "reloading must not duplicate takes (numTakes=%d)", e.numTakes(0));
+  e.transport().seek(0); e.transport().play(); e.track(0).pan = -1.f;
+  long k2 = 0; auto out = stream(e, k2, 5000); e.transport().stop();
+  bool pb = true; for (size_t i = 0; pb && i < out.size(); ++i) pb = std::fabs(out[i] - sigAt((long)i)) < 1e-6f;
+  CHECK(pb, "take plays back after reload");
+  // Move the file (as Save As does) and point the take at it: the next save must reference the new place.
+  auto moved = dir + "/audio_moved.wav"; std::filesystem::rename(f[0].path, moved);
+  e.setTakePath(0, 0, moved); CHECK(saveSession(e, dir + "/b.airdaw").ok, "save b");
+  Engine e2(SR); auto r = loadSession(e2, dir + "/b.airdaw");
+  CHECK(r.ok && r.warnings.empty() && e2.numTakes(0) == 1 && e2.takeAt(0, 0)->l.size() == 5000, "moved take reloads (warnings=%zu)", r.warnings.size());
+  std::printf("take lists: replaced on load/new, no duplicates, playback after reload, moved files follow\n");
 }
 
 int main() {
@@ -210,6 +240,7 @@ int main() {
 
   // 13b. Metronome: clicks on the beat grid, accent on beat 1, output only (never recorded), count-in
   testMetronome();
+  testTakeLists();
 
   // 14. Session save/load round trip, including plugin parameters, takes, loop/punch
   { auto dir = tmpDir(); std::string sess = dir + "/song.airdaw";

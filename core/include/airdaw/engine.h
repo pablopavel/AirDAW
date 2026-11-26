@@ -97,8 +97,16 @@ class Engine {
   // Loads a WAV as a take for a track; returns its index or -1. Takes live until the engine is destroyed.
   int addTake(int track, const std::string& path, int64_t startSample);
   void setActiveTake(int track, int index);  // -1 = none
-  int numTakes(int track) const { return (int)takes_[track].size(); }
-  const Take* takeAt(int track, int i) const { return takes_[track][i].get(); }
+  // Take list of the current session. Indices are relative to the list (what sessions save).
+  int numTakes(int track) const { return (int)takes_[track].size() - takeBase_[track]; }
+  const Take* takeAt(int track, int i) const { return takes_[track][takeBase_[track] + i].get(); }
+  // Starts an empty take list for a track (session load / new session) and deactivates its take.
+  // Earlier takes stay in memory until the engine is destroyed (the audio thread may still be reading
+  // one), but are no longer listed or saved. UI thread only.
+  void clearTakeList(int track);
+  // Records that a take's file moved (e.g. into a project folder on Save As). UI thread only:
+  // the audio thread never reads `path`.
+  void setTakePath(int track, int i, const std::string& path) { takes_[track][takeBase_[track] + i]->path = path; }
 
   // Worker threads for parallel track/bus processing (-1 = automatic: cores-1, max 7; 0 = single-threaded).
   // Not real-time safe: call while audio is stopped. Output is bit-identical for any thread count.
@@ -132,6 +140,7 @@ class Engine {
   Metronome metro_;
   std::unique_ptr<DiskWriter> writer_;
   std::array<std::vector<std::unique_ptr<Take>>, kMaxTracks> takes_;
+  std::array<int, kMaxTracks> takeBase_{};  // first take of the current session's list
   std::array<Channel, kMaxTracks> tracks_;
   std::array<Channel, kNumBuses> buses_;
   Channel master_;

@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "Vst3Insert.h"
+#include <map>
 
 static constexpr int kMeterSlot = 7;  // last master insert slot: the meter listens to the final mix
 
@@ -26,7 +27,7 @@ MainComponent::MainComponent() {
   selector_ = std::make_unique<juce::AudioDeviceSelectorComponent>(devices_, 0, 2, 0, 2, false, false, true, false);
   for (juce::Component* c : std::initializer_list<juce::Component*>{selector_.get(), &rtz_, &play_, &stop_, &rec_, &arm1_, &arm2_, &tone_,
        &save_, &saveAs_, &open_, &new_, &meter_, &meterEd_, &autoSave_, &autoEvery_, &status_, &pos_, &notice_label_,
-       &metro_, &bpmLabel_, &bpm_, &beats_, &countIn_, &levelLabel_, &clickLevel_})
+       &metro_, &bpmLabel_, &bpm_, &beats_, &countIn_, &levelLabel_, &clickLevel_, &lastAutoSave_})
     addAndMakeVisible(*c);
 
   rtz_.onClick = [this] { if (auto* e = bridge_.engine()) e->transport().seek(0); };
@@ -144,7 +145,7 @@ void MainComponent::updateDeviceStatus() {
 
 juce::File MainComponent::sessionFolder() const {
   if (sessionFile_ != juce::File()) return sessionFile_.getParentDirectory();
-  return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("AirDAW").getChildFile("Untitled");
+  return scratchFolder();  // unsaved session: takes and auto-saves go here until Save As makes a project folder
 }
 juce::String MainComponent::sessionName() const {
   return sessionFile_ != juce::File() ? sessionFile_.getFileNameWithoutExtension() : juce::String("Untitled");
@@ -155,6 +156,7 @@ void MainComponent::setSessionFile(const juce::File& f) {
   if (autoSaver_) autoSaver_->setLocation(sessionFolder().getChildFile("autosave").getFullPathName().toStdString(),
                                           sessionName().toStdString());
   getTopLevelComponent()->setName("AirDAW - " + sessionName());
+  lastAutoSave_.setText(autoSave_.getToggleState() ? "No auto-save yet for " + sessionName() : "Auto-save is off", juce::dontSendNotification);
 }
 
 void MainComponent::applyAutoSaveSettings() {
@@ -162,6 +164,9 @@ void MainComponent::applyAutoSaveSettings() {
   airdaw::AutoSaveSettings s;
   s.enabled = autoSave_.getToggleState(); s.intervalSec = secs[juce::jlimit(1, 6, autoEvery_.getSelectedId())]; s.keep = 10;
   if (autoSaver_) autoSaver_->configure(s);
+  if (!s.enabled) lastAutoSave_.setText("Auto-save is off", juce::dontSendNotification);
+  else if (!lastAutoSave_.getText().startsWith("Last auto-save"))
+    lastAutoSave_.setText("No auto-save yet for " + sessionName() + " (first one after the interval)", juce::dontSendNotification);
   props_->setValue("autosaveOn", s.enabled); props_->setValue("autosaveSec", s.intervalSec); props_->saveIfNeeded();
 }
 
@@ -181,22 +186,78 @@ void MainComponent::newSession() {
       });
 }
 
+juce::File MainComponent::projectsRoot() {
+  return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("AirDAW");
+}
+juce::File MainComponent::scratchFolder() { return projectsRoot().getChildFile("Untitled"); }
+
 void MainComponent::saveSession(bool saveAs) {
   auto* e = bridge_.engine(); if (!e) return;
-  auto doSave = [this, e](const juce::File& f) {
-    auto r = airdaw::saveSession(*e, f.getFullPathName().toStdString());
-    if (r.ok) { setSessionFile(f); note("Saved " + f.getFileName()); } else note("SAVE FAILED: " + r.error);
-  };
-  if (!saveAs && sessionFile_ != juce::File()) { doSave(sessionFile_); return; }
-  auto start = sessionFolder(); start.createDirectory();
-  chooser_ = std::make_shared<juce::FileChooser>("Save session", start.getChildFile(sessionName() + ".airdaw"), "*.airdaw");
-  chooser_->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles |
-                        juce::FileBrowserComponent::warnAboutOverwriting,
-      [doSave](const juce::FileChooser& c) { auto f = c.getResult(); if (f != juce::File()) doSave(f.withFileExtension("airdaw")); });
+  if (!saveAs && sessionFile_ != juce::File()) {
+    auto r = airdaw::saveSession(*e, sessionFile_.getFullPathName().toStdString());
+    if (r.ok) note("Saved " + sessionFile_.getFileName()); else note("SAVE FAILED: " + r.error);
+    return;
+  }
+  if (e->transport().recording.load() || e->transport().countingIn()) { note("Stop recording before Save As (it moves take files)"); return; }
+  auto root = projectsRoot(); root.createDirectory();
+  const auto suggested = sessionFile_ == juce::File() ? juce::String("My Song") : sessionName() + " copy";
+  chooser_ = std::make_shared<juce::FileChooser>("Save project as (AirDAW creates a folder with this name)",
+                                                 root.getChildFile(suggested + ".airdaw"), "*.airdaw");
+  chooser_->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+      [this](const juce::FileChooser& c) { auto f = c.getResult(); if (f != juce::File()) saveProjectAs(f.withFileExtension("airdaw")); });
+}
+
+// Every project is a folder:  <Name>/<Name>.airdaw,  <Name>/audio/ (takes),  <Name>/autosave/.
+// Takes the session uses are brought into <Name>/audio: moved out of the Untitled scratch folder
+// (they belong to this unsaved session), copied from anywhere else (another project still needs them).
+void MainComponent::saveProjectAs(const juce::File& chosen) {
+  auto* e = bridge_.engine(); if (!e) return;  // fetched now: the engine may have been rebuilt while the dialog was open
+  if (e->transport().recording.load() || e->transport().countingIn()) { note("Stop recording before Save As"); return; }
+  const auto name = chosen.getFileNameWithoutExtension();
+  auto dir = chosen.getParentDirectory();
+  if (dir.getFileName() != name) dir = dir.getChildFile(name);  // user picked the parent folder: create the project folder
+  const auto file = dir.getChildFile(name + ".airdaw");
+  if (file.existsAsFile() && file != sessionFile_) { note("A project called \"" + name + "\" already exists there: choose another name"); return; }
+  auto audio = dir.getChildFile("audio");
+  if (!audio.createDirectory()) { note("SAVE FAILED: cannot create " + audio.getFullPathName()); return; }
+
+  const bool fromScratch = sessionFile_ == juce::File();
+  int moved = 0, copied = 0, failed = 0;
+  std::map<juce::String, juce::String> relocated;  // old path -> new path (a file is only moved once)
+  for (int t = 0; t < airdaw::kMaxTracks; ++t)
+    for (int i = 0; i < e->numTakes(t); ++i) {
+      const juce::File src(juce::String(e->takeAt(t, i)->path));
+      if (src.isAChildOf(audio)) continue;
+      auto it = relocated.find(src.getFullPathName());
+      if (it == relocated.end()) {
+        if (!src.existsAsFile()) { ++failed; continue; }
+        auto dst = audio.getChildFile(src.getFileName());
+        if (dst.exists()) dst = dst.getNonexistentSibling(false);
+        const bool move = fromScratch && src.isAChildOf(scratchFolder());
+        if (!(move ? src.moveFileTo(dst) : src.copyFileTo(dst))) { ++failed; continue; }
+        ++(move ? moved : copied);
+        it = relocated.emplace(src.getFullPathName(), dst.getFullPathName()).first;
+      }
+      e->setTakePath(t, i, it->second.toStdString());
+    }
+
+  auto r = airdaw::saveSession(*e, file.getFullPathName().toStdString());
+  if (!r.ok) { note("SAVE FAILED: " + r.error); return; }
+  if (fromScratch) {  // this session's crash copies follow it, so they never prompt for recovery in Untitled again
+    auto oldAuto = scratchFolder().getChildFile("autosave"), newAuto = dir.getChildFile("autosave");
+    for (auto& a : oldAuto.findChildFiles(juce::File::findFiles, false, "Untitled_autosave_*.airdaw"))
+      if (newAuto.createDirectory()) a.moveFileTo(newAuto.getChildFile(a.getFileName()));
+  }
+  setSessionFile(file);
+  juce::String msg = "Saved project " + name;
+  if (moved) msg << ", moved " << moved << " take(s) into its audio folder";
+  if (copied) msg << ", copied " << copied << " take(s) into its audio folder";
+  if (failed) msg << ". WARNING: " << failed << " take file(s) missing or could not be copied";
+  note(msg);
 }
 
 void MainComponent::openSession() {
-  chooser_ = std::make_shared<juce::FileChooser>("Open session", sessionFolder(), "*.airdaw");
+  chooser_ = std::make_shared<juce::FileChooser>("Open project", sessionFile_ == juce::File() ? projectsRoot() : sessionFolder().getParentDirectory(), "*.airdaw");
   chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
       [this](const juce::FileChooser& c) {
         auto f = c.getResult(); auto* e = bridge_.engine(); if (f == juce::File() || !e) return;
@@ -280,7 +341,12 @@ void MainComponent::timerCallback() {
   if (e) {
     collectTakes();
     auto saved = autoSaver_->tick(juce::Time::getMillisecondCounterHiRes() / 1000.0);
-    if (!saved.empty()) note("Auto-saved " + juce::Time::getCurrentTime().toString(false, true));
+    if (!saved.empty()) {
+      const auto when = juce::Time::getCurrentTime().toString(false, true);
+      note("Auto-saved " + when);
+      lastAutoSave_.setText("Last auto-save " + when + "  ->  " + juce::File(juce::String(saved)).getParentDirectory().getFullPathName(),
+                            juce::dontSendNotification);
+    }
     auto& tr = e->transport();
     if (tr.countingIn()) {  // show the beats still to go
       const double beat = e->sampleRate() * 60.0 / juce::jlimit(20.0, 400.0, (double)e->metronome().bpm.load());
@@ -327,8 +393,9 @@ void MainComponent::resized() {
   row = r.removeFromTop(34);
   for (auto* b : {&new_, &open_, &save_, &saveAs_}) b->setBounds(row.removeFromLeft(90).reduced(2));
   meter_.setBounds(row.removeFromLeft(150).reduced(2)); meterEd_.setBounds(row.removeFromLeft(110).reduced(2));
-  row.removeFromLeft(10);
-  autoSave_.setBounds(row.removeFromLeft(140)); autoEvery_.setBounds(row.removeFromLeft(90).reduced(0, 4));
+  row = r.removeFromTop(30);  // own row: the interval box used to fall off the right edge
+  autoSave_.setBounds(row.removeFromLeft(140)); autoEvery_.setBounds(row.removeFromLeft(90).reduced(0, 3));
+  row.removeFromLeft(10); lastAutoSave_.setBounds(row);
   notice_label_.setBounds(r.removeFromTop(26));
   r.removeFromBottom(40);
   selector_->setBounds(r);

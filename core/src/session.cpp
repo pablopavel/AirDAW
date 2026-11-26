@@ -105,6 +105,8 @@ SessionResult loadSession(Engine& e, const std::string& path) {
     m.beatsPerBar = std::clamp((int)mj->num("beatsPerBar", 4), 1, 16); m.levelDb = (float)mj->num("levelDb", -6);
     m.countInBars = std::clamp((int)mj->num("countInBars", 0), 0, 4);
   }
+  // The loaded session's takes replace the current ones (not appended to them).
+  for (int t = 0; t < kMaxTracks; ++t) e.clearTakeList(t);
   // Clear existing inserts (only occupied slots, to keep the command queue small).
   for (int id : allIds()) for (int s = 0; s < kMaxInserts; ++s) if (e.insertAt(id, s)) e.setInsert(id, s, "");
   e.collectGarbage();

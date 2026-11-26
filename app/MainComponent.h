@@ -15,6 +15,9 @@ class MainComponent : public juce::Component, private juce::Timer {
   void newSession();
   void openSession();
   void saveSession(bool saveAs);
+  void saveProjectAs(const juce::File& chosen);
+  static juce::File projectsRoot();   // Documents/AirDAW
+  static juce::File scratchFolder();  // Documents/AirDAW/Untitled (unsaved session)
   void setSessionFile(const juce::File& f);
   void applyAutoSaveSettings();
   void checkRecovery();
@@ -41,6 +44,7 @@ class MainComponent : public juce::Component, private juce::Timer {
   std::unique_ptr<PluginWindow> meterWindow_;
   juce::ToggleButton autoSave_{"Auto-save every"};
   juce::ComboBox autoEvery_;
+  juce::Label lastAutoSave_;
   juce::ToggleButton metro_{"Metronome"};
   juce::Slider bpm_{juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft}, clickLevel_{juce::Slider::LinearHorizontal, juce::Slider::NoTextBox};
   juce::ComboBox beats_, countIn_;

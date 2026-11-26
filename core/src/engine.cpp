@@ -63,12 +63,18 @@ int Engine::addTake(int track, const std::string& path, int64_t start) {
   auto t = std::make_unique<Take>();
   t->l = std::move(w.left); t->r = std::move(w.right); t->start = start; t->path = path;
   takes_[track].push_back(std::move(t));
-  return (int)takes_[track].size() - 1;
+  return numTakes(track) - 1;
 }
 
 void Engine::setActiveTake(int track, int i) {
   if (track < 0 || track >= kMaxTracks) return;
-  tracks_[track].take.store(i >= 0 && i < (int)takes_[track].size() ? takes_[track][i].get() : nullptr);
+  tracks_[track].take.store(i >= 0 && i < numTakes(track) ? takeAt(track, i) : nullptr);
+}
+
+void Engine::clearTakeList(int track) {
+  if (track < 0 || track >= kMaxTracks) return;
+  tracks_[track].take.store(nullptr);
+  takeBase_[track] = (int)takes_[track].size();
 }
 
 Channel* Engine::resolve(int id) {

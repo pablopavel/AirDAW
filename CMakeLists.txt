@@ -28,6 +28,11 @@ option(AIRDAW_BUILD_TESTS "Build headless engine tests" ON)
 if(AIRDAW_BUILD_TESTS)
   add_executable(engine_tests tests/engine_tests.cpp)
   target_link_libraries(engine_tests PRIVATE airdaw_core)
+  # main() holds ~40 test engines (~34 KB each) in separate blocks; MSVC gives most their own stack
+  # space, which overflows Windows' 1 MB default. Match the 8 MB Linux default.
+  if(MSVC)
+    target_link_options(engine_tests PRIVATE /STACK:8388608)
+  endif()
 endif()
 
 # ---------------- GUI application (JUCE) ----------------
