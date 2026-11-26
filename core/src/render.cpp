@@ -21,6 +21,8 @@ RenderResult renderMix(Engine& e, const std::string& path, const RenderOptions& 
   // An export is the mix of the recorded takes only: no live input, no click, no recording, no looping.
   for (int t = 0; t < kMaxTracks; ++t) { e.track(t).armed = false; e.track(t).audition = false; }
   auto& m = e.metronome(); m.enabled = false; m.countInBars = 0;
+  auto& mon = e.monitor();  // the monitor section and the reference are for listening only
+  mon.mono = false; mon.dim = false; mon.polarity = false; mon.solo = Monitor::Stereo; mon.listenB = false; mon.refPlaying = false; mon.refSync = false;
   auto& tr = e.transport(); tr.stop(); tr.loopOn = false; tr.punchOn = false;
   tr.seek(o.start);
 

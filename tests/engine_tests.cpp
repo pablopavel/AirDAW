@@ -305,6 +305,71 @@ static void testAnalysisTools() {
   std::printf("analysis tools: 31-band RTA, band correlation, width / mono loss, crest, DR, overs, history\n");
 }
 
+// Monitor section and reference A/B: only the speakers change; taps, takes and exports never do.
+static void testMonitor() {
+  auto rig = [](Engine& e) {  // track 1 hard left = input 1 (sigAt), track 2 hard right = input 2 (sig2At)
+    e.track(0).inputL = 0; e.track(0).armed = true; e.track(0).pan = -1.f;
+    e.track(1).inputL = 1; e.track(1).armed = true; e.track(1).pan = 1.f;
+    e.setMasterTapEnabled(true);
+  };
+  struct Case { const char* name; int solo; bool mono, pol, dim; float (*l)(float, float); float (*r)(float, float); };
+  const Case cases[] = {
+      {"stereo", Monitor::Stereo, false, false, false, [](float a, float) { return a; }, [](float, float b) { return b; }},
+      {"L", Monitor::Left, false, false, false, [](float a, float) { return a; }, [](float a, float) { return a; }},
+      {"R", Monitor::Right, false, false, false, [](float, float b) { return b; }, [](float, float b) { return b; }},
+      {"Mid", Monitor::Mid, false, false, false, [](float a, float b) { return 0.5f * (a + b); }, [](float a, float b) { return 0.5f * (a + b); }},
+      {"Side", Monitor::Side, false, false, false, [](float a, float b) { return 0.5f * (a - b); }, [](float a, float b) { return 0.5f * (a - b); }},
+      {"Mono", Monitor::Stereo, true, false, false, [](float a, float b) { return 0.5f * (a + b); }, [](float a, float b) { return 0.5f * (a + b); }},
+      {"Pol", Monitor::Stereo, false, true, false, [](float a, float) { return a; }, [](float, float b) { return -b; }},
+      {"Dim", Monitor::Stereo, false, false, true, [](float a, float) { return 0.1f * a; }, [](float, float b) { return 0.1f * b; }},
+  };
+  for (auto& cs : cases) {
+    Engine e(SR); rig(e);
+    auto& m = e.monitor(); m.solo = cs.solo; m.mono = cs.mono; m.polarity = cs.pol; m.dim = cs.dim;
+    long k = 0; std::vector<float> L, R; stream2(e, k, 2000, L, R);
+    std::vector<float> tap(4000); const size_t got = e.readMasterTap(tap.data(), 2000);
+    bool ok = got == 2000, tapOk = ok;
+    for (size_t i = 0; i < 2000 && ok; ++i) {
+      const float a = sigAt((long)i), b = sig2At((long)i);
+      ok = std::fabs(L[i] - cs.l(a, b)) < 1e-5f && std::fabs(R[i] - cs.r(a, b)) < 1e-5f;
+    }
+    for (size_t i = 0; i < got && tapOk; ++i) tapOk = std::fabs(tap[2 * i] - sigAt((long)i)) < 1e-6f && std::fabs(tap[2 * i + 1] - sig2At((long)i)) < 1e-6f;
+    CHECK(ok, "monitor %s: speakers wrong", cs.name);
+    CHECK(tapOk, "monitor %s: the master tap must stay the plain mix", cs.name);
+  }
+  { Engine e(SR); auto dir = tmpDir(); rig(e); e.monitor().mono = true; e.monitor().dim = true;  // recording unaffected
+    long k = 0; std::vector<float> L, R; e.startRecording(dir); stream2(e, k, 3000, L, R); e.transport().stop(); stream2(e, k, 64, L, R); e.flushRecording();
+    auto f = e.pollFinishedTakes(); bool ok = !f.empty();
+    for (auto& x : f) if (x.track == 1) { WavData w; readWav(x.path, w); for (size_t i = 0; ok && i < w.left.size(); ++i) ok = w.left[i] == sig2At((long)i); }
+    CHECK(ok, "takes must not contain the monitor section"); }
+  { Engine e(SR); rig(e);  // reference A/B on its own transport
+    auto ref = std::make_unique<Reference>(); for (int i = 0; i < 5000; ++i) { ref->l.push_back(0.001f * (float)(i % 500)); ref->r.push_back(-0.001f * (float)(i % 500)); }
+    e.setReference(std::move(ref));
+    auto& m = e.monitor(); m.listenB = true; m.refPlaying = true;
+    long k = 0; std::vector<float> L, R; stream2(e, k, 1000, L, R);
+    bool ok = true; for (size_t i = 0; i < 1000 && ok; ++i) ok = L[i] == 0.001f * (float)(i % 500) && R[i] == -0.001f * (float)(i % 500);
+    CHECK(ok && m.refPos.load() == 1000 && e.transport().pos.load() == 0, "B plays the reference on its own transport (refPos %lld)", (long long)m.refPos.load());
+    std::vector<float> heard(2000), mix(2000);
+    const size_t hg = e.readHeardTap(heard.data(), 1000), mg = e.readMasterTap(mix.data(), 1000);
+    CHECK(hg == 1000 && heard[2 * 700] == L[700] && mg == 1000 && std::fabs(mix[2 * 700] - sigAt(700)) < 1e-6f, "heard tap = reference, master tap = mix");
+    m.refGainDb = -6.0206f; L.clear(); R.clear(); stream2(e, k, 128, L, R); L.clear(); R.clear(); stream2(e, k, 64, L, R);  // after the ramp
+    const long p0 = (long)m.refPos.load() - 64;
+    CHECK(std::fabs(L[10] - 0.5f * 0.001f * (float)((p0 + 10) % 500)) < 1e-5f, "level-match gain applied");
+    m.refSeek = 4990; L.clear(); R.clear(); stream2(e, k, 64, L, R);
+    CHECK(!m.refPlaying.load() && m.refPos.load() == 5000 && L[20] == 0.f, "reference stops at its end");
+    m.listenB = false; m.refSeek = 100; m.refPlaying = true; L.clear(); R.clear(); stream2(e, k, 64, L, R);
+    CHECK(std::fabs(L[5] - sigAt(k - 64 + 5)) < 1e-6f && m.refPos.load() == 164, "on A you hear the mix; the reference keeps its own time"); }
+  { auto dir = tmpDir();  // exports ignore the monitor section
+    { WavWriter w; w.open(dir + "/s.wav", 1, (int)SR); std::vector<float> s(4000); for (size_t i = 0; i < s.size(); ++i) s[i] = sigAt((long)i); w.write(s.data(), s.size()); w.close(); }
+    Engine e(SR); e.track(0).pan = -1.f; e.setActiveTake(0, e.addTake(0, dir + "/s.wav", 0));
+    e.monitor().mono = true; e.monitor().dim = true; e.monitor().solo = Monitor::Side;
+    RenderOptions o; o.end = 4000; o.tailSeconds = 0; o.bits = 32; auto r = renderMix(e, dir + "/mix.wav", o);
+    WavData w; bool ok = r.ok && readWav(dir + "/mix.wav", w) && w.left.size() == 4000;
+    for (size_t i = 0; ok && i < 4000; ++i) ok = w.left[i] == sigAt((long)i) && w.right[i] == 0.f;
+    CHECK(ok, "exports must not contain the monitor section"); }
+  std::printf("monitor: L/R/Mid/Side/Mono/Pol/Dim on the speakers only; reference A/B with own transport, gain, end; taps, takes, exports clean\n");
+}
+
 // Insert reordering: same instances, new order, each insert processed exactly once per block.
 struct Affine : InsertProcessor {
   float a, b; std::string nm; std::vector<FxParamInfo> ps; long calls = 0;
@@ -315,6 +380,60 @@ struct Affine : InsertProcessor {
   std::string paramDisplay(int) override { return {}; } void setBypass(bool) override {} bool bypassed() const override { return false; }
   void process(float* l, float* r, int n) override { ++calls; for (int i = 0; i < n; ++i) { l[i] = l[i] * a + b; r[i] = r[i] * a + b; } }
 };
+// Channel polarity (tracks and buses), reference tap, reference synced to the song, the meter slot on B.
+static void testPolarityAndReference() {
+  { Engine e(SR); auto dir = tmpDir(); auto& t = e.track(0); t.inputL = 0; t.armed = true; t.pan = -1.f; t.polarity = true;
+    long k = 0; std::vector<float> L, R; e.startRecording(dir); stream2(e, k, 3000, L, R); e.transport().stop(); stream2(e, k, 64, L, R); e.flushRecording();
+    bool ok = true; for (size_t i = 64; ok && i < 3000; ++i) ok = std::fabs(L[i] + sigAt((long)i)) < 1e-6f;
+    CHECK(ok, "track polarity must flip the signal");
+    auto f = e.pollFinishedTakes(); bool rec = f.size() == 1;
+    if (rec) { WavData w; readWav(f[0].path, w); for (size_t i = 0; rec && i < w.left.size(); ++i) rec = w.left[i] == sigAt((long)i); }
+    CHECK(rec, "polarity must not reach the recorded take");
+    t.polarity = false; e.track(0).route = (int)Route::Bus1; e.bus(0).polarity = true; L.clear(); R.clear(); stream2(e, k, 256, L, R);
+    CHECK(std::fabs(L[200] + sigAt(k - 256 + 200)) < 1e-6f, "bus polarity must flip the bus");
+    CHECK(saveSession(e, dir + "/p.airdaw").ok, "save polarity");
+    Engine b(SR); CHECK(loadSession(b, dir + "/p.airdaw").ok && b.bus(0).polarity.load() && !b.track(0).polarity.load(), "polarity survives save/load"); }
+
+  auto makeRef = [] { auto r = std::make_unique<Reference>(); for (int i = 0; i < 20000; ++i) { r->l.push_back(0.0001f * (float)(i % 3000)); r->r.push_back(-0.0001f * (float)(i % 3000)); } return r; };
+  auto refL = [](long p) { return 0.0001f * (float)(p % 3000); };
+  { Engine e(SR); e.setMasterTapEnabled(true); e.track(0).inputL = 0; e.track(0).armed = true; e.track(0).pan = -1.f;
+    e.setReference(makeRef()); auto& m = e.monitor(); m.refGainDb = -12.f;
+    m.refSeek = 500; m.refPlaying = true;  // on A: the reference tap carries the raw reference while the mix is heard
+    long k = 0; std::vector<float> L, R; stream2(e, k, 1000, L, R);
+    std::vector<float> rt(4000); const size_t got = e.readRefTap(rt.data(), 2000);
+    bool ok = got == 1000; for (size_t i = 0; ok && i < got; ++i) ok = rt[2 * i] == refL(500 + (long)i) && rt[2 * i + 1] == -refL(500 + (long)i);
+    CHECK(ok && std::fabs(L[100] - sigAt(100)) < 1e-6f, "reference tap = raw reference while A plays the mix (frames %zu)", got);
+    m.refPlaying = false; L.clear(); R.clear(); stream2(e, k, 256, L, R);
+    CHECK(e.readRefTap(rt.data(), 2000) == 0, "nothing on the reference tap while it is stopped"); }
+  { Engine e(SR); e.setReference(makeRef()); auto& m = e.monitor(); m.refSync = true; m.listenB = true;
+    auto& t = e.transport(); t.seek(7000);
+    long k = 0; std::vector<float> L, R; stream2(e, k, 128, L, R);
+    CHECK(peakOf(L) == 0.f && !m.refPlaying.load(), "sync: stopped song = stopped reference");
+    t.play(); L.clear(); R.clear(); stream2(e, k, 1000, L, R);
+    bool ok = true; for (size_t i = 0; ok && i < 1000; ++i) ok = L[i] == refL(7000 + (long)i) && R[i] == -refL(7000 + (long)i);
+    CHECK(ok && m.refPlaying.load() && m.refPos.load() == 8000, "sync: the reference plays at the song position (refPos %lld)", (long long)m.refPos.load());
+    t.seek(19990); L.clear(); R.clear(); stream2(e, k, 64, L, R);
+    CHECK(L[5] == refL(19995) && L[20] == 0.f && m.refPlaying.load(), "sync: past the reference's end is silence, the song keeps going");
+    m.refSeek = 3; t.seek(100); L.clear(); R.clear(); stream2(e, k, 64, L, R);
+    CHECK(L[0] == refL(100), "sync: song seeks move the reference; its own seek is ignored");
+    t.stop(); L.clear(); R.clear(); stream2(e, k, 64, L, R);
+    CHECK(peakOf(L) == 0.f && !m.refPlaying.load(), "sync: stopping the song stops the reference"); }
+  { struct Probe : Affine { float seen = 0; Probe() : Affine(1.f, 0.f, "probe") {}
+      void process(float* l, float* r, int n) override { seen = l[n - 1]; Affine::process(l, r, n); } };
+    Engine e(SR); e.setMasterTapEnabled(true); e.track(0).inputL = 0; e.track(0).armed = true; e.track(0).pan = -1.f;
+    auto pr = std::make_unique<Probe>(); Probe* probe = pr.get(); e.setInsertProcessor(200, 7, std::move(pr));
+    auto dbl = std::make_unique<Affine>(2.f, 0.f, "x2"); e.setInsertProcessor(200, 0, std::move(dbl));
+    e.setReference(makeRef()); auto& m = e.monitor(); m.listenSlot = 7; m.refSeek = 0; m.refPlaying = true;
+    long k = 0; std::vector<float> L, R; stream2(e, k, 640, L, R);
+    CHECK(std::fabs(probe->seen - 2.f * sigAt(k - 1)) < 1e-6f, "on A the meter slot measures the mix");
+    m.listenB = true; L.clear(); R.clear(); stream2(e, k, 640, L, R);
+    const long rp = (long)m.refPos.load() - 1;
+    CHECK(probe->seen == refL(rp) && L.back() == refL(rp), "on B the meter slot measures the reference (and only it)");
+    std::vector<float> mix(2 * 4000); const size_t mg = e.readMasterTap(mix.data(), 4000);
+    CHECK(mg == 1280 && std::fabs(mix[2 * (mg - 1)] - 2.f * sigAt(k - 1)) < 1e-6f, "the master tap stays the mix through the rest of the chain on B"); }
+  std::printf("polarity: tracks and buses flip, takes stay dry, saved; reference tap, song sync, meter slot follows A/B\n");
+}
+
 static void testInsertReorder() {
   Engine e(SR); auto& t = e.track(0); t.inputL = 0; t.armed = true; t.pan = -1.f;
   auto A = std::make_unique<Affine>(2.f, 0.f, "A"), B = std::make_unique<Affine>(1.f, 0.1f, "B"), C = std::make_unique<Affine>(0.5f, 0.f, "C");
@@ -498,6 +617,8 @@ int main() {
   testRenderMix();
   testLoudness();
   testAnalysisTools();
+  testMonitor();
+  testPolarityAndReference();
 
   // 14. Session save/load round trip, including plugin parameters, takes, loop/punch
   { auto dir = tmpDir(); std::string sess = dir + "/song.airdaw";

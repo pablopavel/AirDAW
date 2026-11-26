@@ -174,6 +174,11 @@ juce::Rectangle<float> FaderBlock::trackArea() const {
   return r.withSizeKeepingCentre(w, r.getHeight());
 }
 
+juce::Rectangle<int> FaderBlock::cornerArea() const {
+  const auto a = trackArea();
+  return juce::Rectangle<float>(0.f, a.getBottom() - 19.f, a.getX() + kScaleW, 17.f).toNearestInt();
+}
+
 void FaderBlock::mouseDown(const juce::MouseEvent& e) {
   pixelsForRange = juce::jmax(60.f, trackArea().getHeight() - 44.f);
   DragControl::mouseDown(e);

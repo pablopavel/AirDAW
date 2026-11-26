@@ -15,6 +15,7 @@ static inline float dbToLin(float db) { return db <= -100.f ? 0.f : std::pow(10.
 Engine::Engine(double sampleRate) : sr_(sampleRate) {
   for (auto& b : busBuf_) for (auto& c : b) c.assign(kMaxBlock, 0.f);
   for (auto& c : masterBuf_) c.assign(kMaxBlock, 0.f);
+  for (auto& c : refBuf_) c.assign(kMaxBlock, 0.f);
   for (auto& c : work_) c.assign(kMaxBlock, 0.f);
   for (auto& t : trackBuf_) for (auto& c : t) c.assign(kMaxBlock, 0.f);
   for (int i = 0; i < kMaxTracks; ++i) tracks_[i].name = "TRACK " + std::to_string(i + 1);
@@ -84,6 +85,57 @@ size_t Engine::readMasterTap(float* dst, size_t maxFrames) {
   const size_t frames = std::min(maxFrames, tap_.readable() / 2);
   if (frames) tap_.read(dst, frames * 2);
   return frames;
+}
+size_t Engine::readHeardTap(float* dst, size_t maxFrames) {
+  const size_t frames = std::min(maxFrames, heardTap_.readable() / 2);
+  if (frames) heardTap_.read(dst, frames * 2);
+  return frames;
+}
+
+size_t Engine::readRefTap(float* dst, size_t maxFrames) {
+  const size_t frames = std::min(maxFrames, refTap_.readable() / 2);
+  if (frames) refTap_.read(dst, frames * 2);
+  return frames;
+}
+
+// Lock-free copy into a tap ring; drops (and counts) if the reader falls behind.
+void Engine::writeTap(FloatRing& ring, const float* l, const float* r, int n) {
+  if (!tapOn_.load(std::memory_order_relaxed)) return;
+  if (ring.freeSpace() < (size_t)n * 2) { tapDropped_.fetch_add((uint64_t)n, std::memory_order_relaxed); return; }
+  float tmp[512];
+  for (int i = 0; i < n; i += 256) {
+    const int m = std::min(256, n - i);
+    for (int k = 0; k < m; ++k) { tmp[2 * k] = l[i + k]; tmp[2 * k + 1] = r[i + k]; }
+    ring.write(tmp, (size_t)m * 2);
+  }
+}
+
+void Engine::setReference(std::unique_ptr<Reference> r) {
+  const Reference* raw = r.get();
+  if (r) refs_.push_back(std::move(r));
+  mon_.refPlaying = false;
+  mon_.refSeek = 0;
+  ref_.store(raw, std::memory_order_release);
+}
+
+// Monitor section (what reaches the speakers only).
+void Engine::applyMonitor(float* l, float* r, int n, int64_t) {
+  const int solo = mon_.solo.load(std::memory_order_relaxed);
+  const bool mono = mon_.mono.load(std::memory_order_relaxed), pol = mon_.polarity.load(std::memory_order_relaxed);
+  const float g = mon_.dim.load(std::memory_order_relaxed) ? dbToLin(mon_.dimDb.load(std::memory_order_relaxed)) : 1.f;
+  if (solo == Monitor::Stereo && !mono && !pol && g == 1.f) return;
+  for (int i = 0; i < n; ++i) {
+    float a = l[i], b = pol ? -r[i] : r[i];
+    switch (solo) {
+      case Monitor::Left: b = a; break;
+      case Monitor::Right: a = b; break;
+      case Monitor::Mid: a = b = 0.5f * (a + b); break;
+      case Monitor::Side: a = b = 0.5f * (a - b); break;  // side signal on both speakers, in phase (as monitor controllers do)
+      default: break;
+    }
+    if (mono) a = b = 0.5f * (a + b);
+    l[i] = a * g; r[i] = b * g;
+  }
 }
 
 void Engine::clearTakeList(int track) {
@@ -255,7 +307,7 @@ void Engine::processTrack(int ti, const SegCtx& c) {
     }
   }
 
-  applyGain(wl, wr, n, t.smoothTrim, dbToLin(t.trimDb.load(std::memory_order_relaxed)));
+  applyGain(wl, wr, n, t.smoothTrim, dbToLin(t.trimDb.load(std::memory_order_relaxed)) * (t.polarity.load(std::memory_order_relaxed) ? -1.f : 1.f));
   runChain(t, wl, wr, n);
 
   bool muted = t.mute.load(std::memory_order_relaxed) || (c.anySolo && !t.solo.load(std::memory_order_relaxed));
@@ -275,7 +327,7 @@ void Engine::processTrack(int ti, const SegCtx& c) {
 void Engine::processBus(int bi, int n, bool anyBusSolo) {
   Channel& b = buses_[bi];
   float* bl = busBuf_[bi][0].data(); float* br = busBuf_[bi][1].data();
-  applyGain(bl, br, n, b.smoothTrim, dbToLin(b.trimDb.load(std::memory_order_relaxed)));
+  applyGain(bl, br, n, b.smoothTrim, dbToLin(b.trimDb.load(std::memory_order_relaxed)) * (b.polarity.load(std::memory_order_relaxed) ? -1.f : 1.f));
   runChain(b, bl, br, n);
   bool muted = b.mute.load(std::memory_order_relaxed) || (anyBusSolo && !b.solo.load(std::memory_order_relaxed));
   applyGain(bl, br, n, b.smoothGain, muted ? 0.f : dbToLin(b.gainDb.load(std::memory_order_relaxed)));
@@ -355,24 +407,59 @@ void Engine::process(const float* const* in, int nIn, float* const* out, int nOu
       for (int i = 0; i < n; ++i) { ml[i] += bl[i]; mr[i] += br[i]; }
     }
 
-    // Phase 3: master.
-    runChain(master_, ml, mr, n);
+    // Phase 3: master. On B the listening slot (the Hit Record Meter) is skipped here and runs on the reference below.
+    const Reference* ref = ref_.load(std::memory_order_acquire);
+    const bool onB = ref && mon_.listenB.load(std::memory_order_relaxed);
+    const int ls = mon_.listenSlot.load(std::memory_order_relaxed);
+    InsertProcessor* listenFx = (onB && ls >= 0 && ls < kMaxInserts) ? master_.insert[(size_t)ls] : nullptr;
+    for (auto* fx : master_.insert)
+      if (fx && fx != listenFx) fx->process(ml, mr, n);
     applyGain(ml, mr, n, master_.smoothGain,
               master_.mute.load(std::memory_order_relaxed) ? 0.f
                   : dbToLin(master_.gainDb.load(std::memory_order_relaxed)));
     updateMeter(master_.meter, ml, mr, n);
 
-    // Master tap for analysis (before the click). Lock-free; drops if the reader falls behind.
-    if (tapOn_.load(std::memory_order_relaxed)) {
-      if (tap_.freeSpace() >= (size_t)n * 2) {
-        float tmp[512];
-        for (int i = 0; i < n; i += 256) {
-          const int m = std::min(256, n - i);
-          for (int k = 0; k < m; ++k) { tmp[2 * k] = ml[i + k]; tmp[2 * k + 1] = mr[i + k]; }
-          tap_.write(tmp, (size_t)m * 2);
+    // Master tap for analysis: the mix (before the reference, monitor section and click).
+    writeTap(tap_, ml, mr, n);
+
+    // Reference A/B. The reference runs on its own transport (or follows the song with sync). Its raw samples go
+    // to the reference tap whenever it plays; on B they replace the mix (with the level-match gain).
+    if (ref) {
+      const int64_t len = (int64_t)ref->l.size();
+      const bool sync = mon_.refSync.load(std::memory_order_relaxed);
+      { const int64_t sk = mon_.refSeek.exchange(-1); if (sk >= 0 && !sync) mon_.refPos.store(std::min(sk, len)); }
+      const int64_t rp = sync ? c.pos : mon_.refPos.load(std::memory_order_relaxed);
+      const bool playing = sync ? c.playing : mon_.refPlaying.load(std::memory_order_relaxed);
+      float* rl = refBuf_[0].data(); float* rr = refBuf_[1].data();
+      if (playing || onB) {
+        const bool st = !ref->r.empty();
+        for (int i = 0; i < n; ++i) {
+          const int64_t p = rp + i;
+          const bool in = playing && p >= 0 && p < len;
+          rl[i] = in ? ref->l[(size_t)p] : 0.f;
+          rr[i] = in ? (st ? ref->r[(size_t)p] : rl[i]) : 0.f;
         }
-      } else tapDropped_.fetch_add((uint64_t)n, std::memory_order_relaxed);
+      }
+      if (playing) writeTap(refTap_, rl, rr, n);
+      if (onB) {
+        const float target = dbToLin(mon_.refGainDb.load(std::memory_order_relaxed));
+        const float step = (target - refGain_) / (float)n;
+        for (int i = 0; i < n; ++i) { refGain_ += step; ml[i] = rl[i] * refGain_; mr[i] = rr[i] * refGain_; }
+        refGain_ = target;
+        if (listenFx) listenFx->process(ml, mr, n);  // the meter measures what is heard
+      }
+      if (sync) {
+        mon_.refPlaying.store(playing, std::memory_order_relaxed);
+        mon_.refPos.store(std::clamp<int64_t>(playing ? rp + n : rp, 0, len), std::memory_order_relaxed);
+      } else if (playing) {
+        const int64_t np = std::min(len, rp + n);
+        mon_.refPos.store(np);
+        if (np >= len) mon_.refPlaying.store(false);  // stops at the end
+      }
     }
+    writeTap(heardTap_, ml, mr, n);  // what is heard (mix or reference), for the listening tools
+
+    applyMonitor(ml, mr, n, 0);
 
     // Click goes to the output only (after master inserts and meter, so it is never recorded or metered).
     if (countIn) {

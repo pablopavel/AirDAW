@@ -91,6 +91,8 @@ class FaderBlock : public DragControl {
   bool bigReadout = false;
   void paint(juce::Graphics&) override;
   void mouseDown(const juce::MouseEvent&) override;
+  // Free corner at the bottom left, under the dB scale (where a strip puts its polarity button).
+  juce::Rectangle<int> cornerArea() const;
  private:
   juce::Rectangle<float> trackArea() const;
   float mL_ = 0.f, mR_ = 0.f;

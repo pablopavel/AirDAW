@@ -2,6 +2,7 @@
 #include "Vst3Insert.h"
 #include "airdaw/render.h"
 #include <map>
+#include <thread>
 
 using ui::T;
 static constexpr int kMeterSlot = 7;  // last master insert slot: the meter listens to the final mix
@@ -48,10 +49,11 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   ctx_.isCardOpen = [this](int ch, int slot) { return inserts_.isOpen(ch, slot); };
   ctx_.layoutChanged = [this] { resized(); };
   ctx_.openPluginWindow = [this](int ch, int slot) { openPluginWindow(ch, slot); };
-  mixer_.master().onResetLoudness = [this] { if (hub_) hub_->resetProgramme(); };
+  mixer_.master().onResetLoudness = [this] { resetMeters(); };
   tools_.onLayoutChanged = [this] { dock_.rebuildSuite(); listenRow_.rebuild(); resized(); };
   dock_.rebuildSuite();
   ctx_.resetPeaks = [this] { if (hub_) hub_->resetPeaks(); };
+  ctx_.loadReference = [this] { chooseReference(); };
   deck_.onListen = [this] { setListen(!listen_); };
   addChildComponent(listenRow_);
   ctx_.showPluginInfo = [this](const juce::String& name) {
@@ -401,7 +403,7 @@ void MainComponent::newSession() {
         airdaw::Engine blank(e->sampleRate());
         auto tmp = (juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw_blank.airdaw")).getFullPathName().toStdString();
         airdaw::saveSession(blank, tmp); airdaw::loadSession(*e, tmp);
-        inserts_.close(); ctx_.viewTrack = -1; if (hub_) hub_->resetProgramme();
+        inserts_.close(); ctx_.viewTrack = -1; resetMeters();
         setSessionFile({}); note("New project");
       });
 }
@@ -483,7 +485,7 @@ void MainComponent::openSession() {
         auto f = c.getResult(); auto* e = bridge_.engine(); if (f == juce::File() || !e) return;
         auto r = airdaw::loadSession(*e, f.getFullPathName().toStdString());
         if (!r.ok) { note("OPEN FAILED: " + r.error); return; }
-        inserts_.close(); ctx_.viewTrack = -1; if (hub_) hub_->resetProgramme();
+        inserts_.close(); ctx_.viewTrack = -1; resetMeters();
         setSessionFile(f);
         note(r.warnings.empty() ? "Opened " + f.getFileName() : "Opened with " + juce::String((int)r.warnings.size()) + " warning(s): " + r.warnings[0],
              !r.warnings.empty());
@@ -645,8 +647,13 @@ void MainComponent::timerCallback() {
     inserts_.close();
     autoSaver_ = std::make_unique<airdaw::AutoSaver>(*e);
     hub_ = std::make_unique<ui::AnalysisHub>(e->sampleRate());  // filters depend on the rate
+    mixLoud_ = std::make_unique<airdaw::LoudnessMeter>(e->sampleRate());
+    refLoud_ = std::make_unique<airdaw::LoudnessMeter>(e->sampleRate());
+    e->monitor().refSync = props_->getBoolValue("reference.sync", false);
     tapBuf_.assign(2 * 16384, 0.f);
     e->setMasterTapEnabled(true);
+    // The reference is decoded at the engine's rate, so a new engine (new rate) decodes it again.
+    if (!snapshotMode_) { const juce::File rf(props_->getValue("reference.path")); if (rf.existsAsFile()) decodeReference(rf, true); }
     setSessionFile(sessionFile_);
     applyAutoSaveSettings();
     if (!snapshotMode_ && !recoveryChecked_) { recoveryChecked_ = true; checkRecovery(); }
@@ -661,12 +668,13 @@ void MainComponent::timerCallback() {
   mixer_.sync();
   if (tick_ % 2 == 0) inserts_.sync();
   if (takes_.wanted() != takes_.isVisible()) resized();  // a loop region appeared/disappeared, or T was toggled
-  if (tick_ % 3 == 0) takes_.sync();
+  if (tick_ % 3 == 0) { takes_.sync(); dock_.syncMonitor(); }
   if (e && tick_ % 3 == 0) {
     collectTakes();
     e->collectGarbage();
     auto* v = dynamic_cast<Vst3Insert*>(e->insertAt(ui::kMasterId, kMeterSlot));
     dock_.setPlugin(v ? v->plugin() : nullptr);
+    e->monitor().listenSlot = v ? kMeterSlot : -1;  // the Hit Record Meter measures what is heard (the reference on B)
     if (autoSaver_) {
       auto saved = autoSaver_->tick(juce::Time::getMillisecondCounterHiRes() / 1000.0);
       if (!saved.empty()) {
@@ -681,17 +689,117 @@ void MainComponent::timerCallback() {
   }
 }
 
-// Drains the engine's master tap into the loudness meter. Integrated loudness / LRA only accumulate while the
-// transport plays, and start over when playback starts from the beginning of the song.
+// Two analysis streams: the master strip always measures the mix (master tap); the listening tools measure what
+// is heard (heard tap: the mix, or the reference while A/B is on B). Integrated loudness / LRA accumulate while
+// that source plays, and start over when the song plays from its beginning or A/B is switched.
 void MainComponent::pumpAnalysis(airdaw::Engine& e) {
-  if (!hub_ || snapshotFrozen_) return;
+  if (!hub_ || !mixLoud_ || snapshotFrozen_) return;
   auto& tr = e.transport();
+  auto& mon = e.monitor();
   const bool playing = tr.playing.load() && !tr.countingIn();
-  if (playing && !wasPlaying_ && (double)tr.pos.load() < e.sampleRate() * 0.05) hub_->resetProgramme();
-  wasPlaying_ = playing;
-  for (size_t got; (got = e.readMasterTap(tapBuf_.data(), tapBuf_.size() / 2)) > 0;) hub_->feed(tapBuf_.data(), got, playing);
+  const bool onB = mon.listenB.load() && e.reference() != nullptr;
+  if (playing && !wasPlaying_ && (double)tr.pos.load() < e.sampleRate() * 0.05) resetMeters();
+  if (onB != wasOnB_) hub_->resetProgramme();  // the tools start over on the other source
+  wasPlaying_ = playing; wasOnB_ = onB;
+  for (size_t got; (got = e.readMasterTap(tapBuf_.data(), tapBuf_.size() / 2)) > 0;) mixLoud_->process(tapBuf_.data(), got, playing);
+  const bool heardPlaying = onB ? mon.refPlaying.load() : playing;
+  for (size_t got; (got = e.readHeardTap(tapBuf_.data(), tapBuf_.size() / 2)) > 0;) hub_->feed(tapBuf_.data(), got, heardPlaying);
   hub_->playheadSeconds = (double)tr.pos.load() / e.sampleRate();
-  if (tick_ % 2 == 0) { hub_->refresh(); mixer_.master().setLoudness(hub_->loud()); tools_.updateAll(*hub_); }
+  // The reference as it plays (A or B), for the side-by-side levels. A fresh meter each time it starts.
+  const auto* ref = e.reference();
+  const bool refPlaying = ref && mon.refPlaying.load();
+  if (refPlaying && !wasRefPlaying_) refLoud_ = std::make_unique<airdaw::LoudnessMeter>(e.sampleRate());
+  wasRefPlaying_ = refPlaying;
+  for (size_t got; (got = e.readRefTap(tapBuf_.data(), tapBuf_.size() / 2)) > 0;) refLoud_->process(tapBuf_.data(), got, true);
+  if (tick_ % 2 == 0) {
+    const auto mix = mixLoud_->read();
+    mixer_.master().setLoudness(mix);
+    mixIntegrated_ = mix.integrated;
+    if (!snapshotLevels_) {
+      ctx_.mixLevels = {mix.momentary, mix.shortTerm, mix.integrated, mix.truePeakNow};
+      const auto rl = refLoud_->read();
+      ctx_.refLevels = {rl.momentary, rl.shortTerm, ref ? ref->lufs : -200.f, rl.truePeakNow};
+      ctx_.refLive = refPlaying;
+    }
+    hub_->refresh(); tools_.updateAll(*hub_);
+  }
+  // Reference level match: the reference's integrated loudness (measured when loaded) to the mix's.
+  if (tick_ % 15 == 0)
+    if (ref) {
+      float g = 0.f;
+      if (props_->getBoolValue("reference.match", true) && mixIntegrated_ > -70.f && ref->lufs > -70.f)
+        g = juce::jlimit(-30.f, 30.f, mixIntegrated_ - ref->lufs);
+      mon.refGainDb = g;
+    }
+}
+
+void MainComponent::resetMeters() {
+  if (hub_) hub_->resetProgramme();
+  if (mixLoud_) mixLoud_->resetIntegrated();
+}
+
+void MainComponent::chooseReference() {
+  const juce::File start(props_->getValue("reference.path", juce::File::getSpecialLocation(juce::File::userMusicDirectory).getFullPathName()));
+  chooser_ = std::make_shared<juce::FileChooser>("Choose a reference track", start.isDirectory() ? start : start.getParentDirectory(),
+                                                 "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+  chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this](const juce::FileChooser& c) {
+    const auto f = c.getResult(); if (f == juce::File()) return;
+    if (!snapshotMode_) { props_->setValue("reference.path", f.getFullPathName()); props_->saveIfNeeded(); }
+    decodeReference(f, false);
+  });
+}
+
+// Decodes a reference (WAV/AIFF/FLAC/MP3/OGG) on a background thread, resamples it to the engine's rate, measures
+// its integrated loudness once (for level matching), then hands it to the engine on the message thread.
+void MainComponent::decodeReference(const juce::File& f, bool quiet) {
+  auto* e = bridge_.engine(); if (!e) return;
+  const double sr = e->sampleRate();
+  ctx_.referenceStatus = juce::String(juce::CharPointer_UTF8("decoding\xe2\x80\xa6"));
+  juce::Component::SafePointer<MainComponent> sp(this);
+  std::thread([sp, f, sr, quiet] {
+    juce::AudioFormatManager fm; fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> rd(fm.createReaderFor(f));
+    auto ref = std::make_shared<std::unique_ptr<airdaw::Reference>>();
+    juce::String err;
+    if (!rd) err = "can't read " + f.getFileName();
+    else if (rd->lengthInSamples > (juce::int64)(rd->sampleRate * 60 * 30)) err = f.getFileName() + " is longer than 30 minutes";
+    else {
+      const int n = (int)rd->lengthInSamples;
+      juce::AudioBuffer<float> in(2, n + 64); in.clear();
+      rd->read(&in, 0, n, 0, true, true);
+      if (rd->numChannels == 1) in.copyFrom(1, 0, in, 0, 0, n);
+      const double ratio = rd->sampleRate / sr;  // input samples per output sample
+      const int outN = (int)std::floor((double)n / ratio);
+      auto r = std::make_unique<airdaw::Reference>();
+      r->name = f.getFileNameWithoutExtension().toStdString();
+      r->l.resize((size_t)outN); r->r.resize((size_t)outN);
+      if (std::abs(ratio - 1.0) < 1e-9) { std::copy(in.getReadPointer(0), in.getReadPointer(0) + outN, r->l.begin()); std::copy(in.getReadPointer(1), in.getReadPointer(1) + outN, r->r.begin()); }
+      else {
+        juce::WindowedSincInterpolator il, ir;
+        il.process(ratio, in.getReadPointer(0), r->l.data(), outN);
+        ir.process(ratio, in.getReadPointer(1), r->r.data(), outN);
+      }
+      airdaw::LoudnessMeter m(sr);  // integrated loudness of the whole reference
+      std::vector<float> chunk(2 * 8192);
+      for (int i = 0; i < outN; i += 8192) {
+        const int k = std::min(8192, outN - i);
+        for (int j = 0; j < k; ++j) { chunk[(size_t)(2 * j)] = r->l[(size_t)(i + j)]; chunk[(size_t)(2 * j + 1)] = r->r[(size_t)(i + j)]; }
+        m.process(chunk.data(), (size_t)k, true);
+      }
+      r->lufs = m.read().integrated;
+      *ref = std::move(r);
+    }
+    juce::MessageManager::callAsync([sp, ref, err, sr, quiet] {
+      if (!sp) return;
+      auto* en = sp->bridge_.engine();
+      if (!err.isEmpty() || !*ref) { sp->ctx_.referenceStatus = err; sp->note("REFERENCE FAILED: " + err, true); return; }
+      if (!en || en->sampleRate() != sr) return;  // the rate changed meanwhile: the new engine decodes it again
+      const auto name = juce::String((*ref)->name); const float lufs = (*ref)->lufs;
+      en->setReference(std::move(*ref));
+      sp->ctx_.referenceStatus.clear();
+      if (!quiet) sp->note("Reference loaded: " + name + (lufs > -70.f ? ", " + juce::String(lufs, 1) + " LUFS" : juce::String()));
+    });
+  }).detach();
 }
 
 // ---------------------------------------------------------------- snapshots (test hook)
@@ -738,6 +846,7 @@ void MainComponent::runScenario(const juce::String& name) {
   if (name == "info") ctx_.showPluginInfo("ToTape8");
   if (name == "signal" || name == "listen-signal") {  // synthetic stereo mix fed straight into the meters (never to the speakers)
     if (name == "listen-signal") { ctx_.notes.items = {{2.0, "vocal too loud in chorus"}, {5.5, "check bass at the drop"}}; setListen(true); }
+    e->track(1).polarity = true;  // a lit polarity button on track 2
     if (!hub_) hub_ = std::make_unique<ui::AnalysisHub>(e->sampleRate());
     const double sr = e->sampleRate(); std::vector<float> buf(2 * 4096); juce::Random rng(5); float lp = 0.f;
     for (int blk = 0; blk < (int)(8.0 * sr / 4096); ++blk) {
@@ -769,6 +878,20 @@ void MainComponent::runScenario(const juce::String& name) {
   if (name == "widemeter") dock_.setMeterWidth(1300);  // meter dragged most of the way across
   if (name == "fullmeter") dock_.setMeterWidth(5000);  // all the way
   if (name == "foldmeter") dock_.setMeterWidth(1580);  // two tools folded into tabs, one still open
+  if (name == "reference") {  // decode a 44.1 kHz reference into the 96 kHz engine; nothing is played aloud
+    auto f = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw_ref_test.wav");
+    { airdaw::WavWriter w; w.open(f.getFullPathName().toStdString(), 2, 44100);
+      std::vector<float> s(2 * 441000); const float a = std::pow(10.f, -18.f / 20.f);
+      for (size_t i = 0; i < 441000; ++i) s[2 * i] = s[2 * i + 1] = a * (float)std::sin(2.0 * 3.14159265358979 * 1000.0 * (double)i / 44100.0);
+      w.write(s.data(), 441000); w.close(); }
+    decodeReference(f, false);
+    e->monitor().mono = true; e->monitor().solo = airdaw::Monitor::Side;  // show lit monitor buttons
+    e->monitor().refSync = true; e->track(0).polarity = true; e->bus(1).polarity = true;  // lit Sync and polarity buttons
+    snapshotLevels_ = true;  // synthetic side-by-side levels: mix quieter than the reference
+    ctx_.mixLevels = {-15.2f, -14.1f, -14.6f, -1.3f}; ctx_.refLevels = {-8.9f, -9.4f, -9.6f, 0.2f}; ctx_.refLive = true;
+    tools_.addToSuite("reference", 0);
+    setListen(true);
+  }
   if (name == "listen") {
     ctx_.notes.items = {{12.0, "vocal too loud in chorus"}, {31.5, "check bass at the drop"}};  // in memory only
     setListen(true);

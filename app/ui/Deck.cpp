@@ -87,7 +87,11 @@ Deck::Deck(AppCtx& ctx) : ctx_(ctx) {
   reels_.isPlaying = [this] { auto* e = ctx_.engine(); return e && e->transport().playing.load() && ctx_.audioRunning; };
   for (auto* c : std::initializer_list<juce::Component*>{&reels_, &pos_, &rate_, &lat_, &dsp_, &keys_}) addAndMakeVisible(c);
   keys_.onKey = [this](TransportKeys::Key k) { if (onTransport) onTransport(k); };
-  buttons_ = {&listen_, &midi_, &plugins_, &projectBtn, &metersBtn, &displayBtn, &full_};
+  buttons_ = {&tap_, &listen_, &midi_, &plugins_, &projectBtn, &metersBtn, &displayBtn, &full_};
+  tap_.setTriggeredOnMouseDown(true);  // the tap lands when the button goes down, not when it is released
+  tap_.setTooltip("Tap tempo: tap in time (2 taps or more) to set the metronome tempo. Shows the current tempo.");
+  tap_.onClick = [this] { ctx_.tapTempo(); };
+  tap_.setButtonText("Tap 120.0");
   for (auto* b : buttons_) addAndMakeVisible(*b);
   for (auto* b : {&midi_, &plugins_}) { b->setEnabled(false); b->setTooltip("Coming in a later phase of the mixer port"); }
   listen_.setTooltip("Listen mode: big master, the reference suite and every listening tool (drag tools to arrange)");
@@ -117,6 +121,8 @@ void Deck::sync() {
     keys_.setLit(TransportKeys::Rec, tr.recording.load());
     keys_.setLit(TransportKeys::Loop, tr.loopOn.load());
     keys_.setLit(TransportKeys::Click, e->metronome().enabled.load());
+    const auto tt = "Tap " + juce::String(e->metronome().bpm.load(), 1);
+    if (tap_.getButtonText() != tt) tap_.setButtonText(tt);
   }
   auto* dev = ctx_.devices.getCurrentAudioDevice();
   if (!ctx_.audioRunning || !dev) {

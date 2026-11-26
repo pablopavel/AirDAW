@@ -484,7 +484,158 @@ class EarBreak : public Tool {
   double listened_ = 0.0, last_ = 0.0;
 };
 
+// ---------------------------------------------------------------- Reference A/B (own transport, optional loudness match)
+class ReferenceAB : public Tool {
+ public:
+  ReferenceAB() {
+    a_.setButtonText(juce::String(juce::CharPointer_UTF8("A \xc2\xb7 Mix"))); b_.setButtonText(juce::String(juce::CharPointer_UTF8("B \xc2\xb7 Ref")));
+    a_.setTooltip("Hear your mix"); b_.setTooltip("Hear the reference (the listening tools and the Hit Record Meter measure it too; the master strip stays on your mix)");
+    a_.onClick = [this] { if (auto* m = mon()) m->listenB = false; };
+    b_.onClick = [this] { if (auto* m = mon()) { if (!ref()) { if (ctx && ctx->loadReference) ctx->loadReference(); return; } m->listenB = true; } };
+    play_.onClick = [this] {
+      auto* m = mon(); auto* r = ref(); if (!m || !r || m->refSync.load()) return;
+      if (m->refPlaying.load()) { m->refPlaying = false; return; }
+      if (m->refPos.load() >= (juce::int64)r->l.size()) m->refSeek = 0;  // at the end: start over
+      m->refPlaying = true;
+    };
+    match_.setButtonText("Match loudness");
+    match_.setTooltip("Turn the reference up or down to your mix's integrated loudness, so the louder one doesn't just sound better");
+    match_.onClick = [this] { if (ctx) ctx->props.setValue("reference.match", !ctx->props.getBoolValue("reference.match", true)); };
+    sync_.setButtonText("Sync");
+    sync_.setTooltip("Sync to the song: the reference plays, stops and jumps with your song's transport (reference 0:00 = song 0:00)");
+    sync_.onClick = [this] {
+      if (!ctx) return;
+      const bool on = !ctx->props.getBoolValue("reference.sync", false);
+      ctx->props.setValue("reference.sync", on);
+      if (auto* m = mon()) m->refSync = on;
+    };
+    load_.setButtonText(juce::String(juce::CharPointer_UTF8("Load reference\xe2\x80\xa6")));
+    load_.onClick = [this] { if (ctx && ctx->loadReference) ctx->loadReference(); };
+    for (juce::Component* c : std::initializer_list<juce::Component*>{&a_, &b_, &play_, &match_, &sync_, &load_}) addAndMakeVisible(c);
+    for (auto* b : {&a_, &b_, &play_}) b->getProperties().set("noUpper", true);
+    sync_.getProperties().set("fontH", 10.5);
+  }
+  void update(const AnalysisHub&) override {
+    auto* m = mon(); auto* r = ref();
+    const bool onB = m && m->listenB.load();
+    a_.setToggleState(!onB, juce::dontSendNotification); b_.setToggleState(onB, juce::dontSendNotification);
+    const bool playing = m && m->refPlaying.load(), synced = m && m->refSync.load();
+    play_.setButtonText(juce::String(juce::CharPointer_UTF8(synced ? (playing ? "\xe2\x96\xb6 With song" : "Follows song")
+                                                                   : playing ? "\xe2\x96\xa0 Stop ref" : "\xe2\x96\xb6 Play ref")));
+    play_.setTooltip(synced ? "Synced: the reference follows the song transport (turn Sync off to play it on its own)"
+                            : "Play / stop the reference (it has its own position, independent of your song)");
+    play_.setToggleState(playing, juce::dontSendNotification);
+    play_.setEnabled(r != nullptr && !synced);
+    match_.setToggleState(ctx && ctx->props.getBoolValue("reference.match", true), juce::dontSendNotification);
+    sync_.setToggleState(synced, juce::dontSendNotification);
+    repaint();
+  }
+  juce::String headerValue() const override { auto* m = mon(); return m && m->listenB.load() ? juce::String("listening to B") : juce::String(); }
+  void paint(juce::Graphics& g) override {
+    auto r = getLocalBounds().toFloat().reduced(8.f, 0.f);
+    r.removeFromTop(34.f);
+    auto* rf = ref(); auto* m = mon();
+    const double sr = (ctx && ctx->engine()) ? ctx->engine()->sampleRate() : 48000.0;
+    auto mmss = [](double s) { return juce::String::formatted("%02d:%02d", (int)s / 60, (int)s % 60); };
+    row(g, r.removeFromTop(22.f), "REFERENCE", rf ? juce::String(rf->name) : (ctx && ctx->referenceStatus.isNotEmpty() ? ctx->referenceStatus : juce::String("none loaded")),
+        rf ? juce::Colour() : Theme::dim(), 11.f);
+    const bool matchOn = ctx && ctx->props.getBoolValue("reference.match", true);
+    row(g, r.removeFromTop(22.f), "LEVEL MATCH", !matchOn ? juce::String("off") : m && rf ? (m->refGainDb.load() >= 0 ? "+" : "") + juce::String(m->refGainDb.load(), 1) + " dB" : juce::String("-"));
+    r.removeFromTop(38.f);  // play / match buttons
+    bar_ = r.removeFromTop(12.f);
+    const double len = rf ? (double)rf->l.size() : 0.0, pos = m ? (double)m->refPos.load() : 0.0;
+    hbar(g, bar_, 0.f, len > 0 ? (float)(pos / len) : 0.f);
+    g.setColour(Theme::dim()); g.setFont(Theme::monoFont(11.f, false));
+    g.drawText(mmss(pos / sr) + " / " + mmss(len / sr), r.removeFromTop(24.f), juce::Justification::centredRight);
+    r.removeFromTop(8.f);
+    r.removeFromBottom(38.f);  // load button
+    if (ctx && r.getHeight() >= 40.f) paintLevels(g, r);
+  }
+  void resized() override {
+    auto r = getLocalBounds().reduced(8, 0);
+    auto ab = r.removeFromTop(30); r.removeFromTop(4);
+    a_.setBounds(ab.removeFromLeft(ab.getWidth() / 2).reduced(0, 2).withTrimmedRight(2)); b_.setBounds(ab.reduced(0, 2).withTrimmedLeft(2));
+    r.removeFromTop(44);
+    auto row2 = r.removeFromTop(30);
+    play_.setBounds(row2.removeFromLeft(row2.getWidth() / 2).reduced(0, 2).withTrimmedRight(2)); match_.setBounds(row2.reduced(0, 2).withTrimmedLeft(2));
+    r.removeFromTop(8 + 12);  // position bar
+    sync_.setBounds(r.removeFromTop(24).removeFromLeft(64).reduced(0, 2));
+    load_.setBounds(getLocalBounds().removeFromBottom(30).reduced(8, 2));
+  }
+  void mouseDown(const juce::MouseEvent& e) override {  // click the position bar to jump (synced: moves the song)
+    auto* m = mon(); auto* rf = ref();
+    if (!m || !rf || !bar_.expanded(0.f, 6.f).contains(e.position)) return;
+    const auto p = (juce::int64)(juce::jlimit(0.f, 1.f, (e.position.x - bar_.getX()) / bar_.getWidth()) * (double)rf->l.size());
+    if (!m->refSync.load()) { m->refSeek = p; return; }
+    auto& tr = ctx->engine()->transport();
+    if (!tr.recording.load()) tr.seek(p);
+  }
+  int defaultWidth() const override { return 300; }
+
+ private:
+  // Side by side: the mix and the reference. Bars = short-term loudness (3 s), the white line = momentary (400 ms),
+  // the tick beside the bar = integrated (the mix since playback started; the reference over its whole file).
+  void paintLevels(juce::Graphics& g, juce::Rectangle<float> r) {
+    auto& t = T();
+    const auto& mx = ctx->mixLevels; const auto& rl = ctx->refLevels; const bool live = ctx->refLive;
+    const juce::Colour refCol = Theme::cream();
+    auto head = r.removeFromTop(18.f);
+    g.setColour(Theme::dim()); g.setFont(Theme::spaced(Theme::uiFont(10.5f), 0.14f));
+    g.drawText("LEVELS", head, juce::Justification::centredLeft);
+    // Difference: short-term while both are sounding, else integrated (the mix so far vs the whole reference).
+    const bool stDiff = live && mx.s > -70.f && rl.s > -70.f;
+    const float a = stDiff ? rl.s : rl.i, b = stDiff ? mx.s : mx.i;
+    if (a > -70.f && b > -70.f) {
+      const float d = a - b;
+      g.setFont(Theme::monoFont(11.5f, false)); g.setColour(t.am());
+      g.drawText(juce::String("REF ") + (d >= 0 ? "+" : "") + juce::String(d, 1) + (stDiff ? " LU  (S)" : " LU  (I)"), head, juce::Justification::centredRight);
+    }
+    r.removeFromTop(4.f);
+    const bool bars = r.getHeight() >= 90.f;
+    const float lo = -42.f, hi = 0.f;
+    auto frac = [&](float v) { return juce::jlimit(0.f, 1.f, (v - lo) / (hi - lo)); };
+    auto side = [&](juce::Rectangle<float> col, const juce::String& name, const AppCtx::Levels& L, bool on, juce::Colour c) {
+      g.setColour(on ? c : Theme::dim()); g.setFont(Theme::spaced(Theme::uiFont(10.5f, true), 0.16f));
+      g.drawText(name, col.removeFromTop(16.f), juce::Justification::centredLeft, true);
+      col.removeFromTop(2.f);
+      auto nums = col;
+      if (bars) {
+        nums = col.withTrimmedLeft(38.f);
+        auto bar = col.withWidth(22.f).withTrimmedBottom(2.f);
+        t.drawWell(g, bar, juce::Colour(0xff030303), 2.f);
+        if (on && L.s > lo) {
+          auto f = bar.withTop(bar.getBottom() - frac(L.s) * bar.getHeight());
+          t.drawGlow(g, f, c, 6.f, 0.3f);
+          g.setColour(c.withAlpha(0.85f));
+          for (float y = bar.getBottom() - 4.f; y >= f.getY() - 3.f; y -= 5.f)
+            g.fillRect(bar.getX() + 2.f, juce::jmax(f.getY(), y), bar.getWidth() - 4.f, 4.f - juce::jmax(0.f, f.getY() - y));
+        }
+        if (on && L.m > lo) { const float y = bar.getBottom() - frac(L.m) * bar.getHeight(); g.setColour(juce::Colours::white.withAlpha(0.9f)); g.fillRect(bar.getX(), y - 1.f, bar.getWidth(), 2.f); }
+        if (L.i > lo) { const float y = bar.getBottom() - frac(L.i) * bar.getHeight(); g.setColour(c); g.fillRect(bar.getRight() + 3.f, y - 1.5f, 7.f, 3.f); }
+      }
+      const float rh = juce::jmin(20.f, nums.getHeight() / 4.f);
+      auto line = [&](const char* lab, float v, bool active) {
+        auto rr = nums.removeFromTop(rh);
+        g.setColour(Theme::dim()); g.setFont(Theme::uiFont(10.5f)); g.drawText(lab, rr, juce::Justification::centredLeft);
+        const bool show = active && v > -70.f;
+        g.setFont(Theme::monoFont(12.5f, false)); g.setColour(show ? c : Theme::dim());
+        g.drawText(show ? juce::String(v, 1) : juce::String("-"), rr, juce::Justification::centredRight);
+      };
+      line("S", L.s, on); line("M", L.m, on); line("I", L.i, true); line("TP", L.tp, on);
+    };
+    const float gap = 12.f;
+    auto left = r.removeFromLeft((r.getWidth() - gap) / 2.f); r.removeFromLeft(gap);
+    side(left, "MIX", mx, true, t.am());
+    side(r, live ? "REF" : "REF  (stopped)", rl, live, refCol);
+  }
+  airdaw::Monitor* mon() const { auto* e = ctx ? ctx->engine() : nullptr; return e ? &e->monitor() : nullptr; }
+  const airdaw::Reference* ref() const { auto* e = ctx ? ctx->engine() : nullptr; return e ? e->reference() : nullptr; }
+  juce::TextButton a_, b_, play_, match_, sync_, load_;
+  juce::Rectangle<float> bar_;
+};
+
 std::unique_ptr<Tool> createTool(const juce::String& id) {
+  if (id == "reference") return std::make_unique<ReferenceAB>();
   if (id == "stereo") return std::make_unique<StereoField>();
   if (id == "rta") return std::make_unique<Rta>();
   if (id == "loudness") return std::make_unique<LoudnessPanel>();

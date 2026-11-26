@@ -45,12 +45,42 @@ struct Metronome {
   std::atomic<int> countInBars{0};    // 0..4 bars of click before recording starts (plays even if `enabled` is off)
 };
 
+// A reference track for A/B listening: decoded stereo audio at the engine's sample rate.
+struct Reference {
+  std::vector<float> l, r;
+  std::string name;
+  float lufs = -200.f;  // integrated loudness, measured once when loaded (for level matching)
+};
+
+// Monitor section: changes only what is heard at the hardware outputs. Applied after the master chain and
+// both taps, so it never reaches recordings, exports or the meters.
+struct Monitor {
+  enum Solo { Stereo = 0, Left, Right, Mid, Side };
+  std::atomic<bool> mono{false}, dim{false}, polarity{false};  // polarity: flips the right channel
+  std::atomic<int> solo{Stereo};                               // L / R / Mid / Side to both speakers
+  std::atomic<float> dimDb{-20.f};
+  // Reference A/B. The reference has its own transport, independent of the song.
+  std::atomic<bool> listenB{false};      // true: hear the reference instead of the mix
+  std::atomic<bool> refPlaying{false};
+  std::atomic<int64_t> refPos{0};        // audio thread owns; the UI seeks with refSeek
+  std::atomic<int64_t> refSeek{-1};
+  std::atomic<float> refGainDb{0.f};     // level match (UI computes it), ramped on the audio thread
+  // Sync: the reference follows the song transport instead (plays/stops/seeks with it; reference 0 = song 0).
+  std::atomic<bool> refSync{false};
+  // Master insert slot that listens to what is heard (the Hit Record Meter), -1 none. On B it measures the
+  // reference: the rest of the master chain runs on the mix, then this slot runs on the reference.
+  std::atomic<int> listenSlot{-1};
+};
+
 // One mixer channel (track, bus or master).
 struct Channel {
   std::atomic<float> gainDb{0.f};     // fader, -inf..+6
   std::atomic<float> trimDb{0.f};     // clean input gain knob
   std::atomic<float> pan{0.f};        // -1..1 (stereo: balance)
   std::atomic<bool> mute{false}, solo{false};
+  // Polarity flip, after input and trim, before the inserts (ramped through zero, so no click).
+  // Takes are still recorded as they came in (like the trim, this is a mix setting).
+  std::atomic<bool> polarity{false};
   std::atomic<int> route{0};          // Route
   std::atomic<bool> stereo{false};    // tracks only
   std::atomic<bool> armed{false};
@@ -94,6 +124,11 @@ class Engine {
   // --- transport & recording (UI thread) ---
   Transport& transport() { return transport_; }
   Metronome& metronome() { return metro_; }
+  Monitor& monitor() { return mon_; }
+  // Installs a reference track (UI thread). The previous one stays in memory until the engine is destroyed,
+  // because the audio thread may still be reading it. nullptr removes the reference.
+  void setReference(std::unique_ptr<Reference> r);
+  const Reference* reference() const { return ref_.load(); }
   // Records every armed track (post-input, pre-insert, i.e. the dry signal) into `folder`.
   // If the transport is stopped and a count-in is set, the click counts in first: the position is held
   // and nothing is recorded until the count-in ends, then recording starts on the exact sample.
@@ -127,6 +162,12 @@ class Engine {
   void setMasterTapEnabled(bool on) { tapOn_.store(on); }
   size_t readMasterTap(float* interleaved, size_t maxFrames);
   uint64_t masterTapDropped() const { return tapDropped_.load(); }
+  // "Heard" tap: what the listener hears (the mix, or the reference while A/B is on B), before the monitor
+  // section. Same rules as the master tap.
+  size_t readHeardTap(float* interleaved, size_t maxFrames);
+  // Reference tap: the reference as it plays (on A or B, without the level-match gain), for comparing levels.
+  // Nothing is written while the reference is stopped.
+  size_t readRefTap(float* interleaved, size_t maxFrames);
 
   // Worker threads for parallel track/bus processing (-1 = automatic: cores-1, max 7; 0 = single-threaded).
   // Not real-time safe: call while audio is stopped. Output is bit-identical for any thread count.
@@ -166,8 +207,17 @@ class Engine {
   std::array<int, kMaxTracks> takeBase_{};  // first take of the current session's list
   std::vector<std::unique_ptr<Take>> removedTakes_;  // kept alive until the engine is destroyed
   FloatRing tap_{1u << 17};                          // master tap: ~0.68 s of stereo at 96 kHz
+  FloatRing heardTap_{1u << 17};
+  FloatRing refTap_{1u << 17};
+  std::array<std::vector<float>, 2> refBuf_;         // the reference's samples for the current block
   std::atomic<bool> tapOn_{false};
   std::atomic<uint64_t> tapDropped_{0};
+  Monitor mon_;
+  std::atomic<const Reference*> ref_{nullptr};
+  std::vector<std::unique_ptr<Reference>> refs_;     // every reference ever loaded (kept alive, see setReference)
+  float refGain_ = 1.f;                              // audio thread: current (ramped) reference gain
+  void writeTap(FloatRing& ring, const float* l, const float* r, int n);
+  void applyMonitor(float* l, float* r, int n, int64_t refLen);
   std::array<Channel, kMaxTracks> tracks_;
   std::array<Channel, kNumBuses> buses_;
   Channel master_;

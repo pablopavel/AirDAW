@@ -140,6 +140,33 @@ class MeterDock : public juce::Component {
     meterSplit_.setWidth = [this](int w) { meterW_ = juce::jlimit(260, juce::jmax(260, bodyWidth() - 14), w); ctx_.props.setValue("dock.meterWidth", meterW_); resized(); };
     meterW_ = ctx_.props.getIntValue("dock.meterWidth", 440);
     for (juce::Component* c : std::initializer_list<juce::Component*>{&load_, &toolsBtn_, &meterSplit_, &suite_}) addAndMakeVisible(c);
+    // Monitor section (mockup .mon): Mono / Dim / Pol are switches; L / R / Mid / Side choose one, click again for stereo.
+    const char* labels[7] = {"Mono", "Dim", "Pol \xe2\x8c\x80", "L", "R", "Mid", "Side"};
+    const char* tips[7] = {"Hear the mix in mono (speakers only; recordings and exports are unaffected)", "Turn the speakers down 20 dB",
+                           "Flip the right channel's polarity (with Mono: hear phase problems)", "Left channel on both speakers",
+                           "Right channel on both speakers", "Mid (L+R) on both speakers", "Side (L-R) on both speakers"};
+    for (int i = 0; i < 7; ++i) {
+      auto& b = mon_[(size_t)i];
+      b.setButtonText(juce::String(juce::CharPointer_UTF8(labels[i]))); b.setTooltip(tips[i]);
+      b.getProperties().set("noUpper", i >= 3 && i <= 4); b.getProperties().set("fontH", 11.0);
+      b.onClick = [this, i] {
+        auto* e = ctx_.engine(); if (!e) return;
+        auto& m = e->monitor();
+        if (i == 0) m.mono = !m.mono.load();
+        else if (i == 1) m.dim = !m.dim.load();
+        else if (i == 2) m.polarity = !m.polarity.load();
+        else { const int s = i - 2; m.solo = m.solo.load() == s ? (int)airdaw::Monitor::Stereo : s; }  // 3..6 -> Left..Side
+        syncMonitor();
+      };
+      addAndMakeVisible(b);
+    }
+  }
+  void syncMonitor() {  // reflect the engine's monitor state (~10x/s)
+    auto* e = ctx_.engine(); if (!e) return;
+    auto& m = e->monitor();
+    const bool on[7] = {m.mono.load(), m.dim.load(), m.polarity.load(), m.solo.load() == airdaw::Monitor::Left, m.solo.load() == airdaw::Monitor::Right,
+                        m.solo.load() == airdaw::Monitor::Mid, m.solo.load() == airdaw::Monitor::Side};
+    for (int i = 0; i < 7; ++i) mon_[(size_t)i].setToggleState(on[i], juce::dontSendNotification);
   }
   ~MeterDock() override { setPlugin(nullptr); }
 
@@ -194,6 +221,12 @@ class MeterDock : public juce::Component {
     toolsBtn_.setBounds(head.removeFromRight(96).reduced(4, 5));
     if (plugin_) load_.setBounds(head.removeFromRight(140).reduced(4, 5));
     else load_.setBounds(meterArea().withSizeKeepingCentre(220, 32).translated(0, 40));
+    head.removeFromRight(10);
+    for (int i = 6; i >= 0; --i) {  // right to left: Side Mid R L | Pol Dim Mono
+      const int w = i >= 3 && i <= 4 ? 30 : i == 2 ? 58 : 48;
+      mon_[(size_t)i].setBounds(head.removeFromRight(w).reduced(2, 5));
+      if (i == 3) head.removeFromRight(8);
+    }
     auto body = r.reduced(10);
     auto m = body.removeFromLeft(juce::jmin(meterW_, body.getWidth() - 14));
     meterSplit_.setBounds(body.removeFromLeft(14));
@@ -226,6 +259,7 @@ class MeterDock : public juce::Component {
   std::shared_ptr<juce::AudioPluginInstance> plugin_;
   std::unique_ptr<juce::AudioProcessorEditor> editor_;
   juce::TextButton load_, toolsBtn_;
+  std::array<juce::TextButton, 7> mon_;
   ColumnSplitter meterSplit_;
   SuiteArea suite_;
   int meterW_ = 440;

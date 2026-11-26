@@ -111,6 +111,11 @@ Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
   pan_.onChange = [this](float v) { if (auto* e = ctx_.engine()) if (auto* c = channelOf(*e, id_)) c->pan = v; };
   addAndMakeVisible(fader_);
   fader_.onChange = [this](float v) { if (auto* e = ctx_.engine()) if (auto* c = channelOf(*e, id_)) c->gainDb = juce::jmax(-200.f, dbOf(v)); };
+  addAndMakeVisible(pol_);  // after the fader: it sits on the fader block's free bottom-left corner
+  pol_.setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x8c\x80")));
+  pol_.getProperties().set("fontH", 11.0); pol_.getProperties().set("noUpper", true);
+  pol_.setTooltip("Polarity: flip this channel (after its input and trim, before the inserts). Takes are still recorded as they come in.");
+  pol_.onClick = [this] { if (auto* e = ctx_.engine()) if (auto* c = channelOf(*e, id_)) c->polarity = !c->polarity.load(); };
   setSize(kWidth, 600);
 }
 
@@ -180,6 +185,7 @@ void Strip::sync() {
     t_.setToggleState(ctx_.viewTrack == id_, juce::dontSendNotification);
   }
   m_.setToggleState(c.mute.load(), juce::dontSendNotification);
+  pol_.setToggleState(c.polarity.load(), juce::dontSendNotification);
   s_.setToggleState(c.solo.load(), juce::dontSendNotification);
   if (!gain_.isMouseButtonDown()) gain_.setValue(c.trimDb.load());
   if (!pan_.isMouseButtonDown()) pan_.setValue(c.pan.load());
@@ -227,6 +233,7 @@ void Strip::resized() {
   for (juce::Button* b : {(juce::Button*)&m_, (juce::Button*)&s_, (juce::Button*)&mon_, (juce::Button*)&t_, (juce::Button*)&r_})
     if (b->isVisible()) b->setBounds(row.removeFromLeft(bw).reduced(1, 0));
   fader_.setBounds(r);
+  pol_.setBounds(fader_.cornerArea().translated(r.getX(), r.getY()).withTrimmedLeft(2));
 }
 
 // ---------------- MasterStrip ----------------

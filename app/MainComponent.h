@@ -98,6 +98,15 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   std::vector<float> tapBuf_;
   bool wasPlaying_ = false;
   bool snapshotFrozen_ = false;  // test hook: synthetic meter readings stay on screen
+  std::unique_ptr<airdaw::LoudnessMeter> mixLoud_;  // the master strip's meter: always the mix (master tap)
+  std::unique_ptr<airdaw::LoudnessMeter> refLoud_;  // the reference as it plays (reference tap), for the A/B levels
+  bool wasRefPlaying_ = false;
+  bool snapshotLevels_ = false;  // test hook: synthetic A/B levels stay on screen
+  float mixIntegrated_ = -200.f;
+  bool wasOnB_ = false;
+  void resetMeters();
+  void chooseReference();
+  void decodeReference(const juce::File& f, bool quiet);
   void pumpAnalysis(airdaw::Engine& e);
   std::unique_ptr<juce::TooltipWindow> tooltips_;
 

@@ -85,7 +85,7 @@ const std::vector<ToolSet::Info>& ToolSet::registry() {
       {"stereo", "Stereo field"}, {"rta", "RTA \xc2\xb7 31 band"}, {"loudness", "Loudness"},
       {"target", "Target loudness"}, {"tonal", "Tonal balance"}, {"spectrogram", "Spectrogram"},
       {"history", "Loudness history"}, {"bandphase", "Band phase / width"}, {"headroom", "Headroom"},
-      {"notes", "Listening notes"}, {"earbreak", "Ear break"},
+      {"notes", "Listening notes"}, {"earbreak", "Ear break"}, {"reference", "Reference A/B"},
   };
   return r;
 }

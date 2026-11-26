@@ -42,7 +42,7 @@ class Strip : public juce::Component {
   AppCtx& ctx_;
   const int id_;
   NamePlate plate_;
-  juce::TextButton chn_, in_, route_, m_{"M"}, s_{"S"}, t_{"T"}, r_{"R"};
+  juce::TextButton chn_, in_, route_, m_{"M"}, s_{"S"}, t_{"T"}, r_{"R"}, pol_;
   MonitorButton mon_;
   GainKnob gain_;
   std::array<InsertSlot, airdaw::kMaxInserts> slots_;

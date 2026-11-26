@@ -10,13 +10,16 @@ namespace ui {
 class SettingsContent : public juce::Component, private juce::Timer {
  public:
   SettingsContent(AppCtx& ctx) : ctx_(ctx), selector_(ctx.devices, 0, 2, 0, 2, false, false, true, false) {
-    for (juce::Component* c : std::initializer_list<juce::Component*>{&selector_, &tone_, &bpm_, &beats_, &countIn_, &level_,
+    for (juce::Component* c : std::initializer_list<juce::Component*>{&selector_, &tone_, &bpm_, &tap_, &beats_, &countIn_, &level_,
                                                                       &autoSave_, &autoEvery_, &autoInfo_})
       addAndMakeVisible(c);
     tone_.setButtonText("Test tone on track 1 (440 Hz, -15 dBFS)");
     tone_.onClick = [this] { ctx_.bridge.testTone = tone_.getToggleState(); if (tone_.getToggleState()) ctx_.requireAudio("Test tone"); };
     bpm_.setSliderStyle(juce::Slider::IncDecButtons); bpm_.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 60, 26);
     bpm_.setRange(20.0, 400.0, 0.5);
+    tap_.setButtonText("Tap"); tap_.setTriggeredOnMouseDown(true);
+    tap_.setTooltip("Tap in time (2 taps or more) to set the tempo");
+    tap_.onClick = [this] { ctx_.tapTempo(); sync(); };
     level_.setSliderStyle(juce::Slider::LinearHorizontal); level_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 64, 22);
     level_.setRange(-40.0, 0.0, 0.5); level_.setTextValueSuffix(" dB");
     for (int b = 1; b <= 12; ++b) beats_.addItem(juce::String(b) + "/4", b);
@@ -73,7 +76,8 @@ class SettingsContent : public juce::Component, private juce::Timer {
     selector_.setBounds(r.removeFromTop(390));
     tone_.setBounds(r.removeFromTop(28).withTrimmedLeft(8));
     r.removeFromTop(22); metroY_ = r.getY(); r.removeFromTop(28);
-    bpm_.setBounds(r.removeFromTop(28).withTrimmedLeft(140).withWidth(170)); r.removeFromTop(8);
+    { auto br = r.removeFromTop(28).withTrimmedLeft(140); bpm_.setBounds(br.removeFromLeft(170)); br.removeFromLeft(8); tap_.setBounds(br.removeFromLeft(70)); }
+    r.removeFromTop(8);
     auto row = r.removeFromTop(28).withTrimmedLeft(140);
     beats_.setBounds(row.removeFromLeft(80)); row.removeFromLeft(8); countIn_.setBounds(row.removeFromLeft(150));
     r.removeFromTop(8);
@@ -95,6 +99,7 @@ class SettingsContent : public juce::Component, private juce::Timer {
   AppCtx& ctx_;
   juce::AudioDeviceSelectorComponent selector_;
   juce::ToggleButton tone_, autoSave_;
+  juce::TextButton tap_;
   juce::Slider bpm_, level_;
   juce::ComboBox beats_, countIn_, autoEvery_;
   juce::Label autoInfo_;

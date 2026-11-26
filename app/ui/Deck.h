@@ -39,6 +39,7 @@ class Deck : public juce::Component {
   Reels reels_;
   Lcd pos_{"Position", 40.f}, rate_{"Rate / depth", 15.f}, lat_{"Latency", 15.f}, dsp_{"DSP", 15.f};
   TransportKeys keys_;
+  juce::TextButton tap_;
   juce::TextButton listen_{juce::String(juce::CharPointer_UTF8("\xe2\x97\x89 Listen"))}, midi_{"MIDI Learn"},
       plugins_{juce::String(juce::CharPointer_UTF8("\xe2\x9f\xb3 Plugins"))}, full_{juce::String(juce::CharPointer_UTF8("\xe2\x9b\xb6 Full"))};
   std::vector<juce::TextButton*> buttons_;
