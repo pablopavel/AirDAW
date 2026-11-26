@@ -20,28 +20,46 @@ MainComponent::MainComponent() {
     return Vst3Insert::load(juce::File(juce::String(id.substr(5))), sr, err);
   });
   juce::String err = devices_.initialiseWithDefaultDevices(2, 2);  // Black Lion Revolution 2x2 is 2-in/2-out
-  if (err.isNotEmpty()) juce::Logger::writeToLog("Audio init: " + err);
+  if (err.isNotEmpty()) { juce::Logger::writeToLog("Audio init: " + err); initError_ = err; }
   devices_.addAudioCallback(&bridge_);
 
   selector_ = std::make_unique<juce::AudioDeviceSelectorComponent>(devices_, 0, 2, 0, 2, false, false, true, false);
   for (juce::Component* c : std::initializer_list<juce::Component*>{selector_.get(), &rtz_, &play_, &stop_, &rec_, &arm1_, &arm2_, &tone_,
-       &save_, &saveAs_, &open_, &new_, &meter_, &meterEd_, &autoSave_, &autoEvery_, &status_, &pos_, &notice_label_})
+       &save_, &saveAs_, &open_, &new_, &meter_, &meterEd_, &autoSave_, &autoEvery_, &status_, &pos_, &notice_label_,
+       &metro_, &bpmLabel_, &bpm_, &beats_, &countIn_, &levelLabel_, &clickLevel_})
     addAndMakeVisible(*c);
 
   rtz_.onClick = [this] { if (auto* e = bridge_.engine()) e->transport().seek(0); };
-  play_.onClick = [this] { if (auto* e = bridge_.engine()) e->transport().play(); };
+  play_.onClick = [this] { if (!requireAudio("Play")) return; if (auto* e = bridge_.engine()) e->transport().play(); };
   stop_.onClick = [this] {
     if (auto* e = bridge_.engine()) { e->transport().stop(); e->flushRecording(); collectTakes(); }
   };
   rec_.onClick = [this] {
+    if (!requireAudio("Recording")) return;
     auto* e = bridge_.engine(); if (!e) return;
+    if (!e->track(0).armed.load() && !e->track(1).armed.load()) note("No track is armed: tick Arm 1 or Arm 2 to record a take");
     auto dir = sessionFolder().getChildFile("audio"); dir.createDirectory();
     e->startRecording(dir.getFullPathName().toStdString());
   };
   rec_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff6a1a1a));
   arm1_.onClick = [this] { if (auto* e = bridge_.engine()) { e->track(0).inputL = 0; e->track(0).stereo = false; e->track(0).armed = arm1_.getToggleState(); } };
   arm2_.onClick = [this] { if (auto* e = bridge_.engine()) { e->track(1).inputL = 1; e->track(1).stereo = false; e->track(1).armed = arm2_.getToggleState(); } };
-  tone_.onClick = [this] { bridge_.testTone = tone_.getToggleState(); };
+  tone_.onClick = [this] { bridge_.testTone = tone_.getToggleState(); if (tone_.getToggleState()) requireAudio("Test tone"); };
+
+  // Metronome: settings live in the engine (and the session); these controls just mirror them.
+  bpm_.setRange(20.0, 400.0, 0.5); bpm_.setValue(120.0, juce::dontSendNotification);
+  bpm_.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 52, 22);
+  clickLevel_.setRange(-40.0, 0.0, 0.5); clickLevel_.setValue(-6.0, juce::dontSendNotification);
+  clickLevel_.setTextValueSuffix(" dB"); clickLevel_.setPopupDisplayEnabled(true, true, this);
+  for (int b = 1; b <= 12; ++b) beats_.addItem(juce::String(b) + "/4", b);
+  beats_.setSelectedId(4, juce::dontSendNotification);
+  countIn_.addItem("No count-in", 1); countIn_.addItem("Count-in 1 bar", 2); countIn_.addItem("Count-in 2 bars", 3);
+  countIn_.setSelectedId(1, juce::dontSendNotification);
+  metro_.onClick = [this] { applyMetronome(); if (metro_.getToggleState()) requireAudio("Metronome"); };
+  bpm_.onValueChange = [this] { applyMetronome(); };
+  clickLevel_.onValueChange = [this] { applyMetronome(); };
+  beats_.onChange = [this] { applyMetronome(); };
+  countIn_.onChange = [this] { applyMetronome(); };
 
   meter_.onClick = [this] { chooseMeterPlugin(); };
   meterEd_.onClick = [this] { openMeterEditor(); };
@@ -73,6 +91,55 @@ MainComponent::~MainComponent() {
   meterWindow_.reset();
   devices_.removeAudioCallback(&bridge_);
   props_->saveIfNeeded();
+}
+
+bool MainComponent::requireAudio(const char* what) {
+  if (audioRunning_) return true;
+  note(juce::String(what) + " needs a running audio device - see the red status line at the top");
+  return false;
+}
+
+void MainComponent::applyMetronome() {
+  auto* e = bridge_.engine(); if (!e) return;
+  auto& m = e->metronome();
+  m.enabled = metro_.getToggleState(); m.bpm = (float)bpm_.getValue(); m.levelDb = (float)clickLevel_.getValue();
+  m.beatsPerBar = juce::jlimit(1, 16, beats_.getSelectedId()); m.countInBars = juce::jlimit(0, 4, countIn_.getSelectedId() - 1);
+}
+
+void MainComponent::syncMetronomeControls() {  // after a session load or an engine rebuild
+  auto* e = bridge_.engine(); if (!e) return;
+  auto& m = e->metronome();
+  metro_.setToggleState(m.enabled.load(), juce::dontSendNotification);
+  bpm_.setValue(m.bpm.load(), juce::dontSendNotification); clickLevel_.setValue(m.levelDb.load(), juce::dontSendNotification);
+  beats_.setSelectedId(juce::jlimit(1, 12, m.beatsPerBar.load()), juce::dontSendNotification);
+  countIn_.setSelectedId(juce::jlimit(0, 2, m.countInBars.load()) + 1, juce::dontSendNotification);
+}
+
+// Red status line whenever audio is not actually running, so a device that failed to open is obvious.
+void MainComponent::updateDeviceStatus() {
+  auto* dev = devices_.getCurrentAudioDevice();
+  const double now = juce::Time::getMillisecondCounterHiRes();
+  const auto cb = bridge_.callbacks.load(std::memory_order_relaxed);
+  if (cb != lastCallbacks_) { lastCallbacks_ = cb; lastCallbackSeen_ = now; }
+  audioRunning_ = dev != nullptr && dev->isPlaying() && cb != 0 && now - lastCallbackSeen_ < 1000.0;
+
+  juce::String text;
+  if (dev == nullptr) {
+    auto setup = devices_.getAudioDeviceSetup();
+    auto name = setup.outputDeviceName.isNotEmpty() ? setup.outputDeviceName : setup.inputDeviceName;
+    text = "AUDIO DEVICE FAILED TO OPEN: " + devices_.getCurrentAudioDeviceType() + (name.isNotEmpty() ? " \"" + name + "\"" : juce::String()) +
+           (initError_.isNotEmpty() ? " (" + initError_ + ")" : juce::String()) +
+           ". No sound, no recording. Close other audio apps, replug the interface, or pick another device/buffer below.";
+  } else if (!audioRunning_) {
+    text = "AUDIO DEVICE NOT RUNNING: " + dev->getTypeName() + " \"" + dev->getName() + "\" is open but is not delivering audio. "
+           "Close other audio apps, replug the interface, or pick another buffer size below.";
+  } else {
+    const double sr = bridge_.sampleRate(); const int buf = bridge_.bufferSamples(), lat = bridge_.deviceLatencySamples();
+    text = dev->getTypeName() + " \"" + dev->getName() + "\" | " + juce::String(sr / 1000.0, 1) + " kHz | buffer " + juce::String(buf) +
+           " smp | round-trip ~" + juce::String(1000.0 * (buf + lat) / sr, 2) + " ms | DSP " + juce::String(int(devices_.getCpuUsage() * 100)) + "%";
+  }
+  status_.setText(text, juce::dontSendNotification);
+  status_.setColour(juce::Label::textColourId, audioRunning_ ? juce::Colours::white : juce::Colour(0xffff5050));
 }
 
 juce::File MainComponent::sessionFolder() const {
@@ -110,7 +177,7 @@ void MainComponent::newSession() {
         airdaw::Engine blank(e->sampleRate());
         auto tmp = (juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw_blank.airdaw")).getFullPathName().toStdString();
         airdaw::saveSession(blank, tmp); airdaw::loadSession(*e, tmp);
-        setSessionFile({}); note("New session");
+        setSessionFile({}); syncMetronomeControls(); note("New session");
       });
 }
 
@@ -138,6 +205,7 @@ void MainComponent::openSession() {
         setSessionFile(f);
         arm1_.setToggleState(e->track(0).armed.load(), juce::dontSendNotification);
         arm2_.setToggleState(e->track(1).armed.load(), juce::dontSendNotification);
+        syncMetronomeControls();
         note(r.warnings.empty() ? "Opened " + f.getFileName() : "Opened with " + juce::String((int)r.warnings.size()) + " warning(s): " + r.warnings[0]);
       });
 }
@@ -155,7 +223,7 @@ void MainComponent::checkRecovery() {
       .withButton("Restore", 1).withButton("Ignore", 0),
       [this, lf](int r) {
         if (r != 1) return;
-        if (auto* e = bridge_.engine()) { auto res = airdaw::loadSession(*e, lf.getFullPathName().toStdString()); note(res.ok ? "Recovered auto-save" : "RECOVERY FAILED: " + res.error); }
+        if (auto* e = bridge_.engine()) { auto res = airdaw::loadSession(*e, lf.getFullPathName().toStdString()); syncMetronomeControls(); note(res.ok ? "Recovered auto-save" : "RECOVERY FAILED: " + res.error); }
       });
 }
 
@@ -206,25 +274,24 @@ void MainComponent::timerCallback() {
     autoSaver_ = std::make_unique<airdaw::AutoSaver>(*e);
     setSessionFile(sessionFile_);
     applyAutoSaveSettings();
+    applyMetronome();  // first run: push the control defaults; after a rate change the session carried them over anyway
     if (!recoveryChecked_) { recoveryChecked_ = true; checkRecovery(); }
   }
   if (e) {
     collectTakes();
     auto saved = autoSaver_->tick(juce::Time::getMillisecondCounterHiRes() / 1000.0);
     if (!saved.empty()) note("Auto-saved " + juce::Time::getCurrentTime().toString(false, true));
-    pos_.setText(timeText((double)e->transport().pos.load() / e->sampleRate()), juce::dontSendNotification);
+    auto& tr = e->transport();
+    if (tr.countingIn()) {  // show the beats still to go
+      const double beat = e->sampleRate() * 60.0 / juce::jlimit(20.0, 400.0, (double)e->metronome().bpm.load());
+      pos_.setText("COUNT-IN  " + juce::String((int)std::ceil((double)tr.countInLeft.load() / beat)), juce::dontSendNotification);
+    } else
+      pos_.setText(timeText((double)tr.pos.load() / e->sampleRate()), juce::dontSendNotification);
     meterL_ = e->master().meter.peakL.load(); meterR_ = e->master().meter.peakR.load();
     rec_.setToggleState(e->transport().recording.load(), juce::dontSendNotification);
     rec_.setColour(juce::TextButton::buttonColourId, e->transport().recording.load() ? juce::Colours::red : juce::Colour(0xff6a1a1a));
   }
-  auto* dev = devices_.getCurrentAudioDevice();
-  if (!dev) status_.setText("No audio device open", juce::dontSendNotification);
-  else {
-    const double sr = bridge_.sampleRate(); const int buf = bridge_.bufferSamples(), lat = bridge_.deviceLatencySamples();
-    status_.setText(juce::String(dev->getTypeName()) + " | " + juce::String(sr / 1000.0, 1) + " kHz | buffer " + juce::String(buf) +
-                    " smp | round-trip ~" + juce::String(1000.0 * (buf + lat) / sr, 2) + " ms | DSP " +
-                    juce::String(int(devices_.getCpuUsage() * 100)) + "%", juce::dontSendNotification);
-  }
+  updateDeviceStatus();
   notice_label_.setText(juce::Time::getMillisecondCounter() < noticeUntil_ ? notice_ : juce::String(), juce::dontSendNotification);
   repaint();
 }
@@ -243,13 +310,20 @@ void MainComponent::paint(juce::Graphics& g) {
 
 void MainComponent::resized() {
   auto r = getLocalBounds().reduced(12);
-  status_.setBounds(r.removeFromTop(26));
+  status_.setBounds(r.removeFromTop(42));  // two lines, so a device error and its hint both fit
   pos_.setBounds(r.removeFromTop(50));
   auto row = r.removeFromTop(34);
   for (auto* b : {&rtz_, &play_, &stop_, &rec_}) b->setBounds(row.removeFromLeft(90).reduced(2));
   row.removeFromLeft(10);
   arm1_.setBounds(row.removeFromLeft(130)); arm2_.setBounds(row.removeFromLeft(130));
-  tone_.setBounds(r.removeFromTop(26));
+  row = r.removeFromTop(30);
+  tone_.setBounds(row.removeFromLeft(180));
+  metro_.setBounds(row.removeFromLeft(100));
+  bpmLabel_.setBounds(row.removeFromLeft(36)); bpm_.setBounds(row.removeFromLeft(112).reduced(0, 3));
+  row.removeFromLeft(6);
+  beats_.setBounds(row.removeFromLeft(64).reduced(0, 3)); row.removeFromLeft(6);
+  countIn_.setBounds(row.removeFromLeft(128).reduced(0, 3)); row.removeFromLeft(6);
+  levelLabel_.setBounds(row.removeFromLeft(40)); clickLevel_.setBounds(row.reduced(0, 3));
   row = r.removeFromTop(34);
   for (auto* b : {&new_, &open_, &save_, &saveAs_}) b->setBounds(row.removeFromLeft(90).reduced(2));
   meter_.setBounds(row.removeFromLeft(150).reduced(2)); meterEd_.setBounds(row.removeFromLeft(110).reduced(2));

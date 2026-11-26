@@ -33,6 +33,17 @@ struct Meter {
   std::atomic<float> peakL{0}, peakR{0}, rmsL{0}, rmsR{0};
 };
 
+// Click track. Mixed into the hardware output after the master chain, so it is never recorded,
+// never reaches master inserts (e.g. a meter), and is not affected by the master fader.
+// Clicks are computed from the transport position, so they stay on the grid through loops and seeks.
+struct Metronome {
+  std::atomic<bool> enabled{false};   // click while playing / recording
+  std::atomic<float> bpm{120.f};      // 20..400
+  std::atomic<int> beatsPerBar{4};    // 1..16; beat 1 of each bar is accented
+  std::atomic<float> levelDb{-6.f};   // click level at the output
+  std::atomic<int> countInBars{0};    // 0..4 bars of click before recording starts (plays even if `enabled` is off)
+};
+
 // One mixer channel (track, bus or master).
 struct Channel {
   std::atomic<float> gainDb{0.f};     // fader, -inf..+6
@@ -74,7 +85,10 @@ class Engine {
 
   // --- transport & recording (UI thread) ---
   Transport& transport() { return transport_; }
+  Metronome& metronome() { return metro_; }
   // Records every armed track (post-input, pre-insert, i.e. the dry signal) into `folder`.
+  // If the transport is stopped and a count-in is set, the click counts in first: the position is held
+  // and nothing is recorded until the count-in ends, then recording starts on the exact sample.
   void startRecording(const std::string& folder);
   void stopRecording() { transport_.recording = false; }
   std::vector<FinishedTake> pollFinishedTakes() { return writer_->pollFinished(); }
@@ -110,9 +124,12 @@ class Engine {
   void applyCommands();
   void runChain(Channel& c, float* l, float* r, int n);
   void updateMeter(Meter& m, const float* l, const float* r, int n);
+  double beatSamples() const;
+  void addClick(float* l, float* r, int n, int64_t pos);
 
   double sr_;
   Transport transport_;
+  Metronome metro_;
   std::unique_ptr<DiskWriter> writer_;
   std::array<std::vector<std::unique_ptr<Take>>, kMaxTracks> takes_;
   std::array<Channel, kMaxTracks> tracks_;

@@ -22,6 +22,11 @@ class MainComponent : public juce::Component, private juce::Timer {
   void chooseMeterPlugin();
   void openMeterEditor();
   void loadMeter(const juce::File& vst3);
+  bool audioRunning() const { return audioRunning_; }
+  bool requireAudio(const char* what);  // shows why `what` cannot work when no audio is running
+  void updateDeviceStatus();
+  void syncMetronomeControls();
+  void applyMetronome();
   juce::File sessionFolder() const;
   juce::String sessionName() const;
   void note(const juce::String& s) { notice_ = s; noticeUntil_ = juce::Time::getMillisecondCounter() + 6000; }
@@ -36,7 +41,14 @@ class MainComponent : public juce::Component, private juce::Timer {
   std::unique_ptr<PluginWindow> meterWindow_;
   juce::ToggleButton autoSave_{"Auto-save every"};
   juce::ComboBox autoEvery_;
+  juce::ToggleButton metro_{"Metronome"};
+  juce::Slider bpm_{juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft}, clickLevel_{juce::Slider::LinearHorizontal, juce::Slider::NoTextBox};
+  juce::ComboBox beats_, countIn_;
+  juce::Label bpmLabel_{{}, "BPM"}, levelLabel_{{}, "Click"};
   juce::Label status_, pos_, notice_label_;
+  bool audioRunning_ = false;
+  juce::uint32 lastCallbacks_ = 0; double lastCallbackSeen_ = 0;
+  juce::String initError_;  // error from opening the device at startup, if any
   juce::String notice_; juce::uint32 noticeUntil_ = 0;
 
   juce::File sessionFile_;                         // empty = unsaved "Untitled"

@@ -34,6 +34,11 @@ std::string sessionToJson(Engine& e, const std::string& baseDir) {
     .set("punchOn", JVal::boolean(t.punchOn)).set("punchIn", JVal::num((double)t.punchIn.load())).set("punchOut", JVal::num((double)t.punchOut.load()))
     .set("pos", JVal::num((double)t.pos.load()));
   root.set("transport", tj);
+  auto& m = e.metronome();
+  JVal mj = JVal::obj();
+  mj.set("enabled", JVal::boolean(m.enabled)).set("bpm", JVal::num(m.bpm)).set("beatsPerBar", JVal::num(m.beatsPerBar))
+    .set("levelDb", JVal::num(m.levelDb)).set("countInBars", JVal::num(m.countInBars));
+  root.set("metronome", mj);
   JVal chs = JVal::arr();
   for (int id : allIds()) {
     Channel& c = chan(e, id);
@@ -93,6 +98,12 @@ SessionResult loadSession(Engine& e, const std::string& path) {
     tr.loopIn = (int64_t)t->num("loopIn", 0); tr.loopOut = (int64_t)t->num("loopOut", 0); tr.loopOn = t->flag("loopOn", false);
     tr.punchIn = (int64_t)t->num("punchIn", 0); tr.punchOut = (int64_t)t->num("punchOut", 0); tr.punchOn = t->flag("punchOn", false);
     tr.seek((int64_t)t->num("pos", 0));
+  }
+  {  // older sessions have no "metronome" block: fall back to the defaults
+    auto& m = e.metronome(); const JVal none = JVal::obj(); const JVal* mj = root.get("metronome"); if (!mj) mj = &none;
+    m.enabled = mj->flag("enabled", false); m.bpm = std::clamp((float)mj->num("bpm", 120), 20.f, 400.f);
+    m.beatsPerBar = std::clamp((int)mj->num("beatsPerBar", 4), 1, 16); m.levelDb = (float)mj->num("levelDb", -6);
+    m.countInBars = std::clamp((int)mj->num("countInBars", 0), 0, 4);
   }
   // Clear existing inserts (only occupied slots, to keep the command queue small).
   for (int id : allIds()) for (int s = 0; s < kMaxInserts; ++s) if (e.insertAt(id, s)) e.setInsert(id, s, "");

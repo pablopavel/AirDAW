@@ -24,6 +24,8 @@ class AudioBridge : public juce::AudioIODeviceCallback {
 
   // Built-in test signal into track 1 so the output path can be checked with no inputs connected.
   std::atomic<bool> testTone{false};
+  // Counts device callbacks so the UI can tell "device open" from "device actually delivering audio".
+  std::atomic<juce::uint32> callbacks{0};
 
   // How sessions recreate hosted plugins (VST3). Applied to the current and every future engine.
   void setInsertFactory(airdaw::InsertFactory f) { factory_ = std::move(f); if (owned_) owned_->setInsertFactory(factory_); }
@@ -53,6 +55,7 @@ class AudioBridge : public juce::AudioIODeviceCallback {
 
   void audioDeviceIOCallbackWithContext(const float* const* in, int nIn, float* const* out, int nOut,
                                         int n, const juce::AudioIODeviceCallbackContext&) override {
+    callbacks.fetch_add(1, std::memory_order_relaxed);
     auto* e = engine();
     if (!e) { for (int c = 0; c < nOut; ++c) juce::FloatVectorOperations::clear(out[c], n); return; }
     if (testTone.load(std::memory_order_relaxed) && n <= airdaw::kMaxBlock) {

@@ -7,8 +7,11 @@ struct Transport {
   std::atomic<bool> playing{false}, recording{false}, loopOn{false}, punchOn{false};
   std::atomic<int64_t> pos{0}, loopIn{0}, loopOut{0}, punchIn{0}, punchOut{0};
   std::atomic<int64_t> seekReq{-1};
+  // Count-in before recording (set by Engine::startRecording; the audio thread counts it down).
+  std::atomic<int64_t> countInLeft{0}, countInTotal{0};
+  bool countingIn() const { return playing.load() && countInLeft.load() > 0; }
   void play() { playing = true; }
-  void stop() { playing = false; recording = false; }
+  void stop() { playing = false; recording = false; countInLeft = 0; }
   void record() { recording = true; playing = true; }
   void seek(int64_t p) { seekReq.store(p < 0 ? 0 : p); }
 };

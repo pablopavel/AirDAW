@@ -29,7 +29,31 @@ void Engine::startRecording(const std::string& folder) {
   std::vector<std::string> names;
   for (auto& t : tracks_) names.push_back(t.name);
   writer_->setFolder(folder, names);
+  const int bars = std::clamp(metro_.countInBars.load(), 0, 4);
+  int64_t ci = 0;
+  if (bars > 0 && !transport_.playing.load())  // no count-in when punching in on a running transport
+    ci = (int64_t)std::llround(bars * std::clamp(metro_.beatsPerBar.load(), 1, 16) * beatSamples());
+  transport_.countInTotal = ci;
+  transport_.countInLeft = ci;  // set before record(): the audio thread checks it once playing is true
   transport_.record();
+}
+
+double Engine::beatSamples() const { return sr_ * 60.0 / std::clamp((double)metro_.bpm.load(), 20.0, 400.0); }
+
+// Adds clicks for samples [pos, pos+n) of the beat grid that starts at sample 0. Stateless, so seeks,
+// loop wraps and block sizes cannot shift it. Beat 1 of a bar: 1500 Hz, other beats: 1000 Hz, ~30 ms decay.
+void Engine::addClick(float* l, float* r, int n, int64_t pos) {
+  const double beat = beatSamples(), clickLen = sr_ * 0.03, decay = sr_ * 0.006;
+  const int bpb = std::clamp(metro_.beatsPerBar.load(), 1, 16);
+  const float amp = dbToLin(std::min(metro_.levelDb.load(), 6.f));
+  if (amp <= 0.f) return;
+  for (int i = 0; i < n; ++i) {
+    const double p = (double)(pos + i), b = std::floor(p / beat), off = p - b * beat;
+    if (off >= clickLen) continue;
+    const double f = ((int64_t)b % bpb == 0) ? 1500.0 : 1000.0;
+    const float s = amp * (float)(std::exp(-off / decay) * std::sin(2.0 * 3.14159265358979 * f * off / sr_));
+    l[i] += s; r[i] += s;
+  }
 }
 
 int Engine::addTake(int track, const std::string& path, int64_t start) {
@@ -229,6 +253,11 @@ void Engine::process(const float* const* in, int nIn, float* const* out, int nOu
     const bool loopActive = tr.loopOn.load() && loopOut > loopIn;
     const int64_t pIn = tr.punchIn.load(), pOut = tr.punchOut.load();
     int n = std::min(kMaxBlock, total - done);
+    // Count-in: tracks only monitor live input, nothing records, the position is held. The segment is
+    // cut where the count-in ends so recording starts on the exact sample.
+    int64_t ciLeft = c.playing ? tr.countInLeft.load() : 0;
+    const bool countIn = ciLeft > 0;
+    if (countIn) { n = (int)std::min<int64_t>(n, ciLeft); c.playing = false; }
     if (c.playing) {  // split blocks at loop end and punch points so they land on the exact sample
       auto lim = [&](int64_t b) { if (b > c.pos) n = (int)std::min<int64_t>(n, b - c.pos); };
       if (loopActive && c.pos < loopOut) lim(loopOut);
@@ -282,6 +311,14 @@ void Engine::process(const float* const* in, int nIn, float* const* out, int nOu
               master_.mute.load(std::memory_order_relaxed) ? 0.f
                   : dbToLin(master_.gainDb.load(std::memory_order_relaxed)));
     updateMeter(master_.meter, ml, mr, n);
+
+    // Click goes to the output only (after master inserts and meter, so it is never recorded or metered).
+    if (countIn) {
+      addClick(ml, mr, n, tr.countInTotal.load() - ciLeft);
+      tr.countInLeft.compare_exchange_strong(ciLeft, ciLeft - n);  // a stop() in between wins
+    } else if (c.playing && metro_.enabled.load(std::memory_order_relaxed)) {
+      addClick(ml, mr, n, c.pos);
+    }
 
     for (int o = 0; o < nOut; ++o) {
       if (o == 0) std::memcpy(out[0] + done, ml, n * sizeof(float));

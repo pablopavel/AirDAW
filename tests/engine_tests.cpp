@@ -63,6 +63,56 @@ static std::string tmpDir() {
 static const bool kQuick = std::getenv("AIRDAW_QUICK") != nullptr;  // short runs (for sanitizers)
 static float db(float x) { return 20 * std::log10(std::max(x, 1e-9f)); }
 
+// Own function (own stack frame): MSVC gives every block-scoped Engine in main() its own stack slot.
+static void testMetronome() {
+  { const int beat = 48000;  // 120 BPM at 96 kHz
+    const int clickLen = (int)(SR * 0.03);
+    auto peakIn = [](const std::vector<float>& v, size_t a, size_t b) { float p = 0; for (size_t i = a; i < b && i < v.size(); ++i) p = std::max(p, std::fabs(v[i])); return p; };
+    auto zeroCross = [](const std::vector<float>& v, size_t a, size_t b) { int z = 0; for (size_t i = a + 1; i < b; ++i) z += (v[i - 1] < 0) != (v[i] < 0); return z; };
+    { Engine e(SR); auto& m = e.metronome(); m.enabled = true; m.bpm = 120; m.beatsPerBar = 4; m.levelDb = 0;
+      e.transport().play(); long k = 0; auto out = stream(e, k, 5 * beat, 64);
+      bool grid = true;
+      for (int b = 0; b < 5; ++b) {
+        grid &= peakIn(out, (size_t)b * beat, (size_t)b * beat + clickLen) > 0.3f;               // click present
+        grid &= peakIn(out, (size_t)b * beat + clickLen, (size_t)(b + 1) * beat) == 0.f;         // silence between
+      }
+      CHECK(grid, "metronome clicks not on the beat grid");
+      const int zAccent = zeroCross(out, 0, clickLen), zBeat = zeroCross(out, beat, beat + clickLen), zBar = zeroCross(out, 4 * beat, 4 * beat + clickLen);
+      CHECK(zAccent > zBeat && zBar == zAccent, "accent on beat 1 (zero crossings %d vs %d, next bar %d)", zAccent, zBeat, zBar);
+      e.transport().stop(); auto silent = stream(e, k, 2000, 64);
+      CHECK(peakIn(silent, 0, silent.size()) == 0.f, "metronome must be silent when stopped"); }
+    { Engine e(SR); auto dir = tmpDir(); e.track(0).inputL = 0; e.track(0).armed = true;  // click is not in the take
+      e.metronome().enabled = true; e.metronome().levelDb = 0;
+      long k = 0; e.startRecording(dir); stream(e, k, 20000); e.stopRecording(); stream(e, k, 200); e.flushRecording();
+      auto f = e.pollFinishedTakes(); bool exact = f.size() == 1;
+      if (exact) { WavData w; readWav(f[0].path, w); exact = w.left.size() == 20000; for (size_t i = 0; exact && i < w.left.size(); ++i) exact = w.left[i] == sigAt((long)i); }
+      CHECK(exact, "take recorded with metronome on must be bit-exact (no click)"); }
+    { Engine e(SR); auto dir = tmpDir(); e.track(0).inputL = 0; e.track(0).armed = true;  // 1-bar count-in
+      e.track(0).mute = true;  // keep live monitoring off the output so only the click is measured (recording is pre-fader)
+      auto& m = e.metronome(); m.countInBars = 1; m.beatsPerBar = 4; m.bpm = 120; m.levelDb = 0;  // enabled stays off
+      long k = 0; e.startRecording(dir);
+      CHECK(e.transport().countingIn(), "count-in should be active");
+      auto ci = stream(e, k, 4 * beat + 20000, 77);  // 77-sample blocks: the count-in ends mid-block
+      CHECK(!e.transport().countingIn(), "count-in should be over");
+      bool clicks = true; for (int b = 0; b < 4; ++b) clicks &= peakIn(ci, (size_t)b * beat, (size_t)b * beat + clickLen) > 0.3f;
+      CHECK(clicks, "count-in clicks missing");
+      CHECK(peakIn(ci, 4 * beat, ci.size()) == 0.f, "no click after count-in when the metronome is off");
+      CHECK(e.transport().pos.load() == 20000, "pos after count-in=%lld", (long long)e.transport().pos.load());
+      e.stopRecording(); stream(e, k, 200); e.flushRecording(); e.transport().stop();
+      auto f = e.pollFinishedTakes(); bool ok = f.size() == 1;
+      if (ok) { WavData w; readWav(f[0].path, w); ok = f[0].start == 0 && w.left.size() == 20000;
+        for (size_t i = 0; ok && i < w.left.size(); ++i) ok = w.left[i] == sigAt(4L * beat + (long)i); }
+      CHECK(ok, "count-in take must start exactly when the count-in ends");
+      // Stop during a count-in: nothing recorded, nothing moves.
+      e.metronome().countInBars = 2; e.startRecording(dir); stream(e, k, beat); e.transport().stop(); stream(e, k, 2000); e.flushRecording();
+      CHECK(e.pollFinishedTakes().empty() && e.transport().pos.load() == 20200 && !e.transport().countingIn(), "stop during count-in");
+      std::printf("metronome: clicks on grid, accent on beat 1, not recorded, 1-bar count-in starts the take sample-exact\n"); }
+    { Engine a(SR); auto& m = a.metronome(); m.enabled = true; m.bpm = 93.5f; m.beatsPerBar = 7; m.levelDb = -12; m.countInBars = 2;
+      auto p = tmpDir() + "/metro.airdaw"; CHECK(saveSession(a, p).ok, "metro save");
+      Engine b(SR); CHECK(loadSession(b, p).ok, "metro load"); auto& n = b.metronome();
+      CHECK(n.enabled && n.bpm == 93.5f && n.beatsPerBar == 7 && n.levelDb == -12.f && n.countInBars == 2, "metronome settings round trip"); } }
+}
+
 int main() {
   // 1. Registry
   auto fx = listEffects();
@@ -157,6 +207,9 @@ int main() {
       long k2 = 0; auto out = stream(e, k2, 5000);
       bool pb = true; for (size_t i = 0; pb && i < out.size(); ++i) pb = std::fabs(out[i] - sigAt(2000 + (long)(i % 2000))) < 1e-6f;
       CHECK(pb, "take playback through loop"); std::printf("loop record: 3 takes, pass 2 plays back sample-exact across loop wraps\n"); } }
+
+  // 13b. Metronome: clicks on the beat grid, accent on beat 1, output only (never recorded), count-in
+  testMetronome();
 
   // 14. Session save/load round trip, including plugin parameters, takes, loop/punch
   { auto dir = tmpDir(); std::string sess = dir + "/song.airdaw";
