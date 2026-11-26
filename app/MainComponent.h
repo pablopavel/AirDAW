@@ -14,6 +14,9 @@
 #include "ui/PluginInfo.h"
 #include "ui/SettingsWindow.h"
 #include "ui/TakesBar.h"
+#include "ui/tools/AnalysisHub.h"
+#include "ui/tools/ToolSet.h"
+#include "ui/tools/ListenRow.h"
 
 // The AirDAW main window (layout and look from docs/airdaw-v4.html):
 // deck | song overview | insert panel (when open) | mixer | meter dock | footer.
@@ -74,7 +77,11 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   ui::TakesBar takes_{ctx_};
   ui::InsertPanel inserts_{ctx_, presets_};
   ui::Mixer mixer_{ctx_};
-  ui::MeterDock dock_{ctx_};
+  ui::ToolSet tools_{ctx_};   // reference-suite / Listen tools (before the dock, which shows some of them)
+  ui::MeterDock dock_{ctx_, tools_};
+  ui::ListenRow listenRow_{tools_};   // Listen mode: every tool that is not in the reference suite
+  bool listen_ = false;
+  void setListen(bool on);
   ui::DisplayPanel display_;
   struct Splitter : juce::Component, juce::SettableTooltipClient {
     std::function<void(int)> onDrag; int start = 0; std::function<int()> current;
@@ -87,9 +94,10 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   std::unique_ptr<ui::SettingsWindow> settings_;
   std::unique_ptr<PluginWindow> pluginWindow_;
   std::unique_ptr<ui::PluginInfoWindow> pluginInfo_;
-  std::unique_ptr<airdaw::LoudnessMeter> loudness_;  // master analysis, fed from the engine's master tap
+  std::unique_ptr<ui::AnalysisHub> hub_;  // master analysis for the meters and tools, fed from the engine's master tap
   std::vector<float> tapBuf_;
   bool wasPlaying_ = false;
+  bool snapshotFrozen_ = false;  // test hook: synthetic meter readings stay on screen
   void pumpAnalysis(airdaw::Engine& e);
   std::unique_ptr<juce::TooltipWindow> tooltips_;
 

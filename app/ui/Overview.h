@@ -27,7 +27,7 @@ class Overview : public juce::Component {
   Lcd elapsed_{"Elapsed", 15.f}, total_{"Total", 15.f};
   std::vector<float> wave_;          // peak per bucket, 0..1
   juce::String waveKey_;             // which takes the waveform was built from
-  double len_ = 0.0, pos_ = 0.0, sr_ = 48000.0;
+  double len_ = 0.0, pos_ = 0.0, sr_ = 48000.0, notesKey_ = 0.0;
   juce::int64 loopIn_ = 0, loopOut_ = 0; bool loopOn_ = false;
   enum class Drag { None, Seek, NewLoop, LoopIn, LoopOut } drag_ = Drag::None;
   double dragAnchor_ = 0.0;

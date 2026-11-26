@@ -14,6 +14,8 @@ class Mixer : public juce::Component {
   void paint(juce::Graphics&) override;
   void paintOverChildren(juce::Graphics&) override;
   int tracksShown() const { return shown_; }
+  // Listen mode: only the master strip, larger readouts (mockup body.listen).
+  void setListenMode(bool on) { listen_ = on; view_.setVisible(!on); master_.setListenLayout(on); resized(); }
   MasterStrip& master() { return master_; }
  private:
   void relayout();
@@ -24,6 +26,7 @@ class Mixer : public juce::Component {
   juce::TextButton add_;
   MasterStrip master_;
   int shown_ = 8;
+  bool listen_ = false;
 };
 
 }  // namespace ui

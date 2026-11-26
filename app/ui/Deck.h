@@ -29,7 +29,8 @@ class Deck : public juce::Component {
   int preferredHeight(int width) const;
 
   std::function<void(TransportKeys::Key)> onTransport;
-  std::function<void()> onProject, onAudio, onDisplay, onMeters, onFull;
+  std::function<void()> onProject, onAudio, onDisplay, onMeters, onFull, onListen;
+  void setListenLit(bool on) { listen_.setToggleState(on, juce::dontSendNotification); }
   juce::TextButton displayBtn{juce::String(juce::CharPointer_UTF8("\xe2\x9a\x99 Display"))};
   juce::TextButton metersBtn{juce::String(juce::CharPointer_UTF8("\xe2\x97\x94 Meters"))};
   juce::TextButton projectBtn{juce::String(juce::CharPointer_UTF8("Project \xe2\x96\xbe"))};

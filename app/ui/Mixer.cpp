@@ -52,6 +52,7 @@ void Mixer::relayout() {
 
 void Mixer::resized() {
   auto r = getLocalBounds();
+  if (listen_) { master_.setBounds(r); return; }
   master_.setBounds(r.removeFromRight(MasterStrip::kWidth));
   view_.setBounds(r);
   relayout();

@@ -50,8 +50,9 @@ void Overview::sync() {
   const double p = (double)tr.pos.load();
   const auto li = tr.loopIn.load(), lo = tr.loopOut.load(); const bool lon = tr.loopOn.load();
   if (p > len_) { len_ = p * 1.25; waveKey_.clear(); }
-  if (p != pos_ || li != loopIn_ || lo != loopOut_ || lon != loopOn_) {
-    pos_ = p; loopIn_ = li; loopOut_ = lo; loopOn_ = lon; repaint();
+  double nk = (double)ctx_.notes.items.size(); for (auto& n : ctx_.notes.items) nk += n.seconds;  // notes added / removed
+  if (p != pos_ || li != loopIn_ || lo != loopOut_ || lon != loopOn_ || nk != notesKey_) {
+    pos_ = p; loopIn_ = li; loopOut_ = lo; loopOn_ = lon; notesKey_ = nk; repaint();
   }
   elapsed_.setText(mmss(pos_ / sr_));
   total_.setText(mmss(len_ / sr_));
@@ -98,6 +99,15 @@ void Overview::paint(juce::Graphics& g) {
   g.fillRect(b.withRight(px));
   t.drawGlow(g, {px - 1.f, b.getY(), 2.f, b.getHeight()}, t.am(), 16.f, 0.6f);
   g.setColour(t.am()); g.fillRect(px - 1.f, b.getY(), 2.f, b.getHeight());
+  // listening-note markers (mockup .mk): a hairline with an accent triangle on top
+  for (auto& n : ctx_.notes.items) {
+    const float x = xAt(n.seconds * sr_);
+    if (x < b.getX() || x > b.getRight()) continue;
+    g.setColour(juce::Colour(0x66ffffff)); g.fillRect(x - 1.f, b.getY(), 2.f, b.getHeight());
+    juce::Path tri; tri.addTriangle(x - 5.f, b.getY(), x + 5.f, b.getY(), x, b.getY() + 6.f);
+    t.drawGlow(g, {x - 3.f, b.getY(), 6.f, 4.f}, t.am(), 6.f, 0.8f);
+    g.setColour(t.am()); g.fillPath(tri);
+  }
   // loop region
   if (loopOut_ > loopIn_) {
     const float x0 = xAt((double)loopIn_), x1 = xAt((double)loopOut_);

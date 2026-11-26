@@ -19,6 +19,7 @@ std::unique_ptr<juce::PropertiesFile> MainComponent::makeProps(bool snapshot) {
   // Test snapshots use their own settings file, so they can never change the user's settings.
   opt.applicationName = snapshot ? "AirDAW-snapshot" : "AirDAW"; opt.filenameSuffix = ".settings"; opt.osxLibrarySubFolder = "Application Support";
   opt.folderName = "AirDAW";
+  if (snapshot) opt.getDefaultFile().deleteFile();  // every test run starts from the defaults
   return std::make_unique<juce::PropertiesFile>(opt);
 }
 
@@ -47,7 +48,12 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   ctx_.isCardOpen = [this](int ch, int slot) { return inserts_.isOpen(ch, slot); };
   ctx_.layoutChanged = [this] { resized(); };
   ctx_.openPluginWindow = [this](int ch, int slot) { openPluginWindow(ch, slot); };
-  mixer_.master().onResetLoudness = [this] { if (loudness_) loudness_->resetIntegrated(); };
+  mixer_.master().onResetLoudness = [this] { if (hub_) hub_->resetProgramme(); };
+  tools_.onLayoutChanged = [this] { dock_.rebuildSuite(); listenRow_.rebuild(); resized(); };
+  dock_.rebuildSuite();
+  ctx_.resetPeaks = [this] { if (hub_) hub_->resetPeaks(); };
+  deck_.onListen = [this] { setListen(!listen_); };
+  addChildComponent(listenRow_);
   ctx_.showPluginInfo = [this](const juce::String& name) {
     if (!pluginInfo_) pluginInfo_ = std::make_unique<ui::PluginInfoWindow>();
     pluginInfo_->show(name);
@@ -217,6 +223,15 @@ void MainComponent::resized() {
   if (dockShown_) dock = juce::jmin(dockHeight_, avail - ins - (ins ? 10 : 0) - kMixerMin - 14);
   if (dock < 150) dock = 0;
   if (inserts_.isVisible()) { inserts_.setBounds(r.removeFromTop(ins)); r.removeFromTop(10); }
+  listenRow_.setVisible(listen_);
+  if (listen_) {  // Listen mode: big master left; reference suite top right; every other tool in a row below
+    mixer_.setBounds(r.removeFromLeft(390)); r.removeFromLeft(12);
+    listenRow_.setBounds(r.removeFromBottom(juce::jlimit(210, 300, r.getHeight() * 2 / 5)).withTrimmedBottom(10));
+    r.removeFromBottom(10);
+    dock_.setVisible(true); splitter_.setVisible(false); dock_.setBounds(r);
+    deck_.metersBtn.setToggleState(true, juce::dontSendNotification);
+    return;
+  }
   if (dock > 0) {
     dock_.setVisible(true); splitter_.setVisible(true);
     dock_.setBounds(r.removeFromBottom(dock).withTrimmedBottom(10)); splitter_.setBounds(r.removeFromBottom(14));
@@ -353,6 +368,16 @@ void MainComponent::setSessionFile(const juce::File& f) {
   if (autoSaver_) autoSaver_->setLocation(sessionFolder().getChildFile("autosave").getFullPathName().toStdString(), sessionName().toStdString());
   if (auto* top = getTopLevelComponent()) top->setName("AirDAW - " + sessionName());
   lastAutoSave_ = autoOn_ ? "No auto-save yet for " + sessionName() : juce::String("Auto-save is off");
+  ctx_.notes.load(sessionFolder().getChildFile("listening-notes.json"));  // listening notes live beside the project
+}
+
+void MainComponent::setListen(bool on) {
+  listen_ = on;
+  mixer_.setListenMode(on);
+  deck_.setListenLit(on);
+  listenRow_.rebuild();
+  dock_.rebuildSuite();
+  resized();
 }
 
 void MainComponent::applyAutoSaveSettings() {
@@ -376,7 +401,7 @@ void MainComponent::newSession() {
         airdaw::Engine blank(e->sampleRate());
         auto tmp = (juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw_blank.airdaw")).getFullPathName().toStdString();
         airdaw::saveSession(blank, tmp); airdaw::loadSession(*e, tmp);
-        inserts_.close(); ctx_.viewTrack = -1; if (loudness_) loudness_->resetIntegrated();
+        inserts_.close(); ctx_.viewTrack = -1; if (hub_) hub_->resetProgramme();
         setSessionFile({}); note("New project");
       });
 }
@@ -438,7 +463,12 @@ void MainComponent::saveProjectAs(const juce::File& chosen) {
     for (auto& a : oldAuto.findChildFiles(juce::File::findFiles, false, "Untitled_autosave_*.airdaw"))
       if (newAuto.createDirectory()) a.moveFileTo(newAuto.getChildFile(a.getFileName()));
   }
+  const auto oldNotes = ctx_.notes;  // listening notes travel with the project
   setSessionFile(file);
+  if (ctx_.notes.items.empty() && !oldNotes.items.empty()) {
+    ctx_.notes.items = oldNotes.items; ctx_.notes.save();
+    if (fromScratch) oldNotes.file.deleteFile();
+  }
   juce::String msg = "Saved project " + name;
   if (moved) msg << ", moved " << moved << " take(s) into its audio folder";
   if (copied) msg << ", copied " << copied << " take(s) into its audio folder";
@@ -453,7 +483,7 @@ void MainComponent::openSession() {
         auto f = c.getResult(); auto* e = bridge_.engine(); if (f == juce::File() || !e) return;
         auto r = airdaw::loadSession(*e, f.getFullPathName().toStdString());
         if (!r.ok) { note("OPEN FAILED: " + r.error); return; }
-        inserts_.close(); ctx_.viewTrack = -1; if (loudness_) loudness_->resetIntegrated();
+        inserts_.close(); ctx_.viewTrack = -1; if (hub_) hub_->resetProgramme();
         setSessionFile(f);
         note(r.warnings.empty() ? "Opened " + f.getFileName() : "Opened with " + juce::String((int)r.warnings.size()) + " warning(s): " + r.warnings[0],
              !r.warnings.empty());
@@ -614,7 +644,7 @@ void MainComponent::timerCallback() {
     dock_.setPlugin(nullptr);   // the hosted plugins belong to the old engine
     inserts_.close();
     autoSaver_ = std::make_unique<airdaw::AutoSaver>(*e);
-    loudness_ = std::make_unique<airdaw::LoudnessMeter>(e->sampleRate());  // K-weighting depends on the rate
+    hub_ = std::make_unique<ui::AnalysisHub>(e->sampleRate());  // filters depend on the rate
     tapBuf_.assign(2 * 16384, 0.f);
     e->setMasterTapEnabled(true);
     setSessionFile(sessionFile_);
@@ -654,13 +684,14 @@ void MainComponent::timerCallback() {
 // Drains the engine's master tap into the loudness meter. Integrated loudness / LRA only accumulate while the
 // transport plays, and start over when playback starts from the beginning of the song.
 void MainComponent::pumpAnalysis(airdaw::Engine& e) {
-  if (!loudness_) return;
+  if (!hub_ || snapshotFrozen_) return;
   auto& tr = e.transport();
   const bool playing = tr.playing.load() && !tr.countingIn();
-  if (playing && !wasPlaying_ && (double)tr.pos.load() < e.sampleRate() * 0.05) loudness_->resetIntegrated();
+  if (playing && !wasPlaying_ && (double)tr.pos.load() < e.sampleRate() * 0.05) hub_->resetProgramme();
   wasPlaying_ = playing;
-  for (size_t got; (got = e.readMasterTap(tapBuf_.data(), tapBuf_.size() / 2)) > 0;) loudness_->process(tapBuf_.data(), got, playing);
-  if (tick_ % 2 == 0) mixer_.master().setLoudness(loudness_->read());
+  for (size_t got; (got = e.readMasterTap(tapBuf_.data(), tapBuf_.size() / 2)) > 0;) hub_->feed(tapBuf_.data(), got, playing);
+  hub_->playheadSeconds = (double)tr.pos.load() / e.sampleRate();
+  if (tick_ % 2 == 0) { hub_->refresh(); mixer_.master().setLoudness(hub_->loud()); tools_.updateAll(*hub_); }
 }
 
 // ---------------------------------------------------------------- snapshots (test hook)
@@ -705,12 +736,43 @@ void MainComponent::runScenario(const juce::String& name) {
     inserts_.show(4, 2);
   }
   if (name == "info") ctx_.showPluginInfo("ToTape8");
+  if (name == "signal" || name == "listen-signal") {  // synthetic stereo mix fed straight into the meters (never to the speakers)
+    if (name == "listen-signal") { ctx_.notes.items = {{2.0, "vocal too loud in chorus"}, {5.5, "check bass at the drop"}}; setListen(true); }
+    if (!hub_) hub_ = std::make_unique<ui::AnalysisHub>(e->sampleRate());
+    const double sr = e->sampleRate(); std::vector<float> buf(2 * 4096); juce::Random rng(5); float lp = 0.f;
+    for (int blk = 0; blk < (int)(8.0 * sr / 4096); ++blk) {
+      for (int i = 0; i < 4096; ++i) {
+        const double t = (blk * 4096 + i) / sr, kick = std::exp(-std::fmod(t, 0.5) * 18.0) * std::sin(2 * 3.14159265 * 55 * t);
+        lp += 0.02f * ((rng.nextFloat() * 2.f - 1.f) - lp);
+        const double mid = 0.45 * kick + 0.12 * std::sin(2 * 3.14159265 * 440 * t) + 0.05 * std::sin(2 * 3.14159265 * 2200 * t) + 0.3 * lp;
+        const double side = 0.06 * (rng.nextFloat() * 2.f - 1.f) + 0.04 * std::sin(2 * 3.14159265 * 6500 * t);
+        buf[(size_t)(2 * i)] = (float)(mid + side); buf[(size_t)(2 * i + 1)] = (float)(mid - side);
+      }
+      hub_->feed(buf.data(), 4096, true);
+      if (blk % 4 == 0) { hub_->refresh(); tools_.updateAll(*hub_); }  // let scrolling tools (spectrogram) move
+    }
+    hub_->refresh(); mixer_.master().setLoudness(hub_->loud()); tools_.updateAll(*hub_);
+    snapshotFrozen_ = true;  // keep these readings (the live tap would replace them with silence)
+  }
   if (name == "reorder") { inserts_.show(4, 2); inserts_.moveInsert(4, 2, 0); }  // ToTape8 to the front, card stays open
   if (name == "add") { inserts_.show(0, 3); }
   if (name == "display") toggleDisplayPanel();
   if (name == "blue") { T().hue = 215.f; applyTheme(); }
   if (name == "glow-off") { T().glow = 0.f; applyTheme(); }
   if (name == "nodock") { dockShown_ = false; }
+  if (name == "arrange") {  // the same calls the drag-and-drop makes: history into the suite, RTA out, Target minimised
+    setListen(true);
+    tools_.addToSuite("history", 1);
+    tools_.removeFromSuite("rta", 0);
+    tools_.toggleMinimised("target");
+  }
+  if (name == "widemeter") dock_.setMeterWidth(1300);  // meter dragged most of the way across
+  if (name == "fullmeter") dock_.setMeterWidth(5000);  // all the way
+  if (name == "foldmeter") dock_.setMeterWidth(1580);  // two tools folded into tabs, one still open
+  if (name == "listen") {
+    ctx_.notes.items = {{12.0, "vocal too loud in chorus"}, {31.5, "check bass at the drop"}};  // in memory only
+    setListen(true);
+  }
   resized();
 }
 

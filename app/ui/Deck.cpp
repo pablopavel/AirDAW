@@ -89,7 +89,9 @@ Deck::Deck(AppCtx& ctx) : ctx_(ctx) {
   keys_.onKey = [this](TransportKeys::Key k) { if (onTransport) onTransport(k); };
   buttons_ = {&listen_, &midi_, &plugins_, &projectBtn, &metersBtn, &displayBtn, &full_};
   for (auto* b : buttons_) addAndMakeVisible(*b);
-  for (auto* b : {&listen_, &midi_, &plugins_}) { b->setEnabled(false); b->setTooltip("Coming in a later phase of the mixer port"); }
+  for (auto* b : {&midi_, &plugins_}) { b->setEnabled(false); b->setTooltip("Coming in a later phase of the mixer port"); }
+  listen_.setTooltip("Listen mode: big master, the reference suite and every listening tool (drag tools to arrange)");
+  listen_.onClick = [this] { if (onListen) onListen(); };
   projectBtn.setTooltip("New, open and save projects (Ctrl+N / Ctrl+O / Ctrl+S), audio settings");
   for (auto* l : {&rate_, &lat_, &dsp_}) { l->setTooltip("Click for audio device, metronome and auto-save settings"); l->onClick = [this] { if (onAudio) onAudio(); }; }
   projectBtn.onClick = [this] { if (onProject) onProject(); };

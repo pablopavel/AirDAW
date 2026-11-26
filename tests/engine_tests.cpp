@@ -272,6 +272,39 @@ static void testLoudness() {
   std::printf("loudness: EBU 3341/3342 cases, true peak, correlation; master tap exact and click-free\n");
 }
 
+// Reference-suite / Listen tool measurements: 31-band analyser, band correlation, stereo image, programme stats.
+static void testAnalysisTools() {
+  const double sr = 48000;
+  auto run = [&](auto& meter, double seconds, auto gen) {
+    const size_t n = (size_t)(seconds * sr); std::vector<float> buf(2 * 4096);
+    for (size_t done = 0; done < n;) { const size_t k = std::min<size_t>(4096, n - done);
+      for (size_t i = 0; i < k; ++i) { auto [l, r] = gen(done + i); buf[2 * i] = l; buf[2 * i + 1] = r; }
+      meter.process(buf.data(), k); done += k; }
+  };
+  auto tone = [&](double f, double a) { return [=](size_t i) { const float v = (float)(a * std::sin(2 * M_PI * f * (double)i / sr)); return std::pair<float, float>{v, v}; }; };
+  { BandAnalyzer b(sr); run(b, 2, tone(1000, 0.5));
+    const int k1 = 17;  // 1 kHz
+    CHECK(std::fabs(BandAnalyzer::kCentres[k1] - 1000.f) < 1 && std::fabs(b.bandDb(k1) + 6.02f) < 0.5f, "1 kHz band %.2f (want -6.0)", b.bandDb(k1));
+    CHECK(b.bandDb(k1 - 1) < b.bandDb(k1) - 6.f && b.bandDb(k1 + 1) < b.bandDb(k1) - 6.f, "neighbours %.1f / %.1f", b.bandDb(k1 - 1), b.bandDb(k1 + 1));
+    CHECK(b.bandDb(7) < -50.f, "100 Hz band with a 1 kHz tone: %.1f", b.bandDb(7)); }
+  { StereoBandMeter m(sr);  // same lows, inverted highs
+    run(m, 2, [&](size_t i) { const double t = (double)i / sr; const float lo = (float)(0.3 * std::sin(2 * M_PI * 60 * t)), hi = (float)(0.2 * std::sin(2 * M_PI * 8000 * t));
+                              return std::pair<float, float>{lo + hi, lo - hi}; });
+    CHECK(m.correlation(0) > 0.9f && m.correlation(3) < -0.9f, "band correlation sub %.2f high %.2f", m.correlation(0), m.correlation(3)); }
+  { LoudnessMeter m(sr); run(m, 9, tone(997, 0.5)); auto r = m.read();
+    CHECK(r.width < 1.f && std::fabs(r.monoLoss) < 0.05f, "identical channels: width %.1f%% mono loss %.2f", r.width, r.monoLoss);
+    CHECK(std::fabs(r.crest - 3.01f) < 0.1f && std::fabs(r.dr) < 0.3f, "sine crest %.2f (3.01) DR %.2f (0)", r.crest, r.dr);
+    CHECK(r.overs == 0 && m.history().size() >= 5, "no overs, history %zu", m.history().size()); }
+  { LoudnessMeter m(sr); auto t = tone(997, 0.5); run(m, 1, [&](size_t i) { auto p = t(i); return std::pair<float, float>{p.first, -p.second}; });
+    CHECK(m.read().monoLoss < -30.f, "inverted channels vanish in mono: %.1f", m.read().monoLoss); }
+  { LoudnessMeter m(sr); uint32_t x = 3, y = 11;
+    run(m, 2, [&](size_t) { x = x * 1664525u + 1013904223u; y = y * 22695477u + 1u;
+                            return std::pair<float, float>{(float)((x >> 8) / 16777216.0 - 0.5), (float)((y >> 8) / 16777216.0 - 0.5)}; });
+    CHECK(std::fabs(m.read().monoLoss + 3.f) < 0.5f, "unrelated channels lose ~3 dB in mono: %.2f", m.read().monoLoss); }
+  { LoudnessMeter m(sr); run(m, 1, tone(997, 1.2)); CHECK(m.read().overs > 0, "overs counted for a hot signal"); }
+  std::printf("analysis tools: 31-band RTA, band correlation, width / mono loss, crest, DR, overs, history\n");
+}
+
 // Insert reordering: same instances, new order, each insert processed exactly once per block.
 struct Affine : InsertProcessor {
   float a, b; std::string nm; std::vector<FxParamInfo> ps; long calls = 0;
@@ -464,6 +497,7 @@ int main() {
   testKeepAndRemoveTakes();
   testRenderMix();
   testLoudness();
+  testAnalysisTools();
 
   // 14. Session save/load round trip, including plugin parameters, takes, loop/punch
   { auto dir = tmpDir(); std::string sess = dir + "/song.airdaw";
