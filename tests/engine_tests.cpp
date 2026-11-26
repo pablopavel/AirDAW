@@ -7,9 +7,11 @@
 #include <string>
 #include <vector>
 #include <cstdlib>
+#include <cstring>
 #include <unistd.h>
 #include "airdaw/engine.h"
 #include "airdaw/session.h"
+#include "airdaw/work_pool.h"
 #include <filesystem>
 #include <fstream>
 
@@ -51,7 +53,9 @@ static std::vector<float> stream(Engine& e, long& k, int frames, int blk = 100) 
   }
   return outL;
 }
-static std::string tmpDir() { char t[] = "/tmp/airdawXXXXXX"; return mkdtemp(t); }
+static std::vector<std::string> g_tmpDirs;
+static std::string tmpDir() { char t[] = "/tmp/airdawXXXXXX"; std::string d = mkdtemp(t); g_tmpDirs.push_back(d); return d; }
+static const bool kQuick = std::getenv("AIRDAW_QUICK") != nullptr;  // short runs (for sanitizers)
 static float db(float x) { return 20 * std::log10(std::max(x, 1e-9f)); }
 
 int main() {
@@ -215,6 +219,59 @@ int main() {
     Engine c(SR); auto lr2 = loadSession(c, dir + "/h.airdaw"); CHECK(lr2.ok && !lr2.warnings.empty(), "no factory -> warning only");
     std::printf("hosted-insert interface: processing, state blob, factory restore OK\n"); }
 
+  // 17. Multi-core: output bit-identical for any thread count, plus speed-up, pool idle/wake, and recording under load
+  { auto build = [&](Engine& e) {
+      const char* chain[4] = {"Console7Channel", "Density2", "ToTape8", "Pressure5"};
+      for (int t = 0; t < 24; ++t) { e.track(t).inputL = t % 8; e.track(t).stereo = (t % 2); e.track(t).route = t % 5; e.track(t).pan = (t % 7 - 3) / 3.f;
+        for (int s2 = 0; s2 < 4; ++s2) e.setInsert(t, s2, chain[s2]); }
+      for (int b = 0; b < 4; ++b) { e.setInsert(100 + b, 0, "Console7Buss"); e.setInsert(100 + b, 1, "Density2"); }
+      e.setInsert(200, 0, "Console7Buss"); e.setInsert(200, 1, "ADClip8"); };
+    auto render = [&](Engine& e, int blocks, std::vector<float>* keep, double* avgMs, double* worstMs) {
+      std::vector<std::vector<float>> in(8, std::vector<float>(N)), out(2, std::vector<float>(N));
+      const float* ip[8]; float* op[2] = {out[0].data(), out[1].data()};
+      for (int c = 0; c < 8; ++c) ip[c] = in[c].data();
+      double total = 0, worst = 0;
+      for (int b = 0; b < blocks; ++b) {
+        for (int c = 0; c < 8; ++c) for (int i = 0; i < N; ++i) in[c][i] = 0.3f * std::sin(2 * M_PI * (200 + 150 * c) * (b * N + i) / SR);
+        auto a = std::chrono::steady_clock::now(); e.process(ip, 8, op, 2, N);
+        double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a).count(); total += ms; worst = std::max(worst, ms);
+        if (keep) { keep->insert(keep->end(), out[0].begin(), out[0].end()); keep->insert(keep->end(), out[1].begin(), out[1].end()); }
+      }
+      if (avgMs) *avgMs = total / blocks; if (worstMs) *worstMs = worst; };
+    std::vector<float> ref, par;
+    // Several Airwindows effects seed their dither from rand() at construction, so seed it identically per run.
+    { std::srand(1234); Engine e(SR); build(e); render(e, 300, &ref, nullptr, nullptr); }
+    { std::srand(1234); Engine e(SR); build(e); e.setWorkerThreads(3); render(e, 300, &par, nullptr, nullptr); }
+    CHECK(ref.size() == par.size() && std::memcmp(ref.data(), par.data(), ref.size() * sizeof(float)) == 0, "multi-thread output differs from single-thread");
+    if (ref.size() == par.size() && std::memcmp(ref.data(), par.data(), ref.size() * sizeof(float)) == 0) std::printf("multicore: output bit-identical with 0 and 3 workers over %zu samples\n", ref.size());
+    for (int w : {0, 1, -1}) {
+      Engine e(SR); build(e); e.setWorkerThreads(w); double avg, worst; render(e, kQuick ? 5 : 200, nullptr, nullptr, nullptr); render(e, kQuick ? 20 : 2000, nullptr, &avg, &worst);
+      std::printf("  workers=%d (threads incl. audio: %d): avg %.3f ms/block, worst %.3f ms, budget %.3f ms -> %.0f%% of budget\n",
+                  w, e.workerThreads() + 1, avg, worst, 1000.0 * N / SR, 100 * avg / (1000.0 * N / SR)); }
+    // idle -> park -> wake: workers must resume after a long pause
+    { Engine e(SR); build(e); e.setWorkerThreads(2); std::vector<float> a1, a2; render(e, 20, nullptr, nullptr, nullptr);
+      std::this_thread::sleep_for(std::chrono::milliseconds(600)); double avg; render(e, 50, nullptr, &avg, nullptr); CHECK(avg < 5.0, "pool did not wake after idle (avg %.2f ms)", avg); }
+    // recording from many threads at once
+    { Engine e(SR); auto dir = tmpDir(); for (int t = 0; t < 8; ++t) { e.track(t).inputL = t; e.track(t).armed = true; e.setInsert(t, 0, "Density2"); e.track(t).name = "T" + std::to_string(t); }
+      e.setWorkerThreads(2); e.startRecording(dir);
+      std::vector<std::vector<float>> in(8, std::vector<float>(N)), out(2, std::vector<float>(N)); const float* ip[8]; float* op[2] = {out[0].data(), out[1].data()};
+      for (int c = 0; c < 8; ++c) ip[c] = in[c].data();
+      for (int b = 0; b < (kQuick ? 300 : 1500); ++b) { for (int c = 0; c < 8; ++c) for (int i = 0; i < N; ++i) in[c][i] = 0.1f * (c + 1) * std::sin(2 * M_PI * 440.0 * (b * N + i) / SR); e.process(ip, 8, op, 2, N); }
+      e.stopRecording(); e.process(ip, 8, op, 2, N); e.flushRecording(); auto f = e.pollFinishedTakes();
+      CHECK(f.size() == 8, "recorded takes=%zu", f.size()); bool ok = f.size() == 8;
+      for (auto& x : f) { WavData w; ok &= readWav(x.path, w) && w.left.size() == (kQuick ? 300u : 1500u) * N; int c = x.track;
+        for (size_t i = 0; ok && i < w.left.size(); ++i) { float want = 0.1f * (c + 1) * std::sin(2 * M_PI * 440.0 * (double)i / SR); if (std::fabs(w.left[i] - want) > 1e-6f) { ok = false; } } }
+      CHECK(ok, "parallel recording content"); std::printf("multicore: 8 tracks recorded in parallel, all bit-accurate\n"); } }
+
+  // 18. Work pool stress: jobs of alternating sizes, 1..3 workers, every result checked
+  { long bad = 0; int iters = kQuick ? 1500 : 20000;
+    for (int workers : {1, 2, 3}) { WorkPool p; p.start(workers); std::vector<int> in(24), out(24);
+      struct Job { int base; std::vector<int>* in; std::vector<int>* out; };
+      for (int it = 0; it < iters; ++it) { int n = (it % 3 == 0) ? 4 : 24; for (int i = 0; i < 24; ++i) in[i] = it * 100 + i;
+        Job j{it, &in, &out}; p.run(n, [](void* c, int i) { auto* jj = (Job*)c; (*jj->out)[i] = (*jj->in)[i] + jj->base; }, &j);
+        for (int i = 0; i < n; ++i) bad += (out[i] != in[i] + it); } }
+    CHECK(bad == 0, "work pool produced %ld wrong results", bad); if (!bad) std::printf("work pool: %d jobs x 3 configurations, no wrong results\n", iters * 3); }
+
   // 9. Load benchmark: 24 tracks x 4 inserts + 4 buses x 2 + master x 2, 96 kHz, 64-sample blocks
   { Engine e(SR);
     const char* chain[4] = {"Console7Channel", "Density2", "ToTape8", "Pressure5"};
@@ -225,7 +282,7 @@ int main() {
     std::vector<std::vector<float>> in(8, std::vector<float>(N)), out(2, std::vector<float>(N));
     const float* ip[8]; float* op[2] = {out[0].data(), out[1].data()};
     for (int c = 0; c < 8; ++c) ip[c] = in[c].data();
-    int blocks = 3000;
+    int blocks = kQuick ? 60 : 3000;
     auto t0 = std::chrono::steady_clock::now(); double worst = 0;
     for (int b = 0; b < blocks; ++b) {
       for (int c = 0; c < 8; ++c) for (int i = 0; i < N; ++i) in[c][i] = 0.3f * std::sin(2 * M_PI * (200 + 150 * c) * (b * N + i) / SR);
@@ -244,10 +301,11 @@ int main() {
     auto f = FxInstance::create(nm, SR); std::vector<float> l(N, 0.2f), r(N, 0.2f);
     for (int i = 0; i < N; ++i) l[i] = r[i] = 0.3f * std::sin(i * 0.1f);
     auto t0 = std::chrono::steady_clock::now();
-    for (int b = 0; b < 5000; ++b) f->process(l.data(), r.data(), N);
-    double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count() / 5000;
+    for (int b = 0; b < (kQuick ? 50 : 5000); ++b) f->process(l.data(), r.data(), N);
+    double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count() / (kQuick ? 50 : 5000);
     std::printf("  %-16s %6.2f us/block  (%.2f%% of one core)\n", nm, us, 100 * us / (1e6 * N / SR));
   }
+  for (auto& d : g_tmpDirs) std::filesystem::remove_all(d);  // test recordings are large; never leave them behind
   std::printf(failures ? "\n%d FAILURE(S)\n" : "\nALL TESTS PASSED\n", failures);
   return failures ? 1 : 0;
 }

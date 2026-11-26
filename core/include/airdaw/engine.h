@@ -15,6 +15,7 @@
 #include "airdaw/spsc.h"
 #include "airdaw/transport.h"
 #include "airdaw/disk_writer.h"
+#include "airdaw/work_pool.h"
 
 namespace airdaw {
 
@@ -85,6 +86,13 @@ class Engine {
   int numTakes(int track) const { return (int)takes_[track].size(); }
   const Take* takeAt(int track, int i) const { return takes_[track][i].get(); }
 
+  // Worker threads for parallel track/bus processing (-1 = automatic: cores-1, max 7; 0 = single-threaded).
+  // Not real-time safe: call while audio is stopped. Output is bit-identical for any thread count.
+  void setWorkerThreads(int n);
+  int workerThreads() const { return pool_.workers(); }
+  // Runs on each worker when it starts (the app uses it to raise thread priority).
+  static inline std::function<void()> workerInit;
+
   // --- audio thread ---
   // in: nIn hardware input buffers; out: nOut (>=2) hardware output buffers (stereo main out).
   void process(const float* const* in, int nIn, float* const* out, int nOut, int n);
@@ -95,6 +103,9 @@ class Engine {
 
  private:
   struct Cmd { int channelId; int slot; InsertProcessor* fx; };
+  struct SegCtx;
+  void processTrack(int ti, const SegCtx& c);
+  void processBus(int bi, int n, bool anyBusSolo);
   Channel* resolve(int id);
   void applyCommands();
   void runChain(Channel& c, float* l, float* r, int n);
@@ -117,6 +128,9 @@ class Engine {
   std::array<std::vector<float>, 2> busBuf_[kNumBuses];
   std::array<std::vector<float>, 2> masterBuf_;
   std::array<std::vector<float>, 2> work_;
+  std::array<std::array<std::vector<float>, 2>, kMaxTracks> trackBuf_;
+  std::array<char, kMaxTracks> trackLive_{};
+  WorkPool pool_;
 };
 
 }  // namespace airdaw

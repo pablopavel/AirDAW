@@ -15,7 +15,8 @@ add_library(airdaw_core STATIC
   core/src/engine.cpp
   core/src/wav_io.cpp
   core/src/disk_writer.cpp
-  core/src/session.cpp)
+  core/src/session.cpp
+  core/src/work_pool.cpp)
 find_package(Threads REQUIRED)
 target_include_directories(airdaw_core PUBLIC core/include)
 target_link_libraries(airdaw_core PUBLIC airwin-registry Threads::Threads)

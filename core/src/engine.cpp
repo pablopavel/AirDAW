@@ -1,4 +1,5 @@
 #include "airdaw/engine.h"
+#include <thread>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -15,6 +16,7 @@ Engine::Engine(double sampleRate) : sr_(sampleRate) {
   for (auto& b : busBuf_) for (auto& c : b) c.assign(kMaxBlock, 0.f);
   for (auto& c : masterBuf_) c.assign(kMaxBlock, 0.f);
   for (auto& c : work_) c.assign(kMaxBlock, 0.f);
+  for (auto& t : trackBuf_) for (auto& c : t) c.assign(kMaxBlock, 0.f);
   for (int i = 0; i < kMaxTracks; ++i) tracks_[i].name = "TRACK " + std::to_string(i + 1);
   for (int i = 0; i < kNumBuses; ++i) { buses_[i].name = "BUS " + std::to_string(i + 1); buses_[i].stereo = true; }
   master_.name = "MASTER"; master_.stereo = true;
@@ -133,6 +135,84 @@ static void applyGain(float* l, float* r, int n, float& state, float target) {
   state = target;
 }
 
+// Everything one track needs for the current segment (read-only while workers run).
+struct Engine::SegCtx {
+  const float* const* in; int nIn; int done; int n;
+  bool playing, recordingOn, punchOn, inRange, anySolo;
+  int64_t pos;
+};
+
+void Engine::processTrack(int ti, const SegCtx& c) {
+  Channel& t = tracks_[ti];
+  float* wl = trackBuf_[ti][0].data();
+  float* wr = trackBuf_[ti][1].data();
+  const int n = c.n;
+  trackLive_[ti] = 0;
+
+  const int il = t.inputL.load(std::memory_order_relaxed);
+  const bool hasInput = il >= 0 && il < c.nIn;
+  const bool stereo = t.stereo.load(std::memory_order_relaxed);
+  const bool armed = t.armed.load(std::memory_order_relaxed);
+  const Take* tk = t.take.load(std::memory_order_acquire);
+  const bool rec = c.playing && c.recordingOn && armed && c.inRange;
+  const bool useTake = c.playing && tk && !(armed && (!c.recordingOn || c.inRange));
+
+  if (rec && !t.recActive) { writer_->beginTake(ti, c.pos, stereo ? 2 : 1); t.recActive = true; }
+  else if (!rec && t.recActive) { writer_->endTake(ti); t.recActive = false; }
+
+  if (!hasInput && !useTake && !rec) {
+    t.meter.peakL = t.meter.peakR = t.meter.rmsL = t.meter.rmsR = 0.f;
+    bool hasFx = false; for (auto* f : t.insert) hasFx |= (f != nullptr);
+    if (!hasFx) return;  // idle track, nothing to ring out
+  }
+  if (useTake) {
+    const bool tStereo = !tk->r.empty();
+    const int64_t base = c.pos - tk->start, len = (int64_t)tk->l.size();
+    for (int i = 0; i < n; ++i) {
+      int64_t p = base + i; bool ok = p >= 0 && p < len;
+      wl[i] = ok ? tk->l[(size_t)p] : 0.f;
+      wr[i] = ok ? (tStereo ? tk->r[(size_t)p] : wl[i]) : 0.f;
+    }
+  } else {
+    if (hasInput) std::memcpy(wl, c.in[il] + c.done, n * sizeof(float)); else std::fill_n(wl, n, 0.f);
+    int ir = t.inputR.load(std::memory_order_relaxed);
+    if (stereo && ir >= 0 && ir < c.nIn) std::memcpy(wr, c.in[ir] + c.done, n * sizeof(float));
+    else std::memcpy(wr, wl, n * sizeof(float));
+    if (rec) writer_->push(ti, wl, wr, n, stereo ? 2 : 1);
+  }
+
+  applyGain(wl, wr, n, t.smoothTrim, dbToLin(t.trimDb.load(std::memory_order_relaxed)));
+  runChain(t, wl, wr, n);
+
+  bool muted = t.mute.load(std::memory_order_relaxed) || (c.anySolo && !t.solo.load(std::memory_order_relaxed));
+  float target = muted ? 0.f : dbToLin(t.gainDb.load(std::memory_order_relaxed));
+  float pan = std::clamp(t.pan.load(std::memory_order_relaxed), -1.f, 1.f);
+  float gl, gr;
+  if (stereo) { gl = std::min(1.f, 1.f - pan); gr = std::min(1.f, 1.f + pan); }
+  else { float a = (pan + 1.f) * 0.7853981634f; gl = std::cos(a); gr = std::sin(a); }  // -3 dB pan law
+  float sg = t.smoothGain, step = (target - sg) / n;
+  for (int i = 0; i < n; ++i) { sg += step; wl[i] *= sg * gl; wr[i] *= sg * gr; }
+  t.smoothGain = target;
+
+  updateMeter(t.meter, wl, wr, n);
+  trackLive_[ti] = 1;
+}
+
+void Engine::processBus(int bi, int n, bool anyBusSolo) {
+  Channel& b = buses_[bi];
+  float* bl = busBuf_[bi][0].data(); float* br = busBuf_[bi][1].data();
+  applyGain(bl, br, n, b.smoothTrim, dbToLin(b.trimDb.load(std::memory_order_relaxed)));
+  runChain(b, bl, br, n);
+  bool muted = b.mute.load(std::memory_order_relaxed) || (anyBusSolo && !b.solo.load(std::memory_order_relaxed));
+  applyGain(bl, br, n, b.smoothGain, muted ? 0.f : dbToLin(b.gainDb.load(std::memory_order_relaxed)));
+  updateMeter(b.meter, bl, br, n);
+}
+
+void Engine::setWorkerThreads(int n) {
+  if (n < 0) { unsigned hc = std::thread::hardware_concurrency(); n = hc > 1 ? (int)std::min(7u, hc - 1) : 0; }
+  pool_.start(n, workerInit);
+}
+
 void Engine::process(const float* const* in, int nIn, float* const* out, int nOut, int total) {
 #ifdef AIRDAW_X86
   unsigned oldCsr = _mm_getcsr();
@@ -144,106 +224,59 @@ void Engine::process(const float* const* in, int nIn, float* const* out, int nOu
   int done = 0;
   while (done < total) {
     { int64_t sk = tr.seekReq.exchange(-1); if (sk >= 0) tr.pos.store(sk); }
-    const bool playing = tr.playing.load(), recordingOn = tr.recording.load();
-    const int64_t pos = tr.pos.load();
+    SegCtx c{in, nIn, done, 0, tr.playing.load(), tr.recording.load(), tr.punchOn.load(), true, false, tr.pos.load()};
     const int64_t loopIn = tr.loopIn.load(), loopOut = tr.loopOut.load();
     const bool loopActive = tr.loopOn.load() && loopOut > loopIn;
-    const bool punchOn = tr.punchOn.load();
     const int64_t pIn = tr.punchIn.load(), pOut = tr.punchOut.load();
     int n = std::min(kMaxBlock, total - done);
-    if (playing) {  // split blocks at loop end and punch points so they land on the exact sample
-      auto lim = [&](int64_t b) { if (b > pos) n = (int)std::min<int64_t>(n, b - pos); };
-      if (loopActive && pos < loopOut) lim(loopOut);
-      if (punchOn) { lim(pIn); lim(pOut); }
+    if (c.playing) {  // split blocks at loop end and punch points so they land on the exact sample
+      auto lim = [&](int64_t b) { if (b > c.pos) n = (int)std::min<int64_t>(n, b - c.pos); };
+      if (loopActive && c.pos < loopOut) lim(loopOut);
+      if (c.punchOn) { lim(pIn); lim(pOut); }
     }
-    const bool inRange = !punchOn || (pos >= pIn && pos < pOut);
+    c.n = n;
+    c.inRange = !c.punchOn || (c.pos >= pIn && c.pos < pOut);
     for (auto& b : busBuf_) { std::fill_n(b[0].data(), n, 0.f); std::fill_n(b[1].data(), n, 0.f); }
     std::fill_n(masterBuf_[0].data(), n, 0.f);
     std::fill_n(masterBuf_[1].data(), n, 0.f);
+    for (auto& t : tracks_) c.anySolo |= t.solo.load(std::memory_order_relaxed);
 
-    bool anySolo = false;
-    for (auto& t : tracks_) anySolo |= t.solo.load(std::memory_order_relaxed);
+    // Phase 1: tracks in parallel (each touches only its own state and buffers).
+    int busy = 0;
+    for (auto& t : tracks_) {
+      bool hasFx = false; for (auto* f : t.insert) hasFx |= (f != nullptr);
+      busy += (hasFx || t.take.load(std::memory_order_relaxed) || t.inputL.load(std::memory_order_relaxed) >= 0 || t.recActive);
+    }
+    struct Job { Engine* e; const SegCtx* c; } job{this, &c};
+    auto trackFn = [](void* p, int i) { auto* j = (Job*)p; j->e->processTrack(i, *j->c); };
+    if (busy >= 4) pool_.run(kMaxTracks, trackFn, &job);
+    else for (int i = 0; i < kMaxTracks; ++i) processTrack(i, c);
 
-    float* wl = work_[0].data();
-    float* wr = work_[1].data();
-
+    // Sum in fixed track order on this thread, so the result is bit-identical for any thread count.
     for (int ti = 0; ti < kMaxTracks; ++ti) {
-      Channel& t = tracks_[ti];
-      const int il = t.inputL.load(std::memory_order_relaxed);
-      const bool hasInput = il >= 0 && il < nIn;
-      const bool stereo = t.stereo.load(std::memory_order_relaxed);
-      const bool armed = t.armed.load(std::memory_order_relaxed);
-      const Take* tk = t.take.load(std::memory_order_acquire);
-      const bool rec = playing && recordingOn && armed && inRange;
-      const bool useTake = playing && tk && !(armed && (!recordingOn || inRange));
-
-      if (rec && !t.recActive) { writer_->beginTake(ti, pos, stereo ? 2 : 1); t.recActive = true; }
-      else if (!rec && t.recActive) { writer_->endTake(ti); t.recActive = false; }
-
-      if (!hasInput && !useTake && !rec) {
-        t.meter.peakL = t.meter.peakR = t.meter.rmsL = t.meter.rmsR = 0.f;
-        bool hasFx = false; for (auto* f : t.insert) hasFx |= (f != nullptr);
-        if (!hasFx) continue;  // idle track, nothing to ring out
-      }
-      if (useTake) {
-        const bool tStereo = !tk->r.empty();
-        const int64_t base = pos - tk->start, len = (int64_t)tk->l.size();
-        for (int i = 0; i < n; ++i) {
-          int64_t p = base + i; bool ok = p >= 0 && p < len;
-          wl[i] = ok ? tk->l[(size_t)p] : 0.f;
-          wr[i] = ok ? (tStereo ? tk->r[(size_t)p] : wl[i]) : 0.f;
-        }
-      } else {
-        if (hasInput) std::memcpy(wl, in[il] + done, n * sizeof(float)); else std::fill_n(wl, n, 0.f);
-        int ir = t.inputR.load(std::memory_order_relaxed);
-        if (stereo && ir >= 0 && ir < nIn) std::memcpy(wr, in[ir] + done, n * sizeof(float));
-        else std::memcpy(wr, wl, n * sizeof(float));
-        if (rec) writer_->push(ti, wl, wr, n, stereo ? 2 : 1);
-      }
-
-      applyGain(wl, wr, n, t.smoothTrim, dbToLin(t.trimDb.load(std::memory_order_relaxed)));
-      runChain(t, wl, wr, n);
-
-      bool muted = t.mute.load(std::memory_order_relaxed) ||
-                   (anySolo && !t.solo.load(std::memory_order_relaxed));
-      float fader = muted ? 0.f : dbToLin(t.gainDb.load(std::memory_order_relaxed));
-      float pan = std::clamp(t.pan.load(std::memory_order_relaxed), -1.f, 1.f);
-      float gl, gr;
-      if (stereo) { gl = std::min(1.f, 1.f - pan); gr = std::min(1.f, 1.f + pan); }
-      else { float a = (pan + 1.f) * 0.7853981634f; gl = std::cos(a); gr = std::sin(a); }  // -3 dB law
-      // Fold pan into the fader ramp on each side.
-      float target = fader;
-      // Left/right need different gains but share one smoothed fader value.
-      float sg = t.smoothGain, step = (target - sg) / n;
-      for (int i = 0; i < n; ++i) { sg += step; wl[i] *= sg * gl; wr[i] *= sg * gr; }
-      t.smoothGain = target;
-
-      updateMeter(t.meter, wl, wr, n);
-
-      int rt = t.route.load(std::memory_order_relaxed);
+      if (!trackLive_[ti]) continue;
+      int rt = tracks_[ti].route.load(std::memory_order_relaxed);
       float* dl; float* dr;
       if (rt >= 1 && rt <= kNumBuses) { dl = busBuf_[rt - 1][0].data(); dr = busBuf_[rt - 1][1].data(); }
       else { dl = masterBuf_[0].data(); dr = masterBuf_[1].data(); }
+      const float* wl = trackBuf_[ti][0].data(); const float* wr = trackBuf_[ti][1].data();
       for (int i = 0; i < n; ++i) { dl[i] += wl[i]; dr[i] += wr[i]; }
     }
 
+    // Phase 2: buses in parallel, then summed into master in bus order.
     bool anyBusSolo = false;
     for (auto& b : buses_) anyBusSolo |= b.solo.load(std::memory_order_relaxed);
+    struct BJob { Engine* e; int n; bool solo; } bjob{this, n, anyBusSolo};
+    auto busFn = [](void* p, int i) { auto* j = (BJob*)p; j->e->processBus(i, j->n, j->solo); };
+    if (busy >= 4) pool_.run(kNumBuses, busFn, &bjob);
+    else for (int i = 0; i < kNumBuses; ++i) processBus(i, n, anyBusSolo);
+    float* ml = masterBuf_[0].data(); float* mr = masterBuf_[1].data();
     for (int bi = 0; bi < kNumBuses; ++bi) {
-      Channel& b = buses_[bi];
-      float* bl = busBuf_[bi][0].data(); float* br = busBuf_[bi][1].data();
-      applyGain(bl, br, n, b.smoothTrim, dbToLin(b.trimDb.load(std::memory_order_relaxed)));
-      runChain(b, bl, br, n);
-      bool muted = b.mute.load(std::memory_order_relaxed) ||
-                   (anyBusSolo && !b.solo.load(std::memory_order_relaxed));
-      float target = muted ? 0.f : dbToLin(b.gainDb.load(std::memory_order_relaxed));
-      applyGain(bl, br, n, b.smoothGain, target);
-      updateMeter(b.meter, bl, br, n);
-      float* ml = masterBuf_[0].data(); float* mr = masterBuf_[1].data();
+      const float* bl = busBuf_[bi][0].data(); const float* br = busBuf_[bi][1].data();
       for (int i = 0; i < n; ++i) { ml[i] += bl[i]; mr[i] += br[i]; }
     }
 
-    float* ml = masterBuf_[0].data(); float* mr = masterBuf_[1].data();
+    // Phase 3: master.
     runChain(master_, ml, mr, n);
     applyGain(ml, mr, n, master_.smoothGain,
               master_.mute.load(std::memory_order_relaxed) ? 0.f
@@ -256,8 +289,8 @@ void Engine::process(const float* const* in, int nIn, float* const* out, int nOu
       else std::fill_n(out[o] + done, n, 0.f);
     }
 
-    if (playing) {
-      int64_t np = pos + n;
+    if (c.playing) {
+      int64_t np = c.pos + n;
       if (loopActive && np >= loopOut) {  // loop wrap: every recording pass becomes its own take
         for (int ti = 0; ti < kMaxTracks; ++ti)
           if (tracks_[ti].recActive) { writer_->endTake(ti); tracks_[ti].recActive = false; }

@@ -10,7 +10,15 @@
 class AudioBridge : public juce::AudioIODeviceCallback {
  public:
   AudioBridge() {
+    // Mixer worker threads get raised priority so the OS does not starve them next to the audio thread.
+    // (Windows: highest non-realtime priority. Linux/Mac: left at default for now; needs rtkit/entitlements.)
+    airdaw::Engine::workerInit = [] {
+#if JUCE_WINDOWS
+      ::SetThreadPriority(::GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+#endif
+    };
     owned_ = std::make_unique<airdaw::Engine>(48000.0);
+    owned_->setWorkerThreads(-1);
     engine_.store(owned_.get());
     sr_ = 48000.0;
   }
@@ -29,6 +37,7 @@ class AudioBridge : public juce::AudioIODeviceCallback {
       // New sample rate: carry the session over into a fresh engine (inserts are created per rate).
       auto fresh = std::make_unique<airdaw::Engine>(sr);
       fresh->setInsertFactory(factory_);
+      fresh->setWorkerThreads(-1);  // cores-1 workers; audio is stopped here
       if (owned_) {
         auto tmp = (std::filesystem::temp_directory_path() / "airdaw_rate_change.airdaw").string();
         if (airdaw::saveSession(*owned_, tmp).ok) airdaw::loadSession(*fresh, tmp);
