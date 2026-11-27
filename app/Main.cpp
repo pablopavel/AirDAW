@@ -1,6 +1,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "MainComponent.h"
 #include "ui/AppIcon.h"
+#include "ui/FullScreen.h"
 
 // Command line:
 //   AirDAW.exe <project.airdaw>   open that project (what Explorer passes on double-click / "Open with").
@@ -46,9 +47,12 @@ class AirDawApp : public juce::JUCEApplication {
                                                  size.fromFirstOccurrenceOf("x", false, false).getIntValue());
     if (const auto f = projectArg(getCommandLineParameters()); f != juce::File()) window_->content->openOnStart(f);
     if (snap.isNotEmpty()) window_->content->takeSnapshot(juce::File(snap), arg("--scenario"));
-    else juce::Desktop::getInstance().setKioskModeComponent(window_.get(), false);  // opens full screen (Esc or the Full key leaves it)
+    else window_->setFull(true);  // opens full screen (Esc or the Full key leaves it)
   }
-  void shutdown() override { window_.reset(); }
+  void shutdown() override {
+    ui::fullscreen::isOn = [] { return false; }; ui::fullscreen::set = [](bool) {};
+    window_.reset();
+  }
   void systemRequestedQuit() override { quit(); }
 
  private:
@@ -62,9 +66,38 @@ class AirDawApp : public juce::JUCEApplication {
       auto area = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
       centreWithSize(juce::jmin(1760, area.getWidth() * 92 / 100), juce::jmin(1060, area.getHeight() * 92 / 100));
       setVisible(true);
+      ui::fullscreen::isOn = [this] { return full_; };
+      ui::fullscreen::set = [this](bool on) { setFull(on); };
+    }
+    // Full screen: the window is recreated without a frame and covers the whole display it is on. Unlike JUCE's kiosk
+    // mode it stays when another window or monitor takes the focus.
+    void setFull(bool on) {
+      if (on == full_) return;
+      if (on) {
+        restoreMax_ = isFullScreen();  // maximised (native title bar)
+        if (restoreMax_) setFullScreen(false);
+        restore_ = getBounds();
+        const auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect(getScreenBounds());
+        full_ = true;
+        recreateDesktopWindow();
+        if (d) setBounds(d->totalArea);
+      } else {
+        full_ = false;
+        recreateDesktopWindow();
+        setBounds(restore_);
+        if (restoreMax_) setFullScreen(true);
+      }
+      toFront(true);
+      if (content) content->grabKeyboardFocus();
+    }
+    int getDesktopWindowStyleFlags() const override {
+      return full_ ? juce::ComponentPeer::windowAppearsOnTaskbar : DocumentWindow::getDesktopWindowStyleFlags();
     }
     void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }
     MainComponent* content = nullptr;
+   private:
+    bool full_ = false, restoreMax_ = false;
+    juce::Rectangle<int> restore_;
   };
   std::unique_ptr<Window> window_;
 };

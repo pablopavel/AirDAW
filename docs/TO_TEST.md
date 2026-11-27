@@ -6,9 +6,8 @@ When something works, it is removed from this list; when it doesn't, it gets a n
 Last updated: 2026-11-27
 
 ## Controls, inserts and layout (new)
-- [ ] Menu keys in the deck are grey console buttons that light in the accent while pressed; Listen / Meters / Display /
-      MIDI Learn stay lit when on. No square glow round a lit key.
-- [ ] Bigger AIRDAW logo; no tape reels in the deck any more (the position readout takes their place).
+- [ ] Menu keys in the deck light in the accent while held down (Project, Plugins and Tap too); Listen / Meters / Display /
+      MIDI Learn / Plugins stay lit when on, Project while its menu is open. No square glow round a lit key.
 - [ ] Display > Hardware > Buttons: Console (coloured caps, M amber, S blue, monitor green, T violet, R red, dim when
       off), Toggles (strip M / S / monitor / T / R as bat-handle switches with a label and LED; Settings tick boxes as switches),
       Classic (the old keys, now the default). Each switch still toggles and still answers MIDI Learn.
@@ -50,14 +49,14 @@ Last updated: 2026-11-27
 - [ ] The insert panel's left X now sits beside the channel name.
 
 ## Full screen (new)
-- [ ] AirDAW opens full screen. Esc leaves it (after closing an open Display / Plugins / insert panel first); the Full key
+- [ ] AirDAW opens full screen and stays full screen when you click a window on another monitor. Esc leaves it (after closing an open Display / Plugins / insert panel first); the Full key
       toggles it. Leaving it gives the normal window back.
 - [ ] The Full key is an icon only: corners pointing out when windowed, pointing in when full screen. The Display key is
       a gear icon only (still lit while the Display panel is open). Both keys are narrow; the other keys share the row.
 
 ## Tempo, click and tempo map (new)
-- [ ] Tap key: tapping still sets the tempo; hold it and drag up / down to change the tempo (Shift: fine steps); the mouse
-      wheel changes it by 1 BPM (Shift: 0.1). After a drag or scroll the next taps start fresh.
+- [ ] Tap key: tapping still sets the tempo; hold it and drag up / down to change the tempo in whole BPM steps (Shift: 0.1);
+      the mouse wheel changes it by 1 BPM (Shift: 0.1). After a drag or scroll the next taps start fresh.
 - [ ] Click sounds: Beep (as before), Woodblock, Clave, Cowbell, Stick, Hi-hat, Soft; beat 1 of each bar accented. Choose
       them in Audio settings > Click sound, or right-click the Click key. Saved with the project.
 - [ ] Bar ruler above the song overview: bar numbers, a marker for bar 1 (the metronome's tempo) and one per change.

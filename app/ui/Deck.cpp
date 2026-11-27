@@ -1,5 +1,6 @@
 #include "Deck.h"
 #include "AirLookAndFeel.h"
+#include "FullScreen.h"
 
 namespace ui {
 
@@ -306,7 +307,7 @@ void Deck::sync() {
     keys_.setLit(TransportKeys::Rec, tr.recording.load());
     keys_.setLit(TransportKeys::Loop, tr.loopOn.load());
     keys_.setLit(TransportKeys::Click, e->metronome().enabled.load());
-    const bool fs = juce::Desktop::getInstance().getKioskModeComponent() != nullptr;
+    const bool fs = fullscreen::isOn();
     full_.setIcon(fs ? IconKey::Contract : IconKey::Expand);
     full_.setTooltip(fs ? "Leave full screen (or press Esc)" : "Full screen (Esc leaves it)");
     const auto tt = "Tap " + juce::String(e->metronome().bpm.load(), 1);

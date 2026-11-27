@@ -109,7 +109,7 @@ juce::Colour AirLookAndFeel::legendColour(juce::Button& b, bool down) {
     col = b.getToggleState() ? cap.interpolatedWith(juce::Colours::white, 0.35f) : Theme::dim();
   } else if (classicLook()) {
     col = b.findColour(juce::TextButton::textColourOffId);
-    if (b.getToggleState()) { juce::Colour a, c, txt, gl; litColours(kind, a, c, txt, gl); col = txt; }
+    if (b.getToggleState() || (down && kind == "key")) { juce::Colour a, c, txt, gl; litColours(kind, a, c, txt, gl); col = txt; }
   } else if (consoleLit(b, down)) {
     col = consoleFace(b, down).getPerceivedBrightness() > 0.55f ? juce::Colour(0xff1a1206) : juce::Colours::white;
   } else {
@@ -149,7 +149,7 @@ void AirLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, co
     return;
   }
   if (kind == "key") {  // deck menu keys: the transport keys' look at button size (classic)
-    const bool on = b.getToggleState(), pressed = on || down;
+    const bool on = b.getToggleState() || down, pressed = on;  // lit while on, and while held down
     auto k = r.withTrimmedBottom(4.f);
     const float kc = T().rad(4.f);
     if (!pressed) { g.setColour(juce::Colour(0xff070708)); g.fillRoundedRectangle(k.translated(0, 2), kc);

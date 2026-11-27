@@ -44,7 +44,7 @@ class IconKey : public juce::TextButton {
   Icon icon_;
 };
 
-// Tap tempo key: tap in time, or hold and drag up / down (Shift: fine), or scroll, to set the tempo.
+// Tap tempo key: tap in time, or hold and drag up / down or scroll (1 BPM steps; Shift: 0.1), to set the tempo.
 class TapButton : public juce::TextButton {
  public:
   std::function<float()> getBpm;
@@ -54,7 +54,11 @@ class TapButton : public juce::TextButton {
   void mouseDrag(const juce::MouseEvent& e) override {
     const int dy = -e.getDistanceFromDragStartY();
     if (!dragging_ && std::abs(dy) > 4) { dragging_ = true; if (resetTaps) resetTaps(); }
-    if (dragging_) set(startBpm_ + (float)dy * (e.mods.isShiftDown() ? 0.05f : 0.25f));
+    if (dragging_) {  // 6 px per step: 1 BPM, Shift 0.1 BPM (like the wheel)
+      const float step = e.mods.isShiftDown() ? 0.1f : 1.f;
+      const float base = e.mods.isShiftDown() ? startBpm_ : std::round(startBpm_);
+      set(base + step * (float)(dy / 6));
+    }
   }
   void mouseUp(const juce::MouseEvent& e) override { if (dragging_ && resetTaps) resetTaps(); dragging_ = false; juce::TextButton::mouseUp(e); }
   void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override {
@@ -84,6 +88,7 @@ class Deck : public juce::Component {
   juce::Component& midiButton() { return midi_; }
   juce::Component& pluginsButton() { return plugins_; }
   void setListenLit(bool on) { listen_.setToggleState(on, juce::dontSendNotification); }
+  void setPluginsLit(bool on) { plugins_.setToggleState(on, juce::dontSendNotification); }
   void previewAmbient(int state) { ambPreview_ = state; }  // test hook: transport light as if 1 = playing, 2 = recording
   IconKey displayBtn{IconKey::Gear};
   juce::TextButton metersBtn{juce::String(juce::CharPointer_UTF8("\xe2\x97\x94 Meters"))};

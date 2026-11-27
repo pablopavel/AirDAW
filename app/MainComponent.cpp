@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "ui/FullScreen.h"
 #include "Vst3Insert.h"
 #include "airdaw/render.h"
 #include <map>
@@ -99,10 +100,7 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   deck_.onAudio = [this] { showAudioSettings(); };
   deck_.onDisplay = [this] { toggleDisplayPanel(); };
   deck_.onMeters = [this] { dockShown_ = !dockShown_; props_->setValue("dockShown", dockShown_); resized(); };
-  deck_.onFull = [this] {
-    auto& d = juce::Desktop::getInstance();
-    d.setKioskModeComponent(d.getKioskModeComponent() ? nullptr : getTopLevelComponent(), false);
-  };
+  deck_.onFull = [] { ui::fullscreen::toggle(); };
   dock_.onLoadMeter = [this] { chooseMeterPlugin(); };
   dock_.setMeterSource([this]() -> ui::HitMeterAnalyzer* { return hub_ ? hub_->hitMeter() : nullptr; });
   inserts_.setVisible(false);
@@ -208,6 +206,7 @@ void MainComponent::togglePluginsPanel() {
   pluginsPanel_.setVisible(!pluginsPanel_.isVisible());
   if (pluginsPanel_.isVisible() && display_.isVisible()) toggleDisplayPanel();
   if (pluginsPanel_.isVisible()) pluginsPanel_.toFront(false);
+  deck_.setPluginsLit(pluginsPanel_.isVisible());
   resized();
 }
 
@@ -215,6 +214,7 @@ void MainComponent::toggleDisplayPanel() {
   if (!display_.isVisible() && pluginsPanel_.isVisible()) pluginsPanel_.setVisible(false);
   display_.setVisible(!display_.isVisible());
   deck_.displayBtn.setToggleState(display_.isVisible(), juce::dontSendNotification);
+  deck_.setPluginsLit(pluginsPanel_.isVisible());
   if (display_.isVisible()) { display_.syncFromTheme(); display_.toFront(false); }
   resized();
 }
@@ -368,8 +368,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& k, juce::Component*) {
     if (display_.isVisible()) { toggleDisplayPanel(); return true; }
     if (pluginsPanel_.isVisible()) { togglePluginsPanel(); return true; }
     if (inserts_.isVisible()) { inserts_.close(); return true; }
-    auto& d = juce::Desktop::getInstance();  // nothing left to close: leave full screen
-    if (d.getKioskModeComponent() != nullptr) { d.setKioskModeComponent(nullptr, false); return true; }
+    if (ui::fullscreen::isOn()) { ui::fullscreen::set(false); return true; }  // nothing left to close: leave full screen
   }
   return false;
 }
@@ -385,7 +384,9 @@ void MainComponent::showProjectMenu() {
   m.addItem(7, juce::String(juce::CharPointer_UTF8("Audio settings\xe2\x80\xa6")));
   m.addItem(5, juce::String(juce::CharPointer_UTF8("Load Hit Record Meter\xe2\x80\xa6")));
   m.addItem(6, "Show project folder", sessionFile_ != juce::File());
+  deck_.projectBtn.setToggleState(true, juce::dontSendNotification);  // lit while the menu is open
   m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&deck_.projectBtn), [this](int r) {
+    deck_.projectBtn.setToggleState(false, juce::dontSendNotification);
     switch (r) {
       case 1: newSession(); break; case 2: openSession(); break; case 3: saveSession(false); break; case 4: saveSession(true); break;
       case 5: chooseMeterPlugin(); break; case 6: sessionFolder().revealToUser(); break; case 7: showAudioSettings(); break; case 8: exportMix(); break; default: break;
@@ -1214,7 +1215,7 @@ void MainComponent::runScenario(const juce::String& nameIn) {
     e->track(4).chainMix = 0.6f;
     inserts_.show(4, -1);
   }
-  if (name == "fullscreen") juce::Desktop::getInstance().setKioskModeComponent(getTopLevelComponent(), false);  // test hook
+  if (name == "fullscreen") ui::fullscreen::set(true);  // test hook
   if (name == "tempo-map") {  // test hook: tempo / time-signature changes on the bar ruler, the list as a child
     e->metronome().bpm = 120.f; e->metronome().beatsPerBar = 4;
     e->setTempoMap({{5, 140.f, 4}, {9, 96.f, 3}, {13, 120.f, 7}});
