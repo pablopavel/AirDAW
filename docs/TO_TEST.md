@@ -5,35 +5,10 @@ When something works, it is removed from this list; when it doesn't, it gets a n
 
 Last updated: 2026-11-27
 
-## Deck (new)
-- [ ] Deck keys read just Listen, MIDI Learn, Plugins, Project, Meters (no small symbols).
-
-## Tempo, click and tempo map (new)
-- [ ] Tempo is whole BPM everywhere: tapping rounds to a whole number (no .5), drag and wheel move 1 BPM, the key shows
-      "Tap 120"; Audio settings and the tempo-change editors step by 1. After a drag or scroll the next taps start fresh.
-- [ ] Click sounds: Beep (as before), Woodblock, Clave, Cowbell, Stick, Hi-hat, Soft; beat 1 of each bar accented. Choose
-      them in Audio settings > Click sound, or right-click the Click key. Saved with the project.
-- [ ] Bar ruler above the song overview: bar numbers, a marker for bar 1 (the metronome's tempo) and one per change.
-      Double-click a bar to add a change there (it opens an editor: tempo, beats per bar, Delete); click a marker to edit
-      it; drag a marker to move it by whole bars; right-click for Edit / Delete / Add.
-- [ ] The click follows the changes (tempo and accents, e.g. 3/4 after 4/4); count-in uses bar 1's tempo.
-- [ ] Audio settings > Tempo changes: the same changes as rows (from bar, tempo, beats, X) and "+ Add change"; edits
-      show on the ruler and the other way round. The changes are saved with the project.
-
-## Moving strips (new)
-- [ ] Drag a track by its name plate onto another track: a line shows where it lands (left or right half), it moves
-      there; buses move among buses the same way. A single click on a name does nothing (only the INSERTS button opens the
-      chain); a right-click gives the menu, a double-click renames.
-- [ ] The order is saved with the project and comes back on reopening; another project has its own order; the sound
-      and routing don't change. "+ Add track" puts a re-added track at the end.
-- [ ] No coloured bar under the channel names (the option is gone too).
-
 ## New default view (new)
-- [ ] On a fresh install (or after Display > Reset) the look is today's: amber, normal glow, matte faceplate, sharp
-      corners, ivory knobs, cream faders, Industrial type, screws, rack inserts, classic buttons. The eras and the
-      other classic looks are unchanged.
-- [ ] Fresh settings also start with the meter dock at 377 px (469 px with the insert panel open), the dark meter view
-      on and 1339 px wide, and the reference suite Stereo field, Listening notes, Loudness, Band phase, Reference A/B.
+- [ ] Fresh settings start with the meter dock at 439 px (150 px, its smallest, with the insert panel open), the dark
+      meter view on and 762 px wide, and the reference suite Stereo field, Listening notes, Loudness, Band phase,
+      Reference A/B at their current widths.
 
 ## Removing tracks (new)
 - [ ] Right-click a track's name: Rename…, Show inserts, Remove track…. Remove asks first (it says how many takes leave the project).

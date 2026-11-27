@@ -99,7 +99,7 @@ ToolSet::ToolSet(AppCtx& ctx) : ctx_(ctx) {
   for (auto& i : registry())  // tools added in newer versions go to the end
     if (std::find(listen_.begin(), listen_.end(), juce::String(i.id)) == listen_.end()) listen_.push_back(i.id);
   // default widths of the default suite
-  for (auto& [id, w] : std::initializer_list<std::pair<const char*, int>>{{"stereo", 332}, {"notes", 166}, {"loudness", 198}, {"bandphase", 160}, {"reference", 166}})
+  for (auto& [id, w] : std::initializer_list<std::pair<const char*, int>>{{"stereo", 332}, {"notes", 166}, {"loudness", 198}, {"bandphase", 161}, {"reference", 166}})
     widths_[id] = w;
   for (auto& i : registry()) { const int w = ctx_.props.getIntValue(juce::String("tools.w.") + i.id, 0); if (w > 0) widths_[i.id] = w; }
   minimised_ = juce::StringArray::fromTokens(ctx_.props.getValue("tools.min"), ",", "");

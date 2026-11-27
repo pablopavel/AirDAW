@@ -130,8 +130,8 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   pluginsPanel_.layoutChanged = [this] { resized(); };
   inserts_.setVisible(false);
 
-  dockHeight_ = props_->getIntValue("dockHeight", 377);
-  dockHeightIns_ = props_->getIntValue("dockHeightIns", 469);
+  dockHeight_ = props_->getIntValue("dockHeight", 439);
+  dockHeightIns_ = props_->getIntValue("dockHeightIns", 150);
   dockShown_ = props_->getBoolValue("dockShown", true);
   autoOn_ = props_->getBoolValue("autosaveOn", false);
   const int secs[] = {0, 60, 120, 300, 600, 900, 1800};
