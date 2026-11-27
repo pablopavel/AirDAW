@@ -144,13 +144,16 @@ void TakesBar::rebuild() {
     float mx = 0.f; for (float p : c->peaks) mx = juce::jmax(mx, p);
     if (mx > 0.f) for (float& p : c->peaks) p = std::pow(p / mx, 0.7f);
     c->onPick = [this, t](int idx) { pick(t, idx, 0); };
+    c->onRecall = [this, t](int idx) { recall(t, idx); };
     c->onMenu = [this, t](int idx) {
       auto* en = ctx_.engine(); if (!en) return;
       const bool hasRegion = en->transport().loopOut.load() > en->transport().loopIn.load();
       juce::PopupMenu m;
       m.addItem(1, "Play on the whole track");
       m.addItem(2, "Play in this loop region only", hasRegion);
-      m.showMenuAsync(juce::PopupMenu::Options(), [this, t, idx](int r) { if (r > 0) pick(t, idx, r); });
+      m.addSeparator();
+      m.addItem(3, "Go to this take's loop region (double-click)");
+      m.showMenuAsync(juce::PopupMenu::Options(), [this, t, idx](int r) { if (r == 3) recall(t, idx); else if (r > 0) pick(t, idx, r); });
     };
     c->setTooltip(juce::File(juce::String(tk->path)).getFileName());
     row_.addAndMakeVisible(*c); chips_.push_back(std::move(c));
@@ -191,6 +194,21 @@ void TakesBar::pick(int t, int idx, int how) {
     if (e->comp(t)) e->setCompSection(t, tk->start, tk->start + (juce::int64)tk->l.size(), nullptr);  // its own span plays it, not old picks
   }
   key_.clear();
+}
+
+void TakesBar::recall(int t, int idx) {
+  auto* e = ctx_.engine(); if (!e || t < 0 || idx < 0 || idx >= e->numTakes(t)) return;
+  const auto* tk = e->takeAt(t, idx);
+  juce::int64 from = tk->start, to = tk->start + (juce::int64)tk->l.size();
+  if (const auto* cp = e->comp(t))  // a region the comp plays this take in
+    for (auto& s : cp->sections) if (s.take == tk) { from = s.from; to = s.to; break; }
+  if (to <= from) return;
+  auto& tr = e->transport();
+  tr.loopIn = from; tr.loopOut = to; tr.loopOn = true;
+  ctx_.viewTrack = t; closedFor_.clear(); key_.clear();
+  if (ctx_.layoutChanged) ctx_.layoutChanged();
+  const double sr = e->sampleRate();
+  ctx_.note("Loop region " + mmss((double)from / sr) + juce::String(juce::CharPointer_UTF8("\xe2\x80\x93")) + mmss((double)to / sr) + " (this take's)");
 }
 
 void TakesBar::deleteUnkept() {

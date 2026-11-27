@@ -21,6 +21,14 @@ std::string channelToJson(Engine& e, int id, const std::string& baseDir = {});
 // Puts such a channel on `id`, replacing its settings, inserts, takes and comp (UI thread). Used to duplicate a track.
 SessionResult channelFromJson(Engine& e, int id, const std::string& json, const std::string& baseDir = {});
 
+// Undo / redo. A state is the project as it is saved (absolute take paths), without the playhead position and track
+// arming (those are not edits). applyUndoState puts `target` over an engine whose state is `current`, changing only
+// what differs: untouched plugins keep running, unchanged takes are not read again. Returns what changed (channel
+// names, "tempo", "click", "loop region", "crossfade", "layout") for a note.
+std::string undoState(Engine& e);
+std::vector<std::string> applyUndoState(Engine& e, const std::string& target, const std::string& current,
+                                        std::vector<std::string>& warnings);
+
 struct AutoSaveSettings {
   bool enabled = false;
   int intervalSec = 300;  // 30 s .. 1 h

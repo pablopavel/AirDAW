@@ -722,6 +722,34 @@ static void testTakeLists() {
   std::printf("duplicate track: settings, inserts with their knobs, takes\n");
 }
 
+// Undo / redo states: only what differs is put back; an untouched plugin keeps running (same instance).
+static void testUndoState() {
+  Engine e(SR);
+  e.setInsert(0, 0, "ToTape8"); e.setInsert(0, 1, "ToTape8"); e.track(0).gainDb = -3.f; e.track(2).name = "Bass";
+  auto* keepFx = e.insertAt(0, 1);
+  const float p0 = e.insertAt(0, 0)->getParam(0);
+  const auto s0 = undoState(e);
+  e.track(0).gainDb = -10.f; e.insertAt(0, 0)->setParam(0, p0 < 0.5f ? 0.9f : 0.1f); e.setInsert(1, 0, "ToTape8");
+  e.track(2).name = "Vox"; e.setTempoMap({{5, 140.f, 4}}); e.transport().loopIn = 1000; e.transport().loopOut = 5000;
+  const auto s1 = undoState(e);
+  CHECK(s1 != s0, "undo: an edit changes the state");
+  e.transport().seek(12345); e.track(3).armed = true;
+  CHECK(undoState(e) == s1, "undo: the playhead and arming are not edits");
+  e.track(3).armed = false;
+  std::vector<std::string> warn;
+  auto what = applyUndoState(e, s0, s1, warn);
+  CHECK(warn.empty() && !what.empty(), "undo: applied (warnings=%zu)", warn.size());
+  CHECK(e.track(0).gainDb.load() == -3.f && e.track(2).name == "Bass" && e.tempoMap() == nullptr && e.insertAt(1, 0) == nullptr,
+        "undo: fader, name, tempo map, added insert put back");
+  CHECK(std::fabs(e.insertAt(0, 0)->getParam(0) - p0) < 1e-6f, "undo: a plugin knob put back");
+  CHECK(e.insertAt(0, 1) == keepFx, "undo: an untouched plugin keeps running");
+  CHECK(e.transport().loopOut.load() == 0, "undo: loop region put back");
+  CHECK(undoState(e) == s0, "undo: the state is the earlier one");
+  applyUndoState(e, s1, s0, warn);
+  CHECK(undoState(e) == s1 && e.insertAt(1, 0) != nullptr && e.track(0).gainDb.load() == -10.f, "redo: the edit is back");
+  std::printf("undo state: playhead / arm ignored, only differences applied, untouched plugins kept, redo\n");
+}
+
 // A mono track fed by two inputs ("In 1+2"): their average; the flag off, the first input only.
 static void testInputMix() {
   { Rig r; auto& t = r.e.track(0); t.inputL = 0; t.inputR = 1; t.inputMix = true; t.pan = -1.f;
@@ -840,6 +868,7 @@ int main() {
   testMetronome();
   testTakeLists();
   testInputMix();
+  testUndoState();
   testMonitoringAndLayering();
   testRecordingPaths();
   testInsertReorder();

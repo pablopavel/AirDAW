@@ -69,8 +69,22 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   void closeMenus(Menu keep = MenuNone);
   struct ClickAway : juce::MouseListener {
     std::function<void(const juce::MouseEvent&)> onDown;
+    std::function<void()> onTouched;  // a mouse release or wheel move: something may have been edited
     void mouseDown(const juce::MouseEvent& e) override { if (onDown) onDown(e); }
+    void mouseUp(const juce::MouseEvent&) override { if (onTouched) onTouched(); }
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override { if (onTouched) onTouched(); }
   } clickAway_;
+  // Undo / redo (Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z, and the Project menu). The project's state (airdaw::undoState) is
+  // taken shortly after each mouse release, wheel move or key, and every few seconds (MIDI controllers); when it
+  // differs from the last one, that one goes on the undo list. Undo puts back only what differs. A project opened or
+  // started resets the history. Not while recording.
+  std::vector<std::string> undo_, redo_;
+  std::string undoCur_;
+  double undoTouched_ = 0;  // when something was last touched (ms), 0 = nothing pending
+  bool undoOn_ = false;
+  void undoReset();
+  void undoCapture();
+  void undoStep(bool redo);
   void clickedSomewhere(const juce::MouseEvent& e);
   void showAudioSettings();
   void applyTheme();

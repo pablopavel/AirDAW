@@ -141,6 +141,7 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   setWantsKeyboardFocus(true);
   addKeyListener(this);
   clickAway_.onDown = [this](const juce::MouseEvent& e) { clickedSomewhere(e); };
+  clickAway_.onTouched = [this] { undoTouched_ = juce::Time::getMillisecondCounterHiRes(); };
   if (!snapshotMode_) juce::Desktop::getInstance().addGlobalMouseListener(&clickAway_);
   {  // MIDI Learn
     ui::MidiControl::Host h;
@@ -383,6 +384,9 @@ void MainComponent::transport(ui::TransportKeys::Key k) {
 
 bool MainComponent::keyPressed(const juce::KeyPress& k, juce::Component*) {
   const auto m = k.getModifiers();
+  if (m.isCommandDown() && k.getKeyCode() == 'Z') { undoStep(m.isShiftDown()); return true; }
+  if (m.isCommandDown() && k.getKeyCode() == 'Y') { undoStep(true); return true; }
+  undoTouched_ = juce::Time::getMillisecondCounterHiRes();  // any other key may edit something
   if (m.isCommandDown() && k.getKeyCode() == 'S') { saveSession(m.isShiftDown()); return true; }
   if (m.isCommandDown() && k.getKeyCode() == 'O') { openSession(); return true; }
   if (m.isCommandDown() && k.getKeyCode() == 'N') { newSession(); return true; }
@@ -404,6 +408,8 @@ bool MainComponent::keyPressed(const juce::KeyPress& k, juce::Component*) {
 void MainComponent::showProjectMenu() {
   juce::PopupMenu m;
   m.addSectionHeader("Project: " + sessionName());
+  m.addItem(20, "Undo   (Ctrl+Z)", !undo_.empty()); m.addItem(21, "Redo   (Ctrl+Y)", !redo_.empty());
+  m.addSeparator();
   m.addItem(1, "New", true, false); m.addItem(2, juce::String(juce::CharPointer_UTF8("Open\xe2\x80\xa6")));
   m.addItem(3, "Save", true, false); m.addItem(4, juce::String(juce::CharPointer_UTF8("Save As\xe2\x80\xa6")));
   m.addSeparator();
@@ -417,6 +423,7 @@ void MainComponent::showProjectMenu() {
     deck_.projectBtn.setToggleState(false, juce::dontSendNotification);
     switch (r) {
       case 1: newSession(); break; case 2: openSession(); break; case 3: saveSession(false); break; case 4: saveSession(true); break;
+      case 20: undoStep(false); break; case 21: undoStep(true); break;
       case 5: chooseMeterPlugin(); break; case 6: sessionFolder().revealToUser(); break; case 7: showAudioSettings(); break; case 8: exportMix(); break; default: break;
     }
   });
@@ -571,6 +578,7 @@ void MainComponent::newSession() {
         auto tmp = (juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw_blank.airdaw")).getFullPathName().toStdString();
         airdaw::saveSession(blank, tmp); airdaw::loadSession(*e, tmp);
         ui::AppCtx::applyMetronomeDefaults(*e, *props_);  // your usual click, not the factory one
+        undoReset();
         inserts_.close(); ctx_.viewTrack = -1; resetMeters();
         setSessionFile({}); note("New project");
         restoreProjectReference(false);
@@ -662,6 +670,7 @@ void MainComponent::openSessionFile(const juce::File& f) {
   setSessionFile(f);
   restoreProjectReference(true);
   if (midi_) midi_->loadProjectMappings();
+  undoReset();
   note(r.warnings.empty() ? "Opened " + f.getFileName() : "Opened with " + juce::String((int)r.warnings.size()) + " warning(s): " + r.warnings[0],
        !r.warnings.empty());
 }
@@ -682,7 +691,7 @@ void MainComponent::checkRecovery() {
         if (auto* e = bridge_.engine()) {
           auto res = airdaw::loadSession(*e, lf.getFullPathName().toStdString());
           note(res.ok ? "Recovered auto-save" : "RECOVERY FAILED: " + res.error);
-          if (res.ok) { restoreProjectReference(true); if (midi_) midi_->loadProjectMappings(); }
+          if (res.ok) { restoreProjectReference(true); if (midi_) midi_->loadProjectMappings(); undoReset(); }
         }
       });
 }
@@ -872,6 +881,12 @@ void MainComponent::timerCallback() {
     // Bring the Hit Record Meter back if it was set up before and the session has none.
     const juce::File mp(props_->getValue("meterPath"));
     if (findMeter(*e) < 0 && mp.exists()) loadMeter(mp, true);
+    if (!snapshotMode_) undoReset();  // a new engine (first run or a new sample rate): the history starts here
+  }
+  if (undoOn_ && e && !e->transport().recording.load() && !e->transport().countingIn()) {
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    const bool settled = undoTouched_ > 0 && now - undoTouched_ > 250 && !juce::Desktop::getInstance().getMainMouseSource().isDragging();
+    if (settled || tick_ % 90 == 0) { undoTouched_ = 0; undoCapture(); }
   }
   updateDeviceStatus();
   if (e) pumpAnalysis(*e);
@@ -1098,6 +1113,46 @@ void MainComponent::duplicateTrack(int src) {
   if (failed > 0) msg << "; " << failed << " take file(s) could not be copied: they are shared with the original";
   if (!res.warnings.empty()) msg << "; " << juce::String(res.warnings.front());
   note(msg);
+  resized();
+}
+
+// ---------------------------------------------------------------- undo / redo
+void MainComponent::undoReset() {
+  undo_.clear(); redo_.clear(); undoTouched_ = 0;
+  auto* e = bridge_.engine(); if (!e) { undoOn_ = false; return; }
+  undoCur_ = airdaw::undoState(*e); undoOn_ = true;
+}
+
+void MainComponent::undoCapture() {
+  auto* e = bridge_.engine(); if (!e || !undoOn_) return;
+  auto s = airdaw::undoState(*e);
+  if (s == undoCur_) return;
+  undo_.push_back(std::move(undoCur_)); undoCur_ = std::move(s);
+  redo_.clear();
+  if (undo_.size() > 100) undo_.erase(undo_.begin());  // the oldest steps go
+}
+
+void MainComponent::undoStep(bool redo) {
+  auto* e = bridge_.engine(); if (!e || !undoOn_) return;
+  if (e->transport().recording.load() || e->transport().countingIn()) { note("Stop recording before undo / redo"); return; }
+  undoCapture();  // anything not taken yet becomes a step first
+  auto& from = redo ? redo_ : undo_;
+  auto& to = redo ? undo_ : redo_;
+  if (from.empty()) { note(redo ? "Nothing to redo" : "Nothing to undo"); return; }
+  std::string target = std::move(from.back()); from.pop_back();
+  const auto appBefore = e->appData;
+  std::vector<std::string> warn;
+  const auto what = airdaw::applyUndoState(*e, target, undoCur_, warn);
+  to.push_back(std::move(undoCur_));
+  undoCur_ = airdaw::undoState(*e);  // as it now is (a plugin may round a value), so the next capture sees no change
+  if (e->appData != appBefore) {  // removed tracks, the strips' order
+    mixer_.setRemovedTracks(projectData()["removedTracks"]);
+    mixer_.setStripOrder(projectData()["stripOrder"]);
+  }
+  juce::StringArray parts; for (auto& w : what) parts.addIfNotAlreadyThere(juce::String(w));
+  juce::String msg = (redo ? "Redo" : "Undo") + juce::String(parts.isEmpty() ? juce::String() : ": " + parts.joinIntoString(", "));
+  if (!warn.empty()) msg << " (" << juce::String(warn.front()) << ")";
+  note(msg, !warn.empty());
   resized();
 }
 

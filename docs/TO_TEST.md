@@ -8,6 +8,9 @@ Last updated: 2026-11-27
 ## Comping
 - [ ] Keep in a loop region stars the pass that is lit (the region's pick), not the track's own take; the key reads
       "Kept" for that pass. Without a region it stars the track's take as before.
+- [ ] Takes bar: double-click a take: the loop region comes back (the region the comp plays it in, else the take's own
+      span), loop on, and with it Outside / crossfade / Clear comp. A single click still picks the take (a moment later,
+      so a double-click doesn't pick first). Also on the take's right-click menu.
 - [ ] Crossfade slider (0-50 ms): edges sound smooth, no clicks; 0 ms is a hard cut.
 - [ ] "Outside: take" / "Outside: silence".
 - [ ] "Clear comp" brings the full take back everywhere (no take is deleted).
@@ -24,6 +27,14 @@ Last updated: 2026-11-27
 ## Metronome defaults (new)
 - [ ] Set the click sound, beats per bar, count-in and click level (Audio settings, or the Click key's right-click menu),
       then restart AirDAW or make a new project: they start the same. A saved project still opens with its own.
+
+## Undo / redo (new)
+- [ ] Ctrl+Z undoes, Ctrl+Y (or Ctrl+Shift+Z) redoes; also at the top of the Project menu. The footer says what changed.
+      Try: fader / pan / gain moves, mute / solo, routing, input, rename, insert add / remove / reorder / bypass / knobs,
+      chain mix, duplicate / remove / reorder tracks, comp picks, Keep, tempo changes, click settings, loop region.
+- [ ] A plugin you didn't touch keeps running through an undo (no dropout). Undo after recording takes the new take
+      out of the list (its file stays); redo brings it back. Not while recording.
+- [ ] Opening or starting a project starts a fresh history. Typing in a name box: Ctrl+Z undoes the typing only.
 
 ## Mixer extras
 - [ ] Channel polarity (⌀) on tracks and buses: flips the sound; takes recorded with ⌀ on play back normally.

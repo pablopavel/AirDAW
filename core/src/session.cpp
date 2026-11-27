@@ -1,3 +1,4 @@
+#include <array>
 #include "airdaw/session.h"
 #include <algorithm>
 #include <chrono>
@@ -72,7 +73,7 @@ static JVal channelJVal(Engine& e, int id, const std::string& baseDir) {
   return j;
 }
 
-std::string sessionToJson(Engine& e, const std::string& baseDir) {
+static JVal sessionJVal(Engine& e, const std::string& baseDir) {
   JVal root = JVal::obj();
   root.set("format", JVal::str("airdaw-session")).set("version", JVal::num(1)).set("sampleRate", JVal::num(e.sampleRate()));
   auto& t = e.transport();
@@ -99,32 +100,56 @@ std::string sessionToJson(Engine& e, const std::string& baseDir) {
   JVal chs = JVal::arr();
   for (int id : allIds()) chs.push(channelJVal(e, id, baseDir));
   root.set("channels", chs);
-  return root.dump();
+  return root;
+}
+
+std::string sessionToJson(Engine& e, const std::string& baseDir) { return sessionJVal(e, baseDir).dump(); }
+
+// The channel's mixer settings (everything but its inserts and takes). `withArm`: also the record arm.
+static void applyChannelSettings(Channel& c, const JVal& j, bool withArm) {
+  c.name = j.text("name", c.name); c.gainDb = (float)j.num("gainDb", 0); c.trimDb = (float)j.num("trimDb", 0);
+  c.pan = (float)j.num("pan", 0); c.mute = j.flag("mute", false); c.solo = j.flag("solo", false);
+  c.route = (int)j.num("route", 0); c.stereo = j.flag("stereo", c.stereo.load());
+  if (withArm) c.armed = j.flag("armed", false);
+  c.monitor = j.flag("monitor", true); c.polarity = j.flag("polarity", false); c.chainMix = std::clamp((float)j.num("chainMix", 1.0), 0.f, 1.f);
+  c.inputL = (int)j.num("inputL", -1); c.inputR = (int)j.num("inputR", -1); c.inputMix = j.flag("inputMix", false);
+}
+
+// Puts the insert `f` (as saved) into `slot`: creates the plugin, then its bypass, parallel and settings.
+static void createInsert(Engine& e, int id, const JVal& f, std::vector<std::string>& warnings) {
+  int slot = (int)f.num("slot", -1); std::string name = f.text("effect");
+  bool made;
+  if (name.find(':') != std::string::npos) {  // hosted plugin, e.g. "vst3:/path/Meter.vst3"
+    std::unique_ptr<InsertProcessor> p = e.insertFactory() ? e.insertFactory()(name, e.sampleRate()) : nullptr;
+    made = p && e.setInsertProcessor(id, slot, std::move(p));
+  } else made = e.setInsert(id, slot, name);
+  if (!made) { warnings.push_back("plugin '" + name + "' on " + chan(e, id).name + " could not be loaded"); return; }
+  if (auto* fx = e.insertAt(id, slot)) {
+    fx->setBypass(f.flag("bypass", false));
+    fx->setParallel(f.flag("parallel", false));
+    std::string st = f.text("state");
+    if (!st.empty()) fx->loadState(st);
+    else if (auto* ps = f.get("params")) for (size_t p = 0; p < ps->a.size() && (int)p < fx->numParams(); ++p) fx->setParam((int)p, (float)ps->a[p].n);
+  }
+}
+
+// The comp of a track from its saved form; `mapIdx`: saved take index -> loaded index.
+static void applyComp(Engine& e, int id, const JVal& j, const std::vector<int>& mapIdx) {
+  if (auto* cj = j.get("comp")) {
+    if (auto* secs = cj->get("sections"))
+      for (auto& q : secs->a) {
+        const int k = (int)q.num("take", -1);
+        if (k >= 0 && k < (int)mapIdx.size() && mapIdx[(size_t)k] >= 0)
+          e.setCompSection(id, (int64_t)q.num("from", 0), (int64_t)q.num("to", 0), e.takeAt(id, mapIdx[(size_t)k]));
+      }
+    if (cj->flag("silenceOutside", false)) e.setCompSilenceOutside(id, true);
+  }
 }
 
 static void applyChannel(Engine& e, int id, const JVal& j, const std::string& baseDir, std::vector<std::string>& warnings) {
   Channel& c = chan(e, id);
-  c.name = j.text("name", c.name); c.gainDb = (float)j.num("gainDb", 0); c.trimDb = (float)j.num("trimDb", 0);
-  c.pan = (float)j.num("pan", 0); c.mute = j.flag("mute", false); c.solo = j.flag("solo", false);
-  c.route = (int)j.num("route", 0); c.stereo = j.flag("stereo", c.stereo.load()); c.armed = j.flag("armed", false);
-  c.monitor = j.flag("monitor", true); c.polarity = j.flag("polarity", false); c.chainMix = std::clamp((float)j.num("chainMix", 1.0), 0.f, 1.f);
-  c.inputL = (int)j.num("inputL", -1); c.inputR = (int)j.num("inputR", -1); c.inputMix = j.flag("inputMix", false);
-  if (auto* ins = j.get("inserts")) for (auto& f : ins->a) {
-    int slot = (int)f.num("slot", -1); std::string name = f.text("effect");
-    bool made;
-    if (name.find(':') != std::string::npos) {  // hosted plugin, e.g. "vst3:/path/Meter.vst3"
-      std::unique_ptr<InsertProcessor> p = e.insertFactory() ? e.insertFactory()(name, e.sampleRate()) : nullptr;
-      made = p && e.setInsertProcessor(id, slot, std::move(p));
-    } else made = e.setInsert(id, slot, name);
-    if (!made) { warnings.push_back("plugin '" + name + "' on " + c.name + " could not be loaded"); continue; }
-    if (auto* fx = e.insertAt(id, slot)) {
-      fx->setBypass(f.flag("bypass", false));
-      fx->setParallel(f.flag("parallel", false));
-      std::string st = f.text("state");
-      if (!st.empty()) fx->loadState(st);
-      else if (auto* ps = f.get("params")) for (size_t p = 0; p < ps->a.size() && (int)p < fx->numParams(); ++p) fx->setParam((int)p, (float)ps->a[p].n);
-    }
-  }
+  applyChannelSettings(c, j, true);
+  if (auto* ins = j.get("inserts")) for (auto& f : ins->a) createInsert(e, id, f, warnings);
   if (id < kMaxTracks) {
     std::vector<int> mapIdx;  // saved take index -> loaded index (a missing file shifts later ones)
     if (auto* tk = j.get("takes")) for (auto& q : tk->a) {
@@ -136,15 +161,7 @@ static void applyChannel(Engine& e, int id, const JVal& j, const std::string& ba
     }
     int saved = (int)j.num("activeTake", -1);
     e.setActiveTake(id, saved >= 0 && saved < (int)mapIdx.size() ? mapIdx[saved] : -1);
-    if (auto* cj = j.get("comp")) {
-      if (auto* secs = cj->get("sections"))
-        for (auto& q : secs->a) {
-          const int k = (int)q.num("take", -1);
-          if (k >= 0 && k < (int)mapIdx.size() && mapIdx[(size_t)k] >= 0)
-            e.setCompSection(id, (int64_t)q.num("from", 0), (int64_t)q.num("to", 0), e.takeAt(id, mapIdx[(size_t)k]));
-        }
-      if (cj->flag("silenceOutside", false)) e.setCompSilenceOutside(id, true);
-    }
+    applyComp(e, id, j, mapIdx);
   }
 }
 
@@ -217,6 +234,111 @@ SessionResult channelFromJson(Engine& e, int id, const std::string& json, const 
   if (id < kMaxTracks) { e.clearComp(id); e.clearTakeList(id); }
   applyChannel(e, id, j, baseDir, r.warnings);
   r.ok = true; return r;
+}
+
+// ---------------------------------------------------------------- undo
+std::string undoState(Engine& e) {
+  JVal root = sessionJVal(e, {});
+  for (auto& [k, v] : root.o)
+    if (k == "transport") { auto& o = v.o; o.erase(std::remove_if(o.begin(), o.end(), [](auto& p) { return p.first == "pos"; }), o.end()); }
+    else if (k == "channels")
+      for (auto& ch : v.a) { auto& o = ch.o; o.erase(std::remove_if(o.begin(), o.end(), [](auto& p) { return p.first == "armed"; }), o.end()); }
+  return root.dump();
+}
+
+static std::string dumpOf(const JVal* v) { return v ? v->dump() : std::string(); }
+
+// One channel: only what differs between `cur` and `tgt` is changed, so untouched plugins keep running and untouched
+// takes are not read from disk again.
+static void applyChannelDiff(Engine& e, int id, const JVal& tgt, const JVal& cur, std::vector<std::string>& warnings) {
+  Channel& c = chan(e, id);
+  applyChannelSettings(c, tgt, false);
+  if (dumpOf(tgt.get("inserts")) != dumpOf(cur.get("inserts"))) {
+    std::array<const JVal*, kMaxInserts> T{}, C{};
+    if (auto* a = tgt.get("inserts")) for (auto& f : a->a) { int s = (int)f.num("slot", -1); if (s >= 0 && s < kMaxInserts) T[(size_t)s] = &f; }
+    if (auto* a = cur.get("inserts")) for (auto& f : a->a) { int s = (int)f.num("slot", -1); if (s >= 0 && s < kMaxInserts) C[(size_t)s] = &f; }
+    for (int s = 0; s < kMaxInserts; ++s) {
+      const JVal* t = T[(size_t)s]; const JVal* k = C[(size_t)s];
+      if (!t) { if (k || e.insertAt(id, s)) e.setInsert(id, s, ""); continue; }
+      if (k && t->dump() == k->dump()) continue;
+      auto* fx = e.insertAt(id, s);
+      if (!k || !fx || t->text("effect") != k->text("effect")) { if (fx) e.setInsert(id, s, ""); createInsert(e, id, *t, warnings); continue; }
+      fx->setBypass(t->flag("bypass", false)); fx->setParallel(t->flag("parallel", false));
+      const std::string st = t->text("state");
+      if (!st.empty()) { if (st != k->text("state")) fx->loadState(st); }
+      else if (auto* ps = t->get("params")) {
+        const JVal* pc = k->get("params");
+        for (size_t p = 0; p < ps->a.size() && (int)p < fx->numParams(); ++p)
+          if (!pc || p >= pc->a.size() || pc->a[p].n != ps->a[p].n) fx->setParam((int)p, (float)ps->a[p].n);
+      }
+    }
+  }
+  if (id >= kMaxTracks) return;
+  auto takeList = [](const JVal& j) {  // path + start of each take (the star is not part of the list)
+    std::string s; if (auto* tk = j.get("takes")) for (auto& q : tk->a) s += q.text("path") + "@" + std::to_string((long long)q.num("start", 0)) + ";";
+    return s;
+  };
+  const bool sameTakes = takeList(tgt) == takeList(cur);
+  const bool sameRest = dumpOf(tgt.get("takes")) == dumpOf(cur.get("takes")) && tgt.num("activeTake", -1) == cur.num("activeTake", -1)
+                        && dumpOf(tgt.get("comp")) == dumpOf(cur.get("comp"));
+  if (sameTakes && sameRest) return;
+  std::vector<int> mapIdx;
+  if (sameTakes) {  // the same takes: stars, the active one and the comp
+    if (auto* tk = tgt.get("takes")) for (size_t i = 0; i < tk->a.size() && (int)i < e.numTakes(id); ++i) e.setTakeKeep(id, (int)i, tk->a[i].flag("keep", false));
+    for (int i = 0; i < e.numTakes(id); ++i) mapIdx.push_back(i);
+  } else {  // takes were added or removed: the list is read again (a deleted take's file may be in the Recycle Bin)
+    e.clearComp(id); e.clearTakeList(id);
+    if (auto* tk = tgt.get("takes")) for (auto& q : tk->a) {
+      const std::string p = q.text("path");
+      int idx = e.addTake(id, p, (int64_t)q.num("start", 0));
+      if (idx < 0) warnings.push_back("missing take: " + p); else e.setTakeKeep(id, idx, q.flag("keep", false));
+      mapIdx.push_back(idx);
+    }
+  }
+  const int saved = (int)tgt.num("activeTake", -1);
+  e.setActiveTake(id, saved >= 0 && saved < (int)mapIdx.size() ? mapIdx[(size_t)saved] : -1);
+  if (dumpOf(tgt.get("comp")) != dumpOf(cur.get("comp")) || !sameTakes) { e.clearComp(id); applyComp(e, id, tgt, mapIdx); }
+}
+
+std::vector<std::string> applyUndoState(Engine& e, const std::string& target, const std::string& current, std::vector<std::string>& warnings) {
+  std::vector<std::string> what;
+  JVal T, C;
+  if (!JVal::parse(target, T) || !JVal::parse(current, C)) { warnings.push_back("undo state unreadable"); return what; }
+  const JVal none = JVal::obj();
+  auto part = [&](const char* k, const JVal& j) { const JVal* v = j.get(k); return v ? v : &none; };
+  if (part("metronome", T)->dump() != part("metronome", C)->dump()) {
+    const JVal* mj = part("metronome", T); auto& m = e.metronome();
+    m.enabled = mj->flag("enabled", false); m.bpm = std::clamp((float)mj->num("bpm", 120), 20.f, 400.f);
+    m.beatsPerBar = std::clamp((int)mj->num("beatsPerBar", 4), 1, 16); m.levelDb = (float)mj->num("levelDb", -6);
+    m.countInBars = std::clamp((int)mj->num("countInBars", 0), 0, 4); m.sound = std::clamp((int)mj->num("sound", 0), 0, kNumClickSounds - 1);
+    if (dumpOf(mj->get("tempoMap")) != dumpOf(part("metronome", C)->get("tempoMap"))) {
+      std::vector<TempoChange> ch;
+      if (auto* tm = mj->get("tempoMap")) for (auto& q : tm->a) if (q.a.size() >= 3) ch.push_back({(int)q.a[0].n, (float)q.a[1].n, (int)q.a[2].n});
+      e.setTempoMap(std::move(ch)); what.push_back("tempo");
+    } else what.push_back("click");
+  }
+  if (part("transport", T)->dump() != part("transport", C)->dump()) {
+    const JVal* t = part("transport", T); auto& tr = e.transport();
+    tr.loopIn = (int64_t)t->num("loopIn", 0); tr.loopOut = (int64_t)t->num("loopOut", 0); tr.loopOn = t->flag("loopOn", false);
+    tr.punchIn = (int64_t)t->num("punchIn", 0); tr.punchOut = (int64_t)t->num("punchOut", 0); tr.punchOn = t->flag("punchOn", false);
+    what.push_back("loop region");
+  }
+  if (part("comping", T)->dump() != part("comping", C)->dump()) {
+    e.compCrossfadeMs = std::clamp((float)part("comping", T)->num("crossfadeMs", 5), 0.f, 50.f); what.push_back("crossfade");
+  }
+  if (part("app", T)->dump() != part("app", C)->dump()) { e.appData = part("app", T)->dump(); what.push_back("layout"); }
+  const JVal* tc = T.get("channels"); const JVal* cc = C.get("channels");
+  if (tc && cc)
+    for (auto& tj : tc->a) {
+      const int id = (int)tj.num("id", -1);
+      if (!(id >= 0 && id < kMaxTracks) && !(id >= 100 && id < 100 + kNumBuses) && id != 200) continue;
+      const JVal* cj = nullptr; for (auto& q : cc->a) if ((int)q.num("id", -2) == id) { cj = &q; break; }
+      if (cj && cj->dump() == tj.dump()) continue;
+      applyChannelDiff(e, id, tj, cj ? *cj : none, warnings);
+      const std::string nm = tj.text("name", cj ? cj->text("name") : std::string());
+      what.push_back(nm.empty() ? "a channel" : nm);
+    }
+  return what;
 }
 
 void AutoSaver::configure(const AutoSaveSettings& s) {

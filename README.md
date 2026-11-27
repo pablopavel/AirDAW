@@ -28,9 +28,10 @@ Runs on Windows 11 with ASIO (tested with a Black Lion Revolution 2x2 at 96 kHz 
   tempo map (tempo / time-signature changes by bar, edited on a bar ruler or as a list).
 - **Recording:** lock-free disk writer (32-bit float WAV), punch in/out, loop passes as separate takes, input monitoring on
   armed tracks. Takes bar: keep / delete unkept, and **comping** (pick a take per loop region, adjustable crossfades,
-  outside the regions the track's take or silence).
+  outside the regions the track's take or silence; double-click a take to bring back its loop region).
 - **Projects:** JSON `.airdaw` sessions, one folder per project (audio, autosave), timed auto-save with recovery, Save As
   moves takes into the project, double-click a project file to open it. Mix export (WAV 24/32-bit, song or loop range).
+  Undo / redo (Ctrl+Z, Ctrl+Y) for mixer, insert, track, take, tempo and loop edits.
 - **Mixing UI:** the approved mockup ported to JUCE: deck, song overview, mixer strips (add, remove and drag to reorder,
   one Inserts button each), insert panel as cards or, as a Display option, a 500-series rack (faceplate finish by plugin category), with every plugin
   parameter, presets, favourites and Airwindows write-ups. backlit transport keys and console-style menu keys in the

@@ -22,20 +22,30 @@ class TakesBar : public juce::Component {
   static constexpr int kHeight = 48;
 
  private:
-  struct Chip : juce::Component, juce::SettableTooltipClient {
+  // Click: pick the take (after the double-click time, so a double-click does not pick it first).
+  // Double-click: bring back the take's loop region (and with it the comp settings). Right-click: menu.
+  struct Chip : juce::Component, juce::SettableTooltipClient, private juce::Timer {
     int index = -1;            // take index on the track
     juce::String label;
     bool active = false, kept = false, inComp = false;
     std::array<float, 24> peaks{};
-    std::function<void(int)> onPick, onMenu;
+    std::function<void(int)> onPick, onMenu, onRecall;
     void paint(juce::Graphics&) override;
     void mouseUp(const juce::MouseEvent& e) override {
       if (!e.mouseWasClicked()) return;
-      if (e.mods.isPopupMenu()) { if (onMenu) onMenu(index); } else if (onPick) onPick(index);
+      if (e.mods.isPopupMenu()) { if (onMenu) onMenu(index); return; }
+      if (e.getNumberOfClicks() == 1) startTimer(juce::MouseEvent::getDoubleClickTimeout());
     }
+    void mouseDoubleClick(const juce::MouseEvent& e) override {
+      if (e.mods.isPopupMenu()) return;
+      stopTimer(); if (onRecall) onRecall(index);
+    }
+   private:
+    void timerCallback() override { stopTimer(); if (onPick) onPick(index); }
   };
-  int track() const;
-  const airdaw::Take* selected(airdaw::Engine& e, int t) const;  // what Keep stars                       // viewed track, or the first armed one, or -1
+  void recall(int t, int idx);  // the take's loop region back (its comp region, else its own span), loop on
+  int track() const;                                              // viewed track, or the first armed one, or -1
+  const airdaw::Take* selected(airdaw::Engine& e, int t) const;  // what Keep stars
   std::vector<int> scope(airdaw::Engine&, int t) const;  // takes in the loop region (or all, without a region)
   void rebuild();
   void deleteUnkept();
