@@ -1,4 +1,4 @@
-// Mockup controls drawn in JUCE: LCD readout, tape reels, name plate, gain knob, pan, fader block
+// Mockup controls drawn in JUCE: LCD readout, name plate, gain knob, pan, fader block
 // (dB scale + fader + ladder meters + dB readout), plugin knob, VU meter, insert slot.
 #pragma once
 #include <functional>
@@ -18,19 +18,6 @@ class Lcd : public juce::Component, public juce::SettableTooltipClient {
   void mouseUp(const juce::MouseEvent& e) override { if (onClick && e.mouseWasClicked()) onClick(); }
  private:
   juce::String caption_, text_; float h_; juce::Colour col_;
-};
-
-// Pair of tape reels that turn while the transport plays ("Amber Night": aluminium reels on a deck plate
-// leaning back under one warm, slightly flickering lamp; a REC lamp pulses while recording).
-class Reels : public juce::Component, private juce::Timer {
- public:
-  Reels() { startTimerHz(30); }
-  std::function<bool()> isPlaying, isRecording;
-  void paint(juce::Graphics&) override;
- private:
-  void timerCallback() override;
-  float a1_ = 0.f, a2_ = 0.f, lamp_ = 0.95f, rec_ = 0.f;
-  int tick_ = 0;
 };
 
 // Cream name plate with a coloured bar (click = select, double-click = rename).
@@ -155,11 +142,12 @@ void drawDropOutline(juce::Graphics&, juce::Rectangle<float>, float corner);
 
 // Insert slot button: LED + plugin name, or "+ Insert" when empty (mockup .ins).
 // A filled slot can be dragged onto another slot of the same strip to reorder the chain.
-class InsertSlot : public juce::Component, public juce::DragAndDropTarget {
+// `summary`: a strip's one Inserts button instead (LED lit while a plugin runs, the number of plugins on the right).
+class InsertSlot : public juce::Component, public juce::DragAndDropTarget, public juce::SettableTooltipClient {
  public:
   juce::String name;       // empty = free slot
-  bool lit = true, open = false, hosted = false;
-  int channelId = -1, slot = -1;
+  bool lit = true, open = false, hosted = false, summary = false;
+  int channelId = -1, slot = -1, count = 0;
   std::function<void()> onClick;
   std::function<void(int fromSlot)> onDropFrom;
   void paint(juce::Graphics&) override;

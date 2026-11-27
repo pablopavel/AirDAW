@@ -310,9 +310,7 @@ bool Engine::moveInsert(int channelId, int from, int to) {
   { std::vector<int> v; for (int s = 0; s < kMaxInserts; ++s) if (s != from) v.push_back(s);
     v.insert(v.begin() + to, from);
     for (int s = 0; s < kMaxInserts; ++s) order[(size_t)s] = v[(size_t)s]; }
-  Cmd c{channelId, kChainCmd, nullptr};
-  for (int s = 0; s < kMaxInserts; ++s) c.chain[(size_t)s] = own[(size_t)order[(size_t)s]].get();
-  if (!toAudio_.push(c)) return false;  // queue full: nothing changed
+  if (!toAudio_.push({channelId, kChainCmd, nullptr, from, to})) return false;  // queue full: nothing changed
   std::array<std::unique_ptr<InsertProcessor>, kMaxInserts> next;
   for (int s = 0; s < kMaxInserts; ++s) next[(size_t)s] = std::move(own[(size_t)order[(size_t)s]]);
   own = std::move(next);
@@ -338,7 +336,14 @@ void Engine::applyCommands() {
   while (toAudio_.pop(c)) {
     Channel* ch = resolve(c.channelId);
     if (!ch) continue;
-    if (c.slot == kChainCmd) { for (int s = 0; s < kMaxInserts; ++s) ch->insert[(size_t)s] = c.chain[(size_t)s]; continue; }
+    if (c.slot == kChainCmd) {  // reorder: move from -> to, shifting the slots between (in place, no allocation)
+      auto& a = ch->insert;
+      InsertProcessor* moved = a[(size_t)c.from];
+      if (c.from < c.to) std::move(a.begin() + c.from + 1, a.begin() + c.to + 1, a.begin() + c.from);
+      else std::move_backward(a.begin() + c.to, a.begin() + c.from, a.begin() + c.from + 1);
+      a[(size_t)c.to] = moved;
+      continue;
+    }
     InsertProcessor* old = ch->insert[c.slot];
     ch->insert[c.slot] = c.fx;
     if (old) fromAudio_.push(old);

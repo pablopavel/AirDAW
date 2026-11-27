@@ -19,7 +19,10 @@ class Theme : public juce::ChangeBroadcaster {
                faders = "chrome", vuFace = "cream", readouts = "accent", typeface = "modern", trimMat = "wood",
                species = "walnut", grain = "fine", trimWidth = "normal";
   juce::String inserts = "cards";  // insert panel look: "cards" (the original) or "rack" (500-series modules)
-  bool screws = false, reels = true, trim = true, pixelShift = true;
+  // Buttons: "console" (coloured console caps in a bezel), "toggle" (strip switches as bat-handle toggles), "classic"
+  // (the original flat keys).
+  juce::String buttons = "console";
+  bool screws = false, trim = true, pixelShift = true;
 
   void load(juce::PropertiesFile& p);
   void save(juce::PropertiesFile& p) const;
@@ -27,7 +30,7 @@ class Theme : public juce::ChangeBroadcaster {
   void changed() { tile_ = {}; sendChangeMessage(); }
 
   // Generic option access for the Display panel. Keys: hue, glow, panel, fp, tint, rd, knob, fd, vu, lcd, font,
-  // mat, ws, gr, ww, scr, reels, wood, shift, ins (booleans as "1" / "0").
+  // mat, ws, gr, ww, scr, wood, shift, ins, btn (booleans as "1" / "0").
   juce::String option(const juce::String& key) const;
   void setOption(const juce::String& key, const juce::String& value);
   // Eras (e50 e60 e70 e80 e90 e00) and classics (amber neon ice lounge vintage): set a whole look at once.
@@ -70,8 +73,10 @@ class Theme : public juce::ChangeBroadcaster {
   // --- drawing helpers shared by all components ---
   // Faceplate (mockup .brush and the Faceplate option): palette gradient + texture.
   void drawBrush(juce::Graphics& g, juce::Rectangle<float> r, bool bus = false) const;
-  // Soft glow around a rectangle in colour `col` (scaled by the Glow setting).
-  void drawGlow(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour col, float radius, float alpha = 0.55f) const;
+  // Soft glow around a rectangle in colour `col` (scaled by the Glow setting). It follows the shape's rounded corners
+  // (`corner` < 0: the Corners setting's small radius) and fades out evenly, so no square halo shows round round things.
+  void drawGlow(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour col, float radius, float alpha = 0.55f,
+                float corner = -1.f) const;
   // Text with an LCD-style glow halo.
   void drawGlowText(juce::Graphics& g, const juce::String& s, juce::Rectangle<float> r, juce::Justification j,
                     juce::Colour col, float glowAmt = 1.f) const;
@@ -80,10 +85,17 @@ class Theme : public juce::ChangeBroadcaster {
   // Side trim / rail (wood species + grain, rack ears, tolex, chrome). `vertical`: a side piece.
   void drawTrim(juce::Graphics& g, juce::Rectangle<int> r, bool vertical, bool leftSide) const;
   void drawScrew(juce::Graphics& g, juce::Point<float> centre) const;
-  // Knob cap in the chosen material; false for Chrome (each knob keeps its own chrome drawing).
-  bool drawKnobCap(juce::Graphics& g, juce::Rectangle<float> cap) const;
+  // Knob cap in the chosen material (Chrome, Bakelite, Ivory, Gold, Knurled, Skirted, Soft touch), with a soft contact
+  // shadow, edge bevel and a fixed highlight from above-left.
+  void drawKnobCap(juce::Graphics& g, juce::Rectangle<float> cap) const;
   juce::Colour knobPointer() const;  // pointer line on small knobs (dark on Ivory / Gold)
   void drawFaderCap(juce::Graphics& g, juce::Rectangle<float> cap) const;
+  // Console push button: a dark bezel with a cap of coloured translucent plastic. Off: the cap's colour, unlit;
+  // on: lit from behind. `pressed` sinks it. Returns the cap's face (for the legend).
+  juce::Rectangle<float> drawConsoleButton(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour cap, bool on, bool pressed,
+                                           bool hover, bool enabled = true) const;
+  // Bat-handle toggle switch in `r` (lever down = on) with a small LED in `led` colour above it.
+  void drawToggleSwitch(juce::Graphics& g, juce::Rectangle<float> r, bool on, juce::Colour led, bool hover) const;
 
   static juce::Font uiFont(float h, bool bold = false);
   static juce::Font monoFont(float h, bool bold = true);

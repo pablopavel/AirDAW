@@ -21,7 +21,7 @@ namespace airdaw {
 
 constexpr int kMaxTracks = 24;
 constexpr int kNumBuses = 4;
-constexpr int kMaxInserts = 8;
+constexpr int kMaxInserts = 32;  // per channel (the UI shows one Inserts button, no slot count)
 constexpr int kMaxBlock = 8192;
 
 enum class Route : int { Master = 0, Bus1, Bus2, Bus3, Bus4 };  // value-1 = bus index
@@ -210,9 +210,10 @@ class Engine {
 
  private:
   // slot >= 0: put `fx` in that slot (the old one is handed back to be freed).
-  // slot == kChainCmd: replace the whole chain with `chain` (a reorder: same instances, nothing freed).
+  // slot == kChainCmd: a reorder, the insert in slot `from` moves to `to` and the ones between shift (the same move
+  // the UI side made to its ownership map; same instances, nothing freed). Commands stay small whatever kMaxInserts is.
   static constexpr int kChainCmd = -1;
-  struct Cmd { int channelId; int slot; InsertProcessor* fx; std::array<InsertProcessor*, kMaxInserts> chain{}; };
+  struct Cmd { int channelId; int slot; InsertProcessor* fx; int from = 0, to = 0; };
   struct SegCtx;
   void processTrack(int ti, const SegCtx& c);
   void processBus(int bi, int n, bool anyBusSolo);

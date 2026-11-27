@@ -29,7 +29,10 @@ class SuiteArea : public juce::Component, public juce::DragAndDropTarget {
       auto sp = std::make_unique<ColumnSplitter>();
       const juce::String id = tools_.suite()[i];
       sp->current = [this, id] { return tools_.card(id).getWidth(); };
-      sp->onDrag = [this, id](int w) { tools_.setWidth(id, juce::jlimit(160, 2600, w)); resized(); };
+      sp->onDrag = [this, id](int w) {  // stops where the tools to the right would no longer fit
+        const int mx = juce::jmax(kMinW, maxWidthFor(id));
+        tools_.setWidth(id, juce::jlimit(juce::jmin(160, mx), mx, w)); resized();
+      };
       addAndMakeVisible(*sp); splitters_.push_back(std::move(sp));
     }
     resized(); repaint();
@@ -53,12 +56,20 @@ class SuiteArea : public juce::Component, public juce::DragAndDropTarget {
     if (open > 0) {
       const int avail = getWidth() - folded * kTabW - (n - 1) * kGap;
       int fixed = 0;
-      for (int i = folded; i < n - 1; ++i) { w[(size_t)i] = tools_.width(ids[(size_t)i]); fixed += w[(size_t)i]; }
-      if (fixed > avail - kMinW) {  // not enough room: shrink the open columns proportionally
-        const float k = (float)(avail - kMinW) / (float)juce::jmax(1, fixed);
-        fixed = 0; for (int i = folded; i < n - 1; ++i) { w[(size_t)i] = juce::jmax(kMinW, (int)(w[(size_t)i] * k)); fixed += w[(size_t)i]; }
+      for (int i = folded; i < n - 1; ++i) { w[(size_t)i] = juce::jmax(kMinW, tools_.width(ids[(size_t)i])); fixed += w[(size_t)i]; }
+      const int budget = avail - kMinW;  // the last tool keeps at least kMinW
+      if (fixed > budget) {  // not enough room: each open column gives up part of what it has above kMinW
+        const int need = fixed - budget, above = fixed - (open - 1) * kMinW;
+        for (int i = folded; i < n - 1 && above > 0; ++i) {
+          const int ex = w[(size_t)i] - kMinW;
+          w[(size_t)i] -= juce::jmin(ex, (int)std::ceil((double)need * ex / above));
+        }
+        fixed = 0; for (int i = folded; i < n - 1; ++i) fixed += w[(size_t)i];
+        for (int i = n - 2; i >= folded && fixed > budget; --i) {  // rounding leftovers
+          const int c = juce::jmin(fixed - budget, w[(size_t)i] - kMinW); w[(size_t)i] -= c; fixed -= c;
+        }
       }
-      w[(size_t)n - 1] = juce::jmax(kMinW, avail - fixed);  // the last tool takes the rest
+      w[(size_t)n - 1] = juce::jmax(kMinW, avail - fixed);  // the last tool takes the rest: the row always ends at the edge
     }
     int x = 0;
     for (int i = 0; i < n; ++i) {
@@ -68,6 +79,15 @@ class SuiteArea : public juce::Component, public juce::DragAndDropTarget {
         splitters_[(size_t)i]->setBounds(x, 0, kGap, getHeight()); x += kGap;
       }
     }
+  }
+  // The widest a tool may be dragged: the other columns keep their widths and the last one keeps kMinW, so no tool is
+  // pushed off the right end.
+  int maxWidthFor(const juce::String& id) const {
+    const auto& ids = tools_.suite();
+    const int n = (int)ids.size();
+    int others = 0;
+    for (int i = 0; i < n - 1; ++i) if (ids[(size_t)i] != id) others += tools_.card(ids[(size_t)i]).getWidth();
+    return getWidth() - (n - 1) * kGap - others - kMinW;
   }
   void paint(juce::Graphics& g) override {
     if (tools_.suite().empty()) {
@@ -178,7 +198,6 @@ class MeterDock : public juce::Component {
   void paint(juce::Graphics& g) override {
     auto& t = T();
     auto r = getLocalBounds().toFloat();
-    t.drawGlow(g, r, t.am(), 26.f, 0.09f);
     g.setColour(T().bg()); g.fillRoundedRectangle(r, T().rad(6.f));
     auto head = r.removeFromTop(kHead);
     t.drawBrush(g, head);

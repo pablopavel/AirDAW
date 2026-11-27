@@ -21,7 +21,7 @@ Without `--recursive`, `setup_third_party.sh` fetches airwin2rack and JUCE. The 
 ## Status
 Runs on Windows 11 with ASIO (tested with a Black Lion Revolution 2x2 at 96 kHz / 64 samples).
 
-- **Engine:** 24 tracks (mono/stereo), 4 buses, master; 8 inserts per channel (Airwindows or VST3), reorderable; fader, pan,
+- **Engine:** 24 tracks (mono/stereo), 4 buses, master; up to 32 inserts per channel (Airwindows or VST3), reorderable; fader, pan,
   gain, mute, solo, polarity; click-free ramps; lock-free insert changes; multi-core processing with bit-identical
   output for any thread count; metronome (never recorded) with count-in and tap tempo.
 - **Recording:** lock-free disk writer (32-bit float WAV), punch in/out, loop passes as separate takes, input monitoring on
@@ -29,16 +29,17 @@ Runs on Windows 11 with ASIO (tested with a Black Lion Revolution 2x2 at 96 kHz 
   outside the regions the track's take or silence).
 - **Projects:** JSON `.airdaw` sessions, one folder per project (audio, autosave), timed auto-save with recovery, Save As
   moves takes into the project, double-click a project file to open it. Mix export (WAV 24/32-bit, song or loop range).
-- **Mixing UI:** the approved mockup ported to JUCE: deck, song overview, mixer strips (add and remove tracks), insert
-  panel as cards or, as a Display option, a 500-series rack (faceplate finish by plugin category), with every plugin
-  parameter, presets, favourites and Airwindows write-ups. "Amber Night" tape reels and backlit transport keys in the
+- **Mixing UI:** the approved mockup ported to JUCE: deck, song overview, mixer strips (add and remove tracks, one Inserts
+  button each), insert panel as cards or, as a Display option, a 500-series rack (faceplate finish by plugin category), with every plugin
+  parameter, presets, favourites and Airwindows write-ups. backlit transport keys and console-style menu keys in the
   deck; "Scope A" application icon (`AirDAW.exe --render-icon resources/icon`).
 - **Listening:** Hit Record Meter (VST3) in the meter dock, reference suite and Listen mode sharing 12 tools (stereo field,
   31-band RTA, loudness with EBU R128 / true peak, target loudness, tonal balance, spectrogram, loudness history, band
   phase/width, headroom, listening notes, ear-break timer, reference A/B). Monitor section (Mono, Dim, Pol, L/R/Mid/Side).
   Reference A/B with level matching, own transport or song sync, side-by-side levels; each project remembers its reference.
-- **Display panel:** eras and classic looks, accent and glow, readout colours, faceplates, tints, corners, screws, knob /
-  fader / VU materials, reels, side trim (woods, rack ears, tolex, chrome), typefaces, OLED / standard, scale, pixel shift.
+- **Display panel:** eras and classic looks, accent and glow, readout colours, faceplates, tints, corners, screws, buttons
+  (console caps, bat-handle toggles, classic), knob / fader / VU materials, side trim (woods, rack ears, tolex, chrome),
+  eight typefaces, OLED / standard, scale, pixel shift.
 - **Plugins panel:** Airwindows can be updated without a new AirDAW: a weekly GitHub workflow builds the newest Airwindows as
   `AirwindowsFX.dll` and publishes it as a release; AirDAW checks, downloads and verifies (SHA-256) on request, activates it
   at the next launch and keeps older builds for roll back. The built-in copy is always the fallback.

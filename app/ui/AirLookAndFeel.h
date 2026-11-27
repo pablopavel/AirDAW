@@ -1,8 +1,11 @@
 // JUCE LookAndFeel for the AirDAW mockup style. Buttons pick their style from the component property "kind":
-//   (none)  standard bevelled button; toggled on = lit amber with glow
-//   "m" "s" "r" "t"  strip Mute / Solo / Record-arm / Takes (amber, blue, red, violet when on)
-//   "flat"  quiet button (dashed "add track" etc.)
-// and "noUpper" = true keeps the text case (default is UPPERCASE like the mockup).
+//   (none)  standard button; toggled on = lit in the accent
+//   "m" "s" "r" "t" "mon"  strip Mute / Solo / Record-arm / Takes / Monitor (amber, blue, red, violet, green)
+//   "key"   deck menu keys (they light while held); "cap" (int64 ARGB, 0 = the accent) gives a button its own cap colour
+//   "flat"  quiet button (dashed "add track" etc.); "lcd" a small readout that opens a menu
+// "noUpper" = true keeps the text case (default is UPPERCASE like the mockup); "sw" = true makes the button a bat-handle
+// toggle switch when Display > Hardware > Buttons is Toggles. The Buttons option picks the look: Console (coloured caps
+// in a bezel, lit from behind when on), Toggles (the same, strip switches as toggles) or Classic (the original keys).
 #pragma once
 #include "Theme.h"
 
@@ -34,6 +37,10 @@ class AirLookAndFeel : public juce::LookAndFeel_V4 {
   void drawTooltip(juce::Graphics&, const juce::String& text, int w, int h) override;
   void drawCallOutBoxBackground(juce::CallOutBox&, juce::Graphics&, const juce::Path&, juce::Image&) override;
   void refreshColours();  // after an accent change
+  // Where a button's legend goes and its colour (for buttons that draw their own icon, like the monitor button).
+  static juce::Rectangle<float> legendArea(juce::Button&, bool down);
+  static juce::Colour legendColour(juce::Button&, bool down);
+  static bool isSwitch(const juce::Button&);  // drawn as a toggle switch right now
 };
 
 }  // namespace ui

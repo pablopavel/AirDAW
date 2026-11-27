@@ -2,6 +2,8 @@
 
 namespace ui {
 
+static constexpr int kLogoW = 225;  // the AIRDAW logo on the left of the deck
+
 // ---------------- TransportKeys ----------------
 juce::Rectangle<float> TransportKeys::keyRect(int k) const {
   const float total = kNum * kKeyW + (kNum - 1) * kGap;
@@ -162,9 +164,7 @@ void TransportKeys::mouseUp(const juce::MouseEvent& e) {
 
 // ---------------- Deck ----------------
 Deck::Deck(AppCtx& ctx) : ctx_(ctx) {
-  reels_.isPlaying = [this] { auto* e = ctx_.engine(); return e && e->transport().playing.load() && ctx_.audioRunning; };
-  reels_.isRecording = [this] { auto* e = ctx_.engine(); return e && e->transport().recording.load() && ctx_.audioRunning; };
-  for (auto* c : std::initializer_list<juce::Component*>{&reels_, &pos_, &rate_, &lat_, &dsp_, &keys_}) addAndMakeVisible(c);
+  for (auto* c : std::initializer_list<juce::Component*>{&pos_, &rate_, &lat_, &dsp_, &keys_}) addAndMakeVisible(c);
   keys_.onKey = [this](TransportKeys::Key k) { if (onTransport) onTransport(k); };
   buttons_ = {&tap_, &listen_, &midi_, &plugins_, &projectBtn, &metersBtn, &displayBtn, &full_};
   tap_.setTriggeredOnMouseDown(true);  // the tap lands when the button goes down, not when it is released
@@ -262,15 +262,18 @@ void Deck::paint(juce::Graphics& g) {
   t.drawBrush(g, r);
   g.setColour(juce::Colours::black); g.fillRect(r.removeFromBottom(2.f));
   // logo
-  auto lg = getLocalBounds().reduced(16, 0).removeFromLeft(200).withHeight(getHeight()).toFloat();
-  lg = lg.withSizeKeepingCentre(lg.getWidth(), 40.f);
-  g.setFont(Theme::spaced(Theme::uiFont(19.f, true), 0.35f));
-  auto top = lg.removeFromTop(24.f);
-  const float airW = juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), "AIR");
+  auto lg = getLocalBounds().reduced(16, 0).removeFromLeft(kLogoW).withHeight(getHeight()).toFloat();
+  lg = lg.withSizeKeepingCentre(lg.getWidth(), 56.f);
+  auto logoFont = Theme::spaced(Theme::uiFont(30.f, true), 0.3f);
+  auto top = lg.removeFromTop(36.f);
+  const float fullW = juce::GlyphArrangement::getStringWidth(logoFont, "AIRDAW");
+  if (fullW > top.getWidth()) logoFont = logoFont.withHeight(30.f * top.getWidth() / fullW);  // wide typefaces still fit
+  g.setFont(logoFont);
+  const float airW = juce::GlyphArrangement::getStringWidth(logoFont, "AIR");
   g.setColour(Theme::cream()); g.drawText("AIR", top, juce::Justification::bottomLeft, false);
   t.drawGlowText(g, "DAW", top.withTrimmedLeft(airW), juce::Justification::bottomLeft, t.am(), 1.2f);
-  g.setColour(Theme::dim()); g.setFont(Theme::spaced(Theme::uiFont(9.5f), 0.2f));
-  g.drawText("Airwindows Preferred Recording", lg, juce::Justification::topLeft, false);
+  g.setColour(Theme::dim()); g.setFont(Theme::spaced(Theme::uiFont(11.f), 0.16f));
+  g.drawFittedText("Airwindows Preferred Recording", lg.withTrimmedTop(3.f).toNearestInt(), juce::Justification::topLeft, 1, 0.8f);
 }
 
 static constexpr int kKeysW = TransportKeys::kNum * TransportKeys::kKeyW + (TransportKeys::kNum - 1) * TransportKeys::kGap + 60;
@@ -290,11 +293,9 @@ void Deck::resized() {
   const int keysW = kKeysW;
   auto centre = r.withSizeKeepingCentre(keysW, r.getHeight());
   keys_.setBounds(centre.withSizeKeepingCentre(keysW, 78));
-  // left: logo (painted), reels, position LCD
+  // left: logo (painted), position LCD
   auto left = r.withRight(centre.getX());
-  left.removeFromLeft(200);
-  if (left.getWidth() >= 420 && T().reels) { reels_.setVisible(true); reels_.setBounds(left.removeFromLeft(150).withSizeKeepingCentre(150, 70)); left.removeFromLeft(14); }
-  else reels_.setVisible(false);  // narrow window: the reels make way for the position readout
+  left.removeFromLeft(kLogoW);
   pos_.setBounds(left.withSizeKeepingCentre(juce::jmin(left.getWidth(), 300), 74));
   // right: readouts centred, menu keys below
   auto right = r.withLeft(centre.getRight() + 12);

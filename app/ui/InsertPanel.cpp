@@ -165,12 +165,13 @@ class InsertCard : public juce::Component, public juce::DragAndDropTarget {
   virtual int prefHeight() const = 0;
 };
 
+static constexpr int kCloseCol = 44;  // the right-hand column holding the second X
+
 // ---------------- Cards look (the original insert panel) ----------------
 static constexpr int kHeaderH = 34, kcKnobW = 70, kcKnobH = 92, kcKnobGapX = 14, kcKnobGapY = 12, kcMaxCols = 8, kcPad = 12;
 
 static void cardFrame(juce::Graphics& g, juce::Rectangle<float> r, bool active) {
   auto& t = T();
-  if (active) t.drawGlow(g, r, t.am(), 26.f, 0.2f);
   g.setGradientFill(juce::ColourGradient(juce::Colour(0xff1b1a19), 0, r.getY(), juce::Colour(0xff0f0e0d), 0, r.getBottom(), false));
   g.fillRoundedRectangle(r, T().rad(6.f));
   if (active) { g.setColour(t.am().withAlpha(t.glowAlpha(0.06f))); g.fillRoundedRectangle(r.reduced(1.f), T().rad(6.f)); }
@@ -755,7 +756,12 @@ InsertPanel::InsertPanel(AppCtx& ctx, PresetStore& presets) : ctx_(ctx), presets
   view_.setViewedComponent(&row_, false);
   view_.setScrollBarsShown(true, true);  // short windows: the modules scroll instead of being cut off
   addAndMakeVisible(view_);
-  for (auto* b : {&close1_, &close2_}) { addAndMakeVisible(*b); b->onClick = [this] { close(); }; }
+  for (auto* b : {&close1_, &close2_}) {
+    addAndMakeVisible(*b); b->onClick = [this] { close(); };
+    b->setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x9c\x95")));
+    b->getProperties().set("noUpper", true); b->getProperties().set("fontH", 12.0);
+    b->setTooltip("Close the insert panel");
+  }
 }
 InsertPanel::~InsertPanel() = default;
 
@@ -882,8 +888,6 @@ void InsertPanel::paint(juce::Graphics& g) {
   g.fillRect(rail);
   g.setColour(juce::Colours::white.withAlpha(0.12f)); g.drawHorizontalLine((int)rail.getY(), rail.getX(), rail.getRight());
   g.setColour(Theme::dim()); g.setFont(Theme::spaced(Theme::uiFont(9.5f, true), 0.2f));
-  g.drawText("AIRDAW 500  " + juce::String(juce::CharPointer_UTF8("\xc2\xb7")) + "  " + juce::String(airdaw::kMaxInserts) + " SLOTS",
-             rail.reduced(12.f, 0.f), juce::Justification::centredLeft);
   auto pw = rail.reduced(12.f, 0.f).removeFromRight(60.f);
   g.drawText("POWER", pw, juce::Justification::centredRight);
   drawLed(g, {pw.getX() + 4.f, pw.getCentreY()}, true);
@@ -893,8 +897,9 @@ void InsertPanel::paint(juce::Graphics& g) {
 void InsertPanel::resized() {
   auto r = getLocalBounds().reduced(10);
   auto hd = r.removeFromLeft(122);
-  close1_.setBounds(hd.withTrimmedTop(rack_ ? 80 : 62).removeFromTop(30).removeFromLeft(100));
-  close2_.setBounds(r.removeFromRight(96).withSizeKeepingCentre(96, 30));  // vertically centred on the panel
+  close1_.setBounds(hd.withTrimmedTop(rack_ ? 80 : 62).removeFromTop(26).removeFromLeft(30));
+  // the right X: centred in its own column at the panel's right edge, halfway down
+  close2_.setBounds(r.removeFromRight(kCloseCol).withSizeKeepingCentre(30, 26));
   if (!rack_) {  // cards look (the original layout)
     r.removeFromRight(8);
     chassis_ = {};
@@ -906,7 +911,7 @@ void InsertPanel::resized() {
     row_.setSize(juce::jmax(x, 10), h);
     return;
   }
-  r.removeFromRight(10);
+  r.removeFromRight(6);
   chassis_ = r;
   view_.setBounds(r.withTrimmedTop(kRail).reduced(kCheek, 0));
   int h = kMinRowH;

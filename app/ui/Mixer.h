@@ -18,6 +18,7 @@ class Mixer : public juce::Component {
   // Listen mode: only the master strip, larger readouts (mockup body.listen).
   void setListenMode(bool on) { listen_ = on; view_.setVisible(!on); master_.setListenLayout(on); resized(); }
   MasterStrip& master() { return master_; }
+  void restyle();  // the Buttons option changed: strips lay their rows out again
   // Removed tracks: their strips are hidden (the track itself is cleared by the caller). "Add track" brings back the
   // lowest removed slot first. The list is saved per project (onRemovedChanged / setRemovedTracks).
   void removeTrack(int t);

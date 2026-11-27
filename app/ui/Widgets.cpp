@@ -6,7 +6,6 @@ namespace ui {
 void Lcd::paint(juce::Graphics& g) {
   auto r = getLocalBounds().toFloat();
   auto& t = T();
-  t.drawGlow(g, r, t.am(), 12.f, 0.08f);
   t.drawWell(g, r, t.lcdBg(), 4.f);
   g.setColour(juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), t.rad(4.f), 1.f);
   auto in = r.reduced(h_ > 30.f ? 22.f : 10.f, 4.f);
@@ -21,160 +20,12 @@ void Lcd::paint(juce::Graphics& g) {
   g.drawText(caption_, cap, juce::Justification::topLeft, false);
 }
 
-// ---------------- Reels ----------------
-// "Amber Night": the deck plate leans back under one warm lamp. The reels turn, but the light on them stays put.
-static const juce::Colour kLamp(0xffffbe6e), kLampHot(0xffffd7a0);
-static constexpr float kTilt = 0.78f;  // the plate leans back: circles are drawn squashed vertically
-
-// One reel: tape pack, three-window aluminium flange and hub turn with `angle`; sheen and lamp highlight stay fixed.
-static void drawReel(juce::Graphics& g, juce::Point<float> c, float R, float angle, float pack, float lamp, float lampX) {
-  const auto tilt = juce::AffineTransform::scale(1.f, kTilt).translated(c.x, c.y);
-  const auto spin = juce::AffineTransform::rotation(angle).followedBy(tilt);
-  {  // soft shadow on the plate below the reel (the lamp is above and in front)
-    juce::ColourGradient sg(juce::Colours::black.withAlpha(0.8f), c.x, c.y + 5.f, juce::Colours::transparentBlack, c.x + R * 1.2f, c.y + 5.f, true);
-    g.setGradientFill(sg);
-    g.fillEllipse(c.x - R * 1.2f, c.y + 5.f - R * 1.2f * kTilt, R * 2.4f, R * 2.4f * kTilt);
-  }
-  juce::Path packP; packP.addEllipse(-pack, -pack, 2 * pack, 2 * pack); packP.applyTransform(tilt);
-  g.setColour(juce::Colour(0xff3b2614)); g.fillPath(packP);
-  g.setColour(juce::Colour(0xff6b4426)); g.strokePath(packP, juce::PathStrokeType(0.9f));
-  juce::Path ring; ring.addEllipse(-pack * 0.78f, -pack * 0.78f, pack * 1.56f, pack * 1.56f); ring.applyTransform(tilt);
-  g.setColour(juce::Colour(0xff4a2f18)); g.strokePath(ring, juce::PathStrokeType(0.6f));
-
-  juce::Path fl; fl.setUsingNonZeroWinding(false);  // even-odd: the windows and hub hole are holes
-  fl.addEllipse(-R, -R, 2 * R, 2 * R);
-  const float r1 = R * 0.84f, r0 = R * 0.26f, half = juce::degreesToRadians(40.f);
-  for (int i = 0; i < 3; ++i) {
-    const float a = juce::MathConstants<float>::twoPi * (float)i / 3.f;
-    fl.addPieSegment(-r1, -r1, 2 * r1, 2 * r1, a - half, a + half, r0 / r1);
-  }
-  fl.addEllipse(-R * 0.19f, -R * 0.19f, R * 0.38f, R * 0.38f);
-  fl.applyTransform(spin);
-  g.setColour(juce::Colour(0xffb5b1a8)); g.fillPath(fl);
-  g.setColour(juce::Colour(0xfff2eee4).withAlpha(0.45f)); g.strokePath(fl, juce::PathStrokeType(0.8f));
-
-  juce::Path hub; hub.addEllipse(-R * 0.17f, -R * 0.17f, R * 0.34f, R * 0.34f); hub.applyTransform(tilt);
-  g.setColour(juce::Colour(0xff262626)); g.fillPath(hub);
-  g.setColour(juce::Colour(0xff8a8a8a)); g.strokePath(hub, juce::PathStrokeType(0.9f));
-  juce::Path keys;
-  for (int i = 0; i < 3; ++i) {
-    juce::Path k; k.addRectangle(-R * 0.03f, -R * 0.165f, R * 0.06f, R * 0.06f);
-    k.applyTransform(juce::AffineTransform::rotation(juce::MathConstants<float>::twoPi * (float)i / 3.f));
-    keys.addPath(k);
-  }
-  keys.applyTransform(spin);
-  g.setColour(juce::Colour(0xffc8c8c8)); g.fillPath(keys);
-
-  // fixed light: a polished sheen band across the metal, and the lamp's hot spot on the side facing it
-  juce::Path outer; outer.addEllipse(-R, -R, 2 * R, 2 * R); outer.applyTransform(tilt);
-  juce::Graphics::ScopedSaveState ss(g);
-  g.reduceClipRegion(outer);
-  juce::ColourGradient sheen(juce::Colours::transparentWhite, c.x - R, c.y - R * kTilt, juce::Colours::transparentBlack, c.x + R, c.y + R * kTilt, false);
-  sheen.addColour(0.30, juce::Colour(0xfffff0d8).withAlpha(0.30f * lamp));
-  sheen.addColour(0.46, juce::Colours::transparentWhite);
-  sheen.addColour(0.74, juce::Colours::black.withAlpha(0.2f));
-  g.setGradientFill(sheen); g.fillPath(outer);
-  const juce::Point<float> hot(c.x + (lampX - c.x) * 0.22f, c.y - R * 0.62f * kTilt);
-  g.setGradientFill(juce::ColourGradient(kLampHot.withAlpha(0.5f * lamp), hot.x, hot.y, kLampHot.withAlpha(0.f), hot.x + R * 0.55f, hot.y, true));
-  g.fillPath(outer);
-}
-
-void Reels::paint(juce::Graphics& g) {
-  auto r = getLocalBounds().toFloat();
-  auto& t = T();
-  const float corner = r.getHeight() / 2.f, cx = r.getCentreX();
-  t.drawGlow(g, r, kLamp, 16.f, 0.1f * lamp_);
-  juce::Path pill; pill.addRoundedRectangle(r, corner);
-  {
-    juce::Graphics::ScopedSaveState ss(g);
-    g.reduceClipRegion(pill);
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff0d0b09), 0.f, r.getY(), juce::Colour(0xff050403), 0.f, r.getBottom(), false));
-    g.fillRect(r);
-    // warm haze and the lamp's cone from above
-    g.setGradientFill(juce::ColourGradient(kLamp.withAlpha(0.34f * lamp_), cx, r.getY() - 8.f, kLamp.withAlpha(0.f), cx + r.getWidth() * 0.55f, r.getY() - 8.f, true));
-    g.fillRect(r);
-    juce::Path cone;
-    cone.startNewSubPath(cx - 7.f, r.getY()); cone.lineTo(cx + 7.f, r.getY());
-    cone.lineTo(cx + r.getWidth() * 0.2f, r.getBottom()); cone.lineTo(cx - r.getWidth() * 0.2f, r.getBottom()); cone.closeSubPath();
-    g.setGradientFill(juce::ColourGradient(kLamp.withAlpha(0.16f * lamp_), cx, r.getY(), kLamp.withAlpha(0.f), cx, r.getBottom(), false));
-    g.fillPath(cone);
-
-    // the deck plate, leaning back (narrower at the far edge), with a front lip
-    const float farY = r.getY() + 9.f, nearY = r.getBottom() - 7.f;
-    juce::Path plate;
-    plate.startNewSubPath(r.getX() + r.getWidth() * 0.14f, farY); plate.lineTo(r.getRight() - r.getWidth() * 0.14f, farY);
-    plate.lineTo(r.getRight() - 2.f, nearY); plate.lineTo(r.getX() + 2.f, nearY); plate.closeSubPath();
-    g.setColour(juce::Colour(0xff0b0a09)); g.fillPath(plate, juce::AffineTransform::translation(0.f, 3.f));
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff2c2a27), 0.f, farY, juce::Colour(0xff151413), 0.f, nearY, false));
-    g.fillPath(plate);
-    g.setGradientFill(juce::ColourGradient(kLamp.withAlpha(0.26f * lamp_), cx, farY + 6.f, kLamp.withAlpha(0.f), cx + r.getWidth() * 0.36f, farY + 6.f, true));
-    g.fillPath(plate);
-    g.setColour(juce::Colours::white.withAlpha(0.14f)); g.drawLine(r.getX() + r.getWidth() * 0.14f, farY + 0.5f, r.getRight() - r.getWidth() * 0.14f, farY + 0.5f, 0.8f);
-
-    const float cy = r.getCentreY() - 2.f;
-    const float R = juce::jmin((r.getHeight() - 14.f) / 2.f / kTilt, r.getWidth() * 0.2f);
-    const float cx1 = r.getX() + corner + 1.f, cx2 = r.getRight() - corner - 1.f;
-    const float p1 = R * 0.76f, p2 = R * 0.52f;
-    // tape from the bottom of each pack round the guides, past the head (drawn first: the front flanges hide its ends)
-    const float base = cy + R * kTilt * 0.92f;
-    juce::Path tape;
-    tape.startNewSubPath(cx1, cy + p1 * kTilt); tape.lineTo(cx - 13.f, base); tape.lineTo(cx, base + 2.f);
-    tape.lineTo(cx + 13.f, base); tape.lineTo(cx2, cy + p2 * kTilt);
-    g.setColour(juce::Colour(0xff2a1a0c)); g.strokePath(tape, juce::PathStrokeType(1.8f));
-    g.setColour(juce::Colour(0xff7a5230).withAlpha(0.6f)); g.strokePath(tape, juce::PathStrokeType(0.6f));
-    drawReel(g, {cx1, cy}, R, a1_, p1, lamp_, cx);
-    drawReel(g, {cx2, cy}, R, a2_, p2, lamp_, cx);
-    for (float gx : {cx - 13.f, cx + 13.f}) {
-      g.setColour(juce::Colour(0xffd6d3cc)); g.fillEllipse(gx - 2.6f, base - 2.6f, 5.2f, 5.2f);
-      g.setColour(juce::Colour(0xff555555)); g.drawEllipse(gx - 2.6f, base - 2.6f, 5.2f, 5.2f, 0.5f);
-    }
-    juce::Rectangle<float> head(cx - 5.f, base - 1.f, 10.f, 6.f);
-    g.setColour(juce::Colour(0xffc9c6be)); g.fillRoundedRectangle(head, 1.2f);
-    g.setColour(juce::Colour(0xff222222)); g.fillRect(cx - 0.4f, head.getY(), 0.8f, head.getHeight());
-    g.setGradientFill(juce::ColourGradient(kLamp.withAlpha(0.3f * lamp_), cx, head.getBottom() + 2.f, kLamp.withAlpha(0.f), cx + 18.f, head.getBottom() + 2.f, true));
-    g.fillEllipse(cx - 18.f, head.getBottom(), 36.f, 4.f);
-
-    // REC lamp: pulses red while recording
-    const juce::Point<float> led(cx - r.getWidth() * 0.12f, nearY - 3.f);
-    if (rec_ > 0.f) { g.setColour(juce::Colour(0xffff5a4a).withAlpha(0.35f * rec_)); g.fillEllipse(led.x - 5.f, led.y - 5.f, 10.f, 10.f); }
-    g.setColour(rec_ > 0.f ? juce::Colour(0xffff5a4a).withAlpha(0.55f + 0.45f * rec_) : juce::Colour(0xff3a1612));
-    g.fillEllipse(led.x - 2.f, led.y - 2.f, 4.f, 4.f);
-
-    // the lamp's hood at the top, then the vignette
-    g.setGradientFill(juce::ColourGradient(kLamp.withAlpha(0.45f * lamp_), cx, r.getY() + 2.f, kLamp.withAlpha(0.f), cx + 22.f, r.getY() + 2.f, true));
-    g.fillEllipse(cx - 22.f, r.getY() - 6.f, 44.f, 16.f);
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff2a2724), cx, r.getY(), juce::Colour(0xff0c0b0a), cx, r.getY() + 5.f, false));
-    g.fillRoundedRectangle(cx - 11.f, r.getY() - 3.f, 22.f, 7.f, 3.f);
-    juce::ColourGradient vg(juce::Colours::transparentBlack, cx, r.getCentreY(), juce::Colours::black.withAlpha(0.78f), r.getRight() + 8.f, r.getCentreY(), true);
-    vg.addColour(0.6, juce::Colours::transparentBlack);
-    g.setGradientFill(vg); g.fillRect(r);
-  }
-  g.setColour(juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), corner, 1.f);
-}
-
-void Reels::timerCallback() {
-  ++tick_;
-  // The lamp flickers now and then (a 6-second cycle with a short wobble).
-  const int f = tick_ % 180;
-  const float lamp = f >= 84 && f < 90 ? 0.85f : f >= 90 && f < 92 ? 1.f : f >= 92 && f < 96 ? 0.88f : 0.95f;
-  const bool recording = isRecording && isRecording();
-  const float rec = recording ? 0.5f + 0.5f * std::cos(juce::MathConstants<float>::twoPi * (float)(tick_ % 42) / 42.f) : 0.f;
-  const bool lightChanged = lamp != lamp_ || std::abs(rec - rec_) > 0.04f;
-  lamp_ = lamp; rec_ = rec;
-  if (isPlaying && isPlaying()) {
-    const float tau = juce::MathConstants<float>::twoPi;
-    a1_ = std::fmod(a1_ + tau / (3.1f * 30.f), tau);  // the full supply reel turns slower than the take-up reel
-    a2_ = std::fmod(a2_ + tau / (2.2f * 30.f), tau);
-    repaint();
-  } else if (lightChanged) repaint();  // stopped: repaint only when the lamp flickers
-}
-
-
 // ---------------- NamePlate ----------------
 void NamePlate::paint(juce::Graphics& g) {
   auto r = getLocalBounds().toFloat();
-  T().drawGlow(g, r, Theme::cream(), 12.f, 0.09f);
-  g.setColour(Theme::cream()); g.fillRoundedRectangle(r, T().rad(3.f));
+  g.setGradientFill(juce::ColourGradient(Theme::cream().brighter(0.08f), 0.f, r.getY(), Theme::cream().darker(0.12f), 0.f, r.getBottom(), false));
+  g.fillRoundedRectangle(r, T().rad(3.f));
+  g.setColour(juce::Colours::white.withAlpha(0.5f)); g.drawHorizontalLine((int)r.getY(), r.getX() + 3.f, r.getRight() - 3.f);
   g.setColour(T().c(bar_)); g.fillRoundedRectangle(r.getX() + 14.f, r.getBottom() - 3.f, r.getWidth() - 28.f, 3.f, 1.5f);
   g.setColour(juce::Colour(0xff1b1b1b));
   g.setFont(Theme::spaced(Theme::uiFont(juce::jmin(15.f, r.getHeight() * 0.5f), true), 0.1f));
@@ -236,13 +87,7 @@ void GainKnob::paint(juce::Graphics& g) {
   g.fillRoundedRectangle(r, 4.f);
   const float ks = juce::jmin(32.f, r.getHeight() - 6.f);
   juce::Rectangle<float> k(r.getX() + 8.f, r.getCentreY() - ks / 2.f, ks, ks);
-  g.setColour(juce::Colours::black.withAlpha(0.8f)); g.fillEllipse(k.translated(2.f, 4.f));
-  if (!t.drawKnobCap(g, k)) {  // chrome
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff4c4c50), k.getX() + ks * 0.35f, k.getY() + ks * 0.3f,
-                                           juce::Colour(0xff19191b), k.getX() + ks * 0.9f, k.getBottom(), true));
-    g.fillEllipse(k);
-    g.setColour(juce::Colour(0x33ffffff)); g.drawEllipse(k.reduced(0.5f), 0.7f);
-  }
+  t.drawKnobCap(g, k);
   const float ang = v_ / 24.f * 135.f * juce::MathConstants<float>::pi / 180.f;
   juce::Line<float> ptr(0, -ks / 2.f + 3.f, 0, -ks / 2.f + 12.f);
   ptr.applyTransform(juce::AffineTransform::rotation(ang).translated(k.getCentreX(), k.getCentreY()));
@@ -436,14 +281,7 @@ void PluginKnob::paint(juce::Graphics& g) {
   }
   // chrome cap
   auto cap = k.reduced(8.f);
-  g.setColour(juce::Colours::black.withAlpha(0.85f)); g.fillEllipse(cap.translated(4.f, 6.f));
-  if (!t.drawKnobCap(g, cap)) {  // chrome
-    juce::ColourGradient cg(juce::Colour(0xff9a9a9f), cap.getX() + cap.getWidth() * 0.3f, cap.getY() + cap.getHeight() * 0.25f,
-                            juce::Colour(0xff2b2b2d), cap.getRight(), cap.getBottom(), true);
-    cg.addColour(0.45, juce::Colour(0xff5d5d61));
-    g.setGradientFill(cg); g.fillEllipse(cap);
-    g.setColour(juce::Colour(0x66ffffff)); g.drawEllipse(cap.reduced(1.f), 0.8f);
-  }
+  t.drawKnobCap(g, cap);
   // pointer
   juce::Path p; p.addRoundedRectangle(-2.f, -D / 2.f + 10.f, 4.f, 11.f, 2.f);
   p.applyTransform(juce::AffineTransform::rotation(a0 + span * v).translated(c.x, c.y));
@@ -465,8 +303,12 @@ void VuMeter::paint(juce::Graphics& g) {
   const float ox = b.getX() + (b.getWidth() - 120.f * s) / 2.f, oy = b.getY() + (b.getHeight() - 70.f * s) / 2.f;
   auto P = [&](float x, float y) { return juce::Point<float>(ox + x * s, oy + y * s); };
   juce::Rectangle<float> face(ox, oy, 120.f * s, 70.f * s);
-  t.drawGlow(g, face, t.am(), 16.f, 0.16f);
   g.setColour(t.vuFaceColour()); g.fillRoundedRectangle(face, 3.f);
+  if (t.glow > 0.f) {  // lamp behind the face, low in the middle
+    juce::ColourGradient lamp(juce::Colour(0xffffd27a).withAlpha(t.glowAlpha(0.3f)), face.getCentreX(), face.getBottom() - 8.f * s,
+                              juce::Colour(0xffffd27a).withAlpha(0.f), face.getCentreX() + face.getWidth() * 0.6f, face.getBottom() - 8.f * s, true);
+    g.setGradientFill(lamp); g.fillRoundedRectangle(face, 3.f);
+  }
   for (int k = 0; k < 11; ++k) {
     const float a = (-50.f + k * 10.f) * juce::MathConstants<float>::pi / 180.f;
     g.setColour(juce::Colour(k > 6 ? 0xffcc2222 : 0xff222222));
@@ -504,12 +346,12 @@ void drawDropOutline(juce::Graphics& g, juce::Rectangle<float> r, float corner) 
 }
 
 void InsertSlot::mouseDrag(const juce::MouseEvent& e) {
-  if (name.isEmpty() || e.getDistanceFromDragStart() < 6) return;
+  if (summary || name.isEmpty() || e.getDistanceFromDragStart() < 6) return;
   if (auto* dc = juce::DragAndDropContainer::findParentDragContainerFor(this))
     if (!dc->isDragAndDropActive()) dc->startDragging(insertDragId(channelId, slot), this);
 }
 bool InsertSlot::isInterestedInDragSource(const SourceDetails& d) {
-  int ch, s; return parseInsertDrag(d.description, ch, s) && ch == channelId && s != slot;
+  int ch, s; return !summary && parseInsertDrag(d.description, ch, s) && ch == channelId && s != slot;
 }
 void InsertSlot::itemDropped(const SourceDetails& d) {
   dropHover_ = false; repaint();
@@ -520,8 +362,34 @@ void InsertSlot::itemDropped(const SourceDetails& d) {
 void InsertSlot::paint(juce::Graphics& g) {
   auto& t = T();
   auto r = getLocalBounds().toFloat().reduced(0.5f);
-  const bool empty = name.isEmpty(), over = isMouseOver();
-  if (!empty && lit) t.drawGlow(g, r, t.am(), 12.f, 0.13f);
+  const bool over = isMouseOver();
+  if (summary) {  // the strip's Inserts button: a dark key with an LED, the label and the plugin count in a small readout
+    g.setColour(juce::Colours::black.withAlpha(0.7f)); g.fillRoundedRectangle(r.translated(0.f, 1.5f), t.rad(4.f));
+    g.setGradientFill(juce::ColourGradient(juce::Colour(over ? 0xff4a4a4f : 0xff3e3e42), 0, r.getY(), juce::Colour(over ? 0xff2e2e31 : 0xff252527), 0, r.getBottom(), false));
+    g.fillRoundedRectangle(r, t.rad(4.f));
+    g.setColour(juce::Colours::white.withAlpha(0.1f)); g.drawHorizontalLine((int)r.getY() + 1, r.getX() + 3.f, r.getRight() - 3.f);
+    g.setColour(open ? t.am() : juce::Colours::black); g.drawRoundedRectangle(r, t.rad(4.f), open ? 1.5f : 1.f);
+    juce::Rectangle<float> led(r.getX() + 7.f, r.getCentreY() - 4.f, 8.f, 8.f);
+    const bool on = count > 0 && lit;
+    if (on) { t.drawGlow(g, led, t.am(), 6.f, 0.8f, 4.f); g.setColour(t.am()); }
+    else g.setColour(count > 0 ? t.c(0xff5b4a2c) : t.c(0xff2a1a08));
+    g.fillEllipse(led);
+    g.setColour(juce::Colours::white.withAlpha(on ? 0.55f : 0.1f)); g.fillEllipse(led.reduced(2.5f).translated(-0.5f, -0.5f));
+    auto tr = r.withTrimmedLeft(21.f).withTrimmedRight(4.f);
+    if (count > 0) {
+      auto badge = tr.removeFromRight(juce::jmax(20.f, 8.f + 7.f * (float)juce::String(count).length())).reduced(0.f, 3.f);
+      g.setColour(t.lcdBg()); g.fillRoundedRectangle(badge, 3.f);
+      g.setColour(juce::Colours::black); g.drawRoundedRectangle(badge, 3.f, 0.8f);
+      g.setFont(Theme::monoFont(11.5f));
+      t.drawGlowText(g, juce::String(count), badge, juce::Justification::centred, t.readout(), 0.5f);
+    }
+    g.setColour(count > 0 ? (open ? Theme::cream() : Theme::tx()) : Theme::dim());
+    g.setFont(Theme::spaced(Theme::uiFont(11.f, true), 0.08f));
+    g.drawFittedText(count > 0 ? juce::String("INSERTS") : juce::String(juce::CharPointer_UTF8("\xef\xbc\x8b INSERTS")), tr.toNearestInt(),
+                     juce::Justification::centredLeft, 1, 0.8f);
+    return;
+  }
+  const bool empty = name.isEmpty();
   g.setGradientFill(juce::ColourGradient(juce::Colour(empty ? 0xff202021 : over ? 0xff47474b : 0xff3c3c3f), 0, r.getY(),
                                          juce::Colour(empty ? 0xff19191a : 0xff262628), 0, r.getBottom(), false));
   g.fillRoundedRectangle(r, 4.f);

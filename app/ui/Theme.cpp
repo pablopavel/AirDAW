@@ -12,12 +12,13 @@ const Opt kOpts[] = {
     {"rd", &Theme::corners, nullptr}, {"knob", &Theme::knobs, nullptr}, {"fd", &Theme::faders, nullptr},
     {"vu", &Theme::vuFace, nullptr}, {"lcd", &Theme::readouts, nullptr}, {"font", &Theme::typeface, nullptr},
     {"mat", &Theme::trimMat, nullptr}, {"ws", &Theme::species, nullptr}, {"gr", &Theme::grain, nullptr},
-    {"ww", &Theme::trimWidth, nullptr}, {"scr", nullptr, &Theme::screws}, {"reels", nullptr, &Theme::reels},
+    {"ww", &Theme::trimWidth, nullptr}, {"scr", nullptr, &Theme::screws},
     {"wood", nullptr, &Theme::trim}, {"shift", nullptr, &Theme::pixelShift}, {"ins", &Theme::inserts, nullptr},
+    {"btn", &Theme::buttons, nullptr},
 };
 // Mockup LD (the Studio look) and LOOKS: eras and classics.
 const char* kStudio = "hue=37 glow=1 ws=walnut gr=fine fp=brushed rd=normal ww=normal panel=oled wood=1 tint=charcoal mat=wood "
-                      "knob=chrome fd=chrome vu=cream lcd=accent font=modern scr=0 reels=1";
+                      "knob=chrome fd=chrome vu=cream lcd=accent font=modern scr=0";
 const std::pair<const char*, const char*> kPresets[] = {
     {"amber", ""},
     {"neon", "hue=300 glow=1.6 ws=ebony gr=satin fp=glass rd=round ww=thin"},
@@ -27,9 +28,9 @@ const std::pair<const char*, const char*> kPresets[] = {
     {"e50", "hue=45 glow=0.5 ws=oak gr=plank fp=hammer panel=std tint=hammer mat=rack knob=bake fd=black font=engraved scr=1"},
     {"e60", "hue=30 glow=0.5 ws=walnut gr=bold fp=brushed ww=wide panel=std font=geometric scr=1"},
     {"e70", "hue=15 ws=mahogany gr=bold fp=ribbed rd=sharp ww=wide panel=std tint=slate knob=bake fd=black lcd=red font=grotesque scr=1"},
-    {"e80", "hue=140 glow=1.6 ws=ebony gr=satin fp=matte rd=sharp mat=rack knob=bake fd=black vu=white lcd=green font=grotesque reels=0"},
-    {"e90", "hue=215 ws=ebony gr=satin fp=crinkle ww=thin panel=std tint=navy mat=chrome knob=bake fd=black vu=white lcd=cyan font=geometric reels=0"},
-    {"e00", "hue=200 glow=1.6 ws=ebony gr=satin fp=glass rd=round ww=thin mat=chrome fd=black vu=white lcd=white reels=0"},
+    {"e80", "hue=140 glow=1.6 ws=ebony gr=satin fp=matte rd=sharp mat=rack knob=bake fd=black vu=white lcd=green font=condensed"},
+    {"e90", "hue=215 ws=ebony gr=satin fp=crinkle ww=thin panel=std tint=navy mat=chrome knob=bake fd=black vu=white lcd=cyan font=industrial"},
+    {"e00", "hue=200 glow=1.6 ws=ebony gr=satin fp=glass rd=round ww=thin mat=chrome fd=black vu=white lcd=white"},
 };
 std::vector<std::pair<juce::String, juce::String>> presetPairs(const juce::String& id) {
   std::vector<std::pair<juce::String, juce::String>> v;
@@ -242,11 +243,23 @@ void Theme::drawBrush(juce::Graphics& g, juce::Rectangle<float> r, bool bus) con
   g.setColour(juce::Colour(0x14ffffff)); g.fillRect(r.getX(), r.getY(), r.getWidth(), 1.f);
 }
 
-void Theme::drawGlow(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour col, float radius, float alpha) const {
+// Layers of rounded rectangles growing outwards, each a little fainter: the glow keeps the shape's corners and fades
+// smoothly (about (1 - d/R)^2) to nothing at R, instead of a blurred box.
+void Theme::drawGlow(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour col, float radius, float alpha, float corner) const {
   if (glow <= 0.f) return;
-  const int rad = glowRadius(radius);
-  if (rad <= 0) return;
-  juce::DropShadow(col.withAlpha(glowAlpha(alpha)), rad, {}).drawForRectangle(g, r.toNearestInt());
+  const float R = (float)glowRadius(radius);
+  if (R <= 0.f) return;
+  const float a = glowAlpha(alpha);
+  const float c0 = juce::jmin(corner >= 0.f ? corner : rad(4.f), r.getWidth() / 2.f, r.getHeight() / 2.f);
+  const int steps = juce::jlimit(3, 8, juce::roundToInt(R / 2.5f));
+  for (int i = steps; i >= 1; --i) {
+    const float f = (float)i / (float)steps;  // 1 = the outermost layer
+    const float e = R * f;
+    const auto rr = r.expanded(e);
+    g.setColour(col.withAlpha(juce::jlimit(0.f, 1.f, a * 1.6f * (1.f - f + 0.5f / (float)steps) / (float)steps)));
+    g.fillRoundedRectangle(rr, juce::jmin(c0 + e, rr.getWidth() / 2.f, rr.getHeight() / 2.f));
+  }
+  g.setColour(col.withAlpha(a)); g.fillRoundedRectangle(r, c0);
 }
 
 void Theme::drawGlowText(juce::Graphics& g, const juce::String& s, juce::Rectangle<float> r, juce::Justification j,
@@ -359,18 +372,49 @@ void Theme::drawScrew(juce::Graphics& g, juce::Point<float> c) const {
 }
 
 // ---------------------------------------------------------------- knobs, fader caps
-bool Theme::drawKnobCap(juce::Graphics& g, juce::Rectangle<float> k) const {
-  const float hx = k.getX() + k.getWidth() * 0.35f, hy = k.getY() + k.getHeight() * 0.3f;
+void Theme::drawKnobCap(juce::Graphics& g, juce::Rectangle<float> k) const {
+  const auto c = k.getCentre();
+  const float R = k.getWidth() / 2.f;
+  // contact shadow: soft, below and to the right (the light is above-left)
+  {
+    const juce::Point<float> sc(c.x + R * 0.12f, c.y + R * 0.22f);
+    juce::ColourGradient sg(juce::Colours::black.withAlpha(0.6f), sc.x, sc.y, juce::Colours::transparentBlack, sc.x + R * 1.25f, sc.y, true);
+    sg.addColour(0.7, juce::Colours::black.withAlpha(0.45f));
+    g.setGradientFill(sg); g.fillEllipse(juce::Rectangle<float>(R * 2.5f, R * 2.5f).withCentre(sc));
+  }
+  auto radial = [&](juce::Rectangle<float> e, juce::uint32 a, juce::uint32 m, juce::uint32 z, double mid) {
+    juce::ColourGradient cg(juce::Colour(a), e.getX() + e.getWidth() * 0.35f, e.getY() + e.getHeight() * 0.3f, juce::Colour(z), e.getRight(), e.getBottom(), true);
+    cg.addColour(mid, juce::Colour(m));
+    g.setGradientFill(cg); g.fillEllipse(e);
+  };
+  auto rings = [&](juce::Rectangle<float> e, float step, float alpha) {  // concentric machining marks
+    int i = 0;
+    for (float rr = e.getWidth() / 2.f - 1.f; rr > 2.f; rr -= step, ++i) {
+      g.setColour((i % 2 ? juce::Colours::white : juce::Colours::black).withAlpha(alpha));
+      g.drawEllipse(juce::Rectangle<float>(2 * rr, 2 * rr).withCentre(e.getCentre()), 0.6f);
+    }
+  };
+  auto specular = [&](juce::Rectangle<float> e, float alpha, float size) {  // the lamp's reflection: fixed while the knob turns
+    const juce::Point<float> p(e.getX() + e.getWidth() * 0.34f, e.getY() + e.getHeight() * 0.27f);
+    g.setGradientFill(juce::ColourGradient(juce::Colours::white.withAlpha(alpha), p.x, p.y, juce::Colours::white.withAlpha(0.f),
+                                           p.x + e.getWidth() * size, p.y, true));
+    g.fillEllipse(e);
+  };
+  auto bevel = [&](juce::Rectangle<float> e, float lit, float dark) {  // the rim: light along the top, dark underneath
+    g.setGradientFill(juce::ColourGradient(juce::Colours::white.withAlpha(lit), 0.f, e.getY(), juce::Colours::black.withAlpha(dark), 0.f, e.getBottom(), false));
+    juce::Path ring; ring.setUsingNonZeroWinding(false);
+    ring.addEllipse(e); ring.addEllipse(e.reduced(1.2f));
+    g.fillPath(ring);
+  };
   if (knobs == "bake") {
-    juce::ColourGradient cg(juce::Colour(0xff3b3b3d), hx, hy, juce::Colour(0xff0c0c0d), k.getRight(), k.getBottom(), true);
-    g.setGradientFill(cg); g.fillEllipse(k);
+    radial(k, 0xff45454a, 0xff1a1a1c, 0xff070708, 0.55);
+    specular(k, 0.32f, 0.32f); bevel(k, 0.22f, 0.6f);
   } else if (knobs == "ivory") {
-    juce::ColourGradient cg(juce::Colour(0xfffff6dd), hx, hy, juce::Colour(0xffa89a72), k.getRight(), k.getBottom(), true);
-    cg.addColour(0.62, juce::Colour(0xffd6c8a0));
-    g.setGradientFill(cg); g.fillEllipse(k);
+    radial(k, 0xfffff6dd, 0xffd6c8a0, 0xff8f8160, 0.62);
+    specular(k, 0.5f, 0.3f); bevel(k, 0.5f, 0.45f);
   } else if (knobs == "gold") {  // mockup conic gradient, drawn as thin wedges
     static const juce::uint32 stops[] = {0xff6b4b12, 0xffe6c36a, 0xff7a5718, 0xffd9b45a, 0xff7a5718, 0xffe6c36a, 0xff6b4b12};
-    const auto c = k.getCentre(); const float R = k.getWidth() / 2.f; const int N = 72;
+    const int N = 72;
     for (int i = 0; i < N; ++i) {
       const float f = (float)i / N, pos = f * 6.f; const int a = juce::jmin(5, (int)pos);
       g.setColour(juce::Colour(stops[a]).interpolatedWith(juce::Colour(stops[a + 1]), pos - (float)a));
@@ -378,36 +422,179 @@ bool Theme::drawKnobCap(juce::Graphics& g, juce::Rectangle<float> k) const {
       p.addPieSegment(c.x - R, c.y - R, 2 * R, 2 * R, a0, a1, 0.f);
       g.fillPath(p);
     }
-  } else return false;
-  g.setColour(juce::Colour(0x33ffffff)); g.drawEllipse(k.reduced(0.5f), 0.7f);
-  return true;
+    rings(k, 2.f, 0.05f); specular(k, 0.35f, 0.3f); bevel(k, 0.45f, 0.55f);
+  } else if (knobs == "knurl") {  // knurled aluminium: a ridged skirt round a machined top
+    radial(k, 0xffcfd0d4, 0xff8e9096, 0xff45474c, 0.6);
+    const int N = juce::jmax(24, (int)(R * 3.f));
+    for (int i = 0; i < N; ++i) {
+      const float a = juce::MathConstants<float>::twoPi * (float)i / (float)N;
+      g.setColour(i % 2 ? juce::Colours::black.withAlpha(0.35f) : juce::Colours::white.withAlpha(0.25f));
+      g.drawLine(juce::Line<float>(c.getPointOnCircumference(R * 0.8f, a), c.getPointOnCircumference(R - 0.6f, a)), 1.f);
+    }
+    auto top = k.reduced(R * 0.22f);
+    radial(top, 0xffe9eaee, 0xffa9abb0, 0xff6d6f74, 0.55);
+    rings(top, 1.5f, 0.06f); specular(top, 0.45f, 0.35f);
+    g.setColour(juce::Colours::black.withAlpha(0.4f)); g.drawEllipse(top, 0.8f);
+    bevel(k, 0.35f, 0.6f);
+  } else if (knobs == "skirt") {  // black cap on a polished skirt
+    radial(k, 0xffe2e3e6, 0xff7d7f84, 0xff2a2b2e, 0.55);
+    rings(k, 1.5f, 0.05f);
+    auto top = k.reduced(R * 0.26f);
+    g.setColour(juce::Colours::black.withAlpha(0.6f)); g.fillEllipse(top.translated(0.f, 1.5f).expanded(1.f));
+    radial(top, 0xff4a4a4f, 0xff19191b, 0xff050506, 0.6);
+    specular(top, 0.3f, 0.3f); bevel(top, 0.25f, 0.5f);
+    bevel(k, 0.4f, 0.6f);
+  } else if (knobs == "soft") {  // soft-touch rubber: matte, hardly any reflection
+    radial(k, 0xff3c3d42, 0xff26272b, 0xff131416, 0.6);
+    specular(k, 0.08f, 0.45f); bevel(k, 0.12f, 0.5f);
+  } else {  // chrome
+    radial(k, 0xffb4b4b9, 0xff56565b, 0xff1e1e20, 0.5);
+    rings(k, 1.6f, 0.045f);
+    for (float a : {-0.8f, 2.35f}) {  // two soft reflections across the turned top
+      juce::Path w; w.addPieSegment(k.reduced(1.f), a - 0.32f, a + 0.32f, 0.f);
+      g.setColour(juce::Colours::white.withAlpha(a < 0.f ? 0.13f : 0.06f)); g.fillPath(w);
+    }
+    specular(k, 0.28f, 0.3f); bevel(k, 0.45f, 0.6f);
+  }
 }
 
 juce::Colour Theme::knobPointer() const {
   if (knobs == "ivory") return juce::Colour(0xff2a1a08);
   if (knobs == "gold") return juce::Colour(0xff1a1004);
+  if (knobs == "knurl") return juce::Colour(0xff151515);
+  if (knobs == "soft") return am();
   return cream();
 }
 
 void Theme::drawFaderCap(juce::Graphics& g, juce::Rectangle<float> cap) const {
-  g.setColour(juce::Colours::black.withAlpha(0.85f)); g.fillRoundedRectangle(cap.translated(0.f, 6.f), 3.f);
+  // soft shadow on the panel below the cap
+  g.setGradientFill(juce::ColourGradient(juce::Colours::black.withAlpha(0.75f), cap.getCentreX(), cap.getBottom() - 4.f,
+                                         juce::Colours::transparentBlack, cap.getCentreX(), cap.getBottom() + 9.f, false));
+  g.fillRoundedRectangle(cap.translated(1.f, 5.f).expanded(2.f, 2.f), 5.f);
   juce::uint32 side = 0xff161616, mid = 0xff5e5e60, top = 0xffcccccc;
   juce::Colour stripe = am();
   if (faders == "black") { side = 0xff0c0c0d; mid = 0xff2c2c2f; top = 0xff555555; stripe = juce::Colour(0xfff2f2f2); }
   else if (faders == "cream") { side = 0xffb8aa84; mid = 0xfff1e6c3; top = 0xffffffff; stripe = juce::Colour(0xff3a2a10); }
-  juce::ColourGradient cg(juce::Colour(side), cap.getX(), 0, juce::Colour(side), cap.getRight(), 0, false);
-  cg.addColour(0.45, juce::Colour(mid));
+  else if (faders == "grey") { side = 0xff4a4d52; mid = 0xff9a9ea5; top = 0xffd9dce0; stripe = juce::Colour(0xfff6f6f6); }
+  else if (faders == "red") { side = 0xff5a1210; mid = 0xffc83a34; top = 0xffff8a80; stripe = juce::Colour(0xfff6f6f6); }
+  else if (faders == "wood") { side = 0xff2b170b; mid = 0xff6b4428; top = 0xffa57a52; stripe = juce::Colour(0xfff1e6c3); }
+  // body: lit from above-left, rounded sides
+  juce::ColourGradient cg(juce::Colour(side), cap.getX(), 0, juce::Colour(side).darker(0.4f), cap.getRight(), 0, false);
+  cg.addColour(0.3, juce::Colour(mid).brighter(0.08f)); cg.addColour(0.62, juce::Colour(mid));
   g.setGradientFill(cg); g.fillRoundedRectangle(cap, 3.f);
-  g.setColour(juce::Colour(top)); g.fillRect(cap.getX() + 1.f, cap.getY(), cap.getWidth() - 2.f, 2.f);
-  g.setColour(stripe); g.fillRect(cap.getX(), cap.getCentreY() - 1.75f, cap.getWidth(), 3.5f);
-  g.setColour(juce::Colour(0x88000000)); g.drawRoundedRectangle(cap, 3.f, 1.f);
+  // the top face catches the light; the bottom edge falls into shade
+  g.setGradientFill(juce::ColourGradient(juce::Colour(top).withAlpha(0.9f), 0, cap.getY(), juce::Colour(top).withAlpha(0.f), 0, cap.getY() + 6.f, false));
+  g.fillRoundedRectangle(cap.withHeight(6.f), 3.f);
+  g.setGradientFill(juce::ColourGradient(juce::Colours::black.withAlpha(0.f), 0, cap.getBottom() - 7.f, juce::Colours::black.withAlpha(0.45f), 0, cap.getBottom(), false));
+  g.fillRoundedRectangle(cap.withTop(cap.getBottom() - 7.f), 3.f);
+  if (faders == "wood") {  // grain along the cap
+    juce::Random rng(5);
+    for (float x = cap.getX() + 2.f; x < cap.getRight() - 2.f; x += 2.f + (float)rng.nextInt(3)) {
+      g.setColour(juce::Colours::black.withAlpha(0.14f)); g.fillRect(x, cap.getY() + 1.f, 1.f, cap.getHeight() - 2.f);
+    }
+  }
+  // finger grooves above and below the index line
+  const float cy = cap.getCentreY();
+  for (float d = 6.f; d < cap.getHeight() / 2.f - 5.f; d += 4.f)
+    for (float y : {cy - d, cy + d}) {
+      g.setColour(juce::Colours::black.withAlpha(0.32f)); g.fillRect(cap.getX() + 3.f, y, cap.getWidth() - 6.f, 1.f);
+      g.setColour(juce::Colours::white.withAlpha(0.12f)); g.fillRect(cap.getX() + 3.f, y + 1.f, cap.getWidth() - 6.f, 1.f);
+    }
+  g.setColour(stripe); g.fillRect(cap.getX(), cy - 1.5f, cap.getWidth(), 3.f);
+  g.setColour(juce::Colours::black.withAlpha(0.35f)); g.fillRect(cap.getX(), cy + 1.5f, cap.getWidth(), 1.f);
+  g.setColour(juce::Colour(0xaa000000)); g.drawRoundedRectangle(cap, 3.f, 1.f);
+}
+
+// ---------------------------------------------------------------- console buttons, toggle switches
+juce::Rectangle<float> Theme::drawConsoleButton(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour cap, bool on, bool pressed,
+                                                bool hover, bool enabled) const {
+  const float cr = rad(4.f);
+  // bezel: the recessed housing the cap sits in
+  g.setColour(juce::Colours::black); g.fillRoundedRectangle(r, cr + 1.f);
+  g.setGradientFill(juce::ColourGradient(juce::Colour(0xff030303), 0.f, r.getY(), juce::Colour(0xff1c1c1f), 0.f, r.getBottom(), false));
+  g.fillRoundedRectangle(r.reduced(1.f), cr);
+  g.setColour(juce::Colours::white.withAlpha(0.07f)); g.drawHorizontalLine((int)r.getBottom() - 1, r.getX() + cr, r.getRight() - cr);
+  const float inset = juce::jlimit(1.5f, 3.f, r.getHeight() * 0.1f);
+  auto c = r.reduced(inset);
+  juce::Colour face = cap;
+  if (!enabled) face = face.withMultipliedSaturation(0.4f).withMultipliedBrightness(0.8f);
+  if (hover && enabled && !on) face = face.brighter(0.18f);
+  if (pressed) c = c.withTrimmedTop(1.f);
+  else {  // the cap stands up: its lower edge shows as a darker skirt
+    c = c.withTrimmedBottom(1.5f);
+    g.setColour(face.darker(1.2f)); g.fillRoundedRectangle(c.translated(0.f, 1.5f), cr);
+  }
+  if (on && glow > 0.f) {  // lit from behind: a little light spills into the bezel round the cap (kept inside the bezel)
+    juce::Graphics::ScopedSaveState ss(g);
+    juce::Path bz; bz.addRoundedRectangle(r.reduced(1.f), cr); g.reduceClipRegion(bz);
+    drawGlow(g, c, cap, inset * 2.2f, 0.45f, cr);
+  }
+  juce::ColourGradient fg(face.brighter(on ? 0.45f : 0.2f), 0.f, c.getY(), face.darker(on ? 0.25f : 0.45f), 0.f, c.getBottom(), false);
+  fg.addColour(0.45, face);
+  g.setGradientFill(fg); g.fillRoundedRectangle(c, cr);
+  {
+    juce::Graphics::ScopedSaveState ss(g);
+    juce::Path cp; cp.addRoundedRectangle(c, cr); g.reduceClipRegion(cp);
+    if (on) {  // the lamp behind the cap: brightest in the middle
+      g.setGradientFill(juce::ColourGradient(juce::Colours::white.withAlpha(0.42f), c.getCentreX(), c.getCentreY(), juce::Colours::white.withAlpha(0.f),
+                                             c.getCentreX() + c.getWidth() * 0.55f, c.getCentreY(), true));
+      g.fillRect(c);
+    }
+    // glossy top half of the plastic
+    g.setGradientFill(juce::ColourGradient(juce::Colours::white.withAlpha(on ? 0.3f : 0.14f), 0.f, c.getY(), juce::Colours::white.withAlpha(0.f),
+                                           0.f, c.getY() + c.getHeight() * 0.48f, false));
+    g.fillRect(c.withHeight(c.getHeight() * 0.48f));
+  }
+  g.setColour(juce::Colours::white.withAlpha(on ? 0.45f : 0.16f)); g.drawHorizontalLine((int)c.getY() + 1, c.getX() + cr, c.getRight() - cr);
+  g.setColour(juce::Colours::black.withAlpha(0.75f)); g.drawRoundedRectangle(c, cr, 1.f);
+  return c;
+}
+
+void Theme::drawToggleSwitch(juce::Graphics& g, juce::Rectangle<float> r, bool on, juce::Colour led, bool hover) const {
+  const float s = juce::jmin(r.getWidth(), r.getHeight());
+  const juce::Point<float> c(r.getCentreX(), r.getCentreY() + s * 0.04f);
+  const float n = s * 0.26f;  // nut radius
+  // hex nut and bushing
+  juce::Path hex;
+  for (int i = 0; i < 6; ++i) {
+    const auto p = c.getPointOnCircumference(n * 1.12f, juce::MathConstants<float>::pi / 6.f + (float)i * juce::MathConstants<float>::pi / 3.f);
+    if (i == 0) hex.startNewSubPath(p); else hex.lineTo(p);
+  }
+  hex.closeSubPath();
+  g.setColour(juce::Colours::black.withAlpha(0.6f)); g.fillPath(hex, juce::AffineTransform::translation(0.8f, 1.5f));
+  g.setGradientFill(juce::ColourGradient(juce::Colour(0xffe4e4e8), c.x - n, c.y - n, juce::Colour(0xff45464b), c.x + n, c.y + n, false));
+  g.fillPath(hex);
+  g.setColour(juce::Colours::black.withAlpha(0.7f)); g.strokePath(hex, juce::PathStrokeType(0.7f));
+  g.setGradientFill(juce::ColourGradient(juce::Colour(0xff1a1a1c), c.x, c.y - n * 0.6f, juce::Colour(0xff5a5a60), c.x, c.y + n * 0.6f, false));
+  g.fillEllipse(juce::Rectangle<float>(n * 1.2f, n * 1.2f).withCentre(c));
+  // bat handle: up = off, down = on
+  const float dir = on ? 1.f : -1.f, len = s * 0.44f, baseW = n * 0.55f, tipW = n * 0.85f;
+  const juce::Point<float> tip(c.x, c.y + dir * len);
+  juce::Path bat;
+  bat.startNewSubPath(c.x - baseW / 2.f, c.y); bat.lineTo(tip.x - tipW / 2.f, tip.y); bat.lineTo(tip.x + tipW / 2.f, tip.y);
+  bat.lineTo(c.x + baseW / 2.f, c.y); bat.closeSubPath();
+  bat.addEllipse(tip.x - tipW * 0.62f, tip.y - tipW * 0.55f, tipW * 1.24f, tipW * 1.1f);
+  g.setColour(juce::Colours::black.withAlpha(0.55f)); g.fillPath(bat, juce::AffineTransform::translation(1.2f, 2.f));
+  juce::ColourGradient bg(juce::Colour(0xff6c6d72), tip.x - tipW, 0.f, juce::Colour(0xff3a3b40), tip.x + tipW, 0.f, false);
+  bg.addColour(0.38, juce::Colour(hover ? 0xffffffff : 0xfff0f0f3)); bg.addColour(0.62, juce::Colour(0xff9a9ba0));
+  g.setGradientFill(bg); g.fillPath(bat);
+  g.setColour(juce::Colours::black.withAlpha(0.6f)); g.strokePath(bat, juce::PathStrokeType(0.6f));
+  // LED, top right
+  const float d = juce::jmax(4.f, s * 0.2f);
+  juce::Rectangle<float> l(r.getRight() - d - 1.f, r.getY() + 1.f, d, d);
+  if (on) { drawGlow(g, l, led, 4.f, 0.7f, d / 2.f); g.setColour(led.brighter(0.3f)); }
+  else g.setColour(led.withMultipliedBrightness(0.28f).withMultipliedSaturation(0.7f));
+  g.fillEllipse(l);
+  g.setColour(juce::Colours::white.withAlpha(on ? 0.6f : 0.15f)); g.fillEllipse(l.reduced(d * 0.3f).translated(-d * 0.12f, -d * 0.12f));
 }
 
 // ---------------------------------------------------------------- type
 juce::Font Theme::uiFont(float h, bool bold) {
   const auto& t = get().typeface;
-  const char* name = t == "grotesque" ? "Arial" : t == "geometric" ? "Century Gothic" : t == "typewriter" ? "Courier New"
-                   : t == "engraved" ? "Georgia" : "Segoe UI";
+  // Faces that ship with Windows and look clearly different from each other.
+  const char* name = t == "industrial" ? "Bahnschrift" : t == "condensed" ? "Bahnschrift Condensed"
+                   : t == "grotesque" ? "Franklin Gothic Medium" : t == "geometric" ? "Trebuchet MS"
+                   : t == "typewriter" ? "Courier New" : t == "engraved" ? "Georgia" : t == "label" ? "Ink Free" : "Segoe UI";
   return juce::Font(juce::FontOptions(name, h, bold ? juce::Font::bold : juce::Font::plain));
 }
 juce::Font Theme::monoFont(float h, bool bold) {

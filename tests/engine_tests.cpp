@@ -678,7 +678,12 @@ int main() {
     CHECK(r.e.setInsert(0, 1, ""), "remove");
     r.run(5, 0.5f, pl, pr);
     r.e.collectGarbage();
-    CHECK(std::isfinite(pl), "after swap"); }
+    CHECK(std::isfinite(pl), "after swap");
+    // the last slot works, one past it is refused
+    CHECK(r.e.setInsert(0, kMaxInserts - 1, "ToTape8") && r.e.insertAt(0, kMaxInserts - 1) != nullptr, "last insert slot (%d)", kMaxInserts);
+    CHECK(!r.e.setInsert(0, kMaxInserts, "ToTape8"), "slot past the last refused");
+    r.run(5, 0.5f, pl, pr);
+    CHECK(std::isfinite(pl) && r.e.moveInsert(0, kMaxInserts - 1, 2) && r.e.insertAt(0, 2) != nullptr, "move from the last slot"); }
   // 8. Parameter change is applied
   { Rig r; r.e.track(0).inputL = 0; r.e.setInsert(0, 0, "ToTape8");
     float pl, pr; r.run(100, 0.5f, pl, pr); float before = pl;

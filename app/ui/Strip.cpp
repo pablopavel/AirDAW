@@ -1,4 +1,5 @@
 #include "Strip.h"
+#include "AirLookAndFeel.h"
 
 namespace ui {
 
@@ -14,18 +15,20 @@ static int numInputs(AppCtx& ctx) {
   return 2;
 }
 
-// Slots shown: 4, growing by one past the last used slot, up to 8.
-static int slotsToShow(airdaw::Engine& e, int id) {
-  int last = -1;
-  for (int s = 0; s < airdaw::kMaxInserts; ++s) if (e.insertAt(id, s)) last = s;
-  return juce::jlimit(4, airdaw::kMaxInserts, last + 2);
-}
-
-static void syncSlot(AppCtx& ctx, airdaw::Engine& e, int id, int s, InsertSlot& slot) {
-  auto* fx = e.insertAt(id, s);
-  const juce::String n = fx ? juce::String(fx->name()) : juce::String();
-  const bool lit = fx && !fx->bypassed(), open = fx && ctx.isCardOpen && ctx.isCardOpen(id, s);
-  if (n != slot.name || lit != slot.lit || open != slot.open) { slot.name = n; slot.lit = lit; slot.open = open; slot.repaint(); }
+// A strip's one Inserts button: how many plugins the chain has (their names in the tooltip), lit while any of them
+// runs, outlined while the insert panel shows this channel.
+static void syncInserts(AppCtx& ctx, airdaw::Engine& e, int id, InsertSlot& b) {
+  int n = 0; bool lit = false;
+  juce::StringArray names;
+  for (int s = 0; s < airdaw::kMaxInserts; ++s)
+    if (auto* fx = e.insertAt(id, s)) {
+      ++n; lit |= !fx->bypassed();
+      names.add(juce::String(n) + ". " + juce::String(fx->name()) + (fx->bypassed() ? " (bypassed)" : ""));
+    }
+  const bool open = ctx.insertPanelChannel && ctx.insertPanelChannel() == id;
+  if (n != b.count || lit != b.lit || open != b.open) { b.count = n; b.lit = lit; b.open = open; b.repaint(); }
+  const auto tip = n == 0 ? juce::String("No inserts yet: click to add plugins") : "Inserts (click to open):\n" + names.joinIntoString("\n");
+  if (b.getTooltip() != tip) b.setTooltip(tip);
 }
 
 // ---------------- MiniReadout ----------------
@@ -43,10 +46,11 @@ void MiniReadout::paint(juce::Graphics& g) {
 // ---------------- MonitorButton ----------------
 void MonitorButton::paintButton(juce::Graphics& g, bool over, bool down) {
   getLookAndFeel().drawButtonBackground(g, *this, {}, over, down);
-  auto r = getLocalBounds().toFloat().reduced(2.f);
-  if (down) r = r.translated(0.f, 1.f);
-  const float s = juce::jmin(r.getWidth(), r.getHeight()) * 0.62f, cx = r.getCentreX(), cy = r.getCentreY() + s * 0.06f;
-  g.setColour(getToggleState() ? juce::Colour(0xff2a1800) : Theme::tx().withAlpha(isEnabled() ? 1.f : 0.5f));
+  auto r = AirLookAndFeel::legendArea(*this, down);
+  if (!AirLookAndFeel::isSwitch(*this)) r = r.reduced(1.f);
+  const float s = juce::jmin(r.getWidth(), r.getHeight()) * (AirLookAndFeel::isSwitch(*this) ? 0.95f : 0.66f), cx = r.getCentreX(),
+              cy = r.getCentreY() + s * 0.06f;
+  g.setColour(AirLookAndFeel::legendColour(*this, down));
   juce::Path band;  // headband
   band.addCentredArc(cx, cy, s * 0.42f, s * 0.42f, 0.f, -1.9f, 1.9f, true);
   g.strokePath(band, juce::PathStrokeType(1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
@@ -76,7 +80,9 @@ Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
   addAndMakeVisible(plate_);
   for (auto* b : {&chn_, &in_, &route_, &m_, &s_, &t_, &r_}) { addAndMakeVisible(*b); b->getProperties().set("fontH", 11.0); }
   m_.getProperties().set("kind", "m"); s_.getProperties().set("kind", "s");
-  t_.getProperties().set("kind", "t"); r_.getProperties().set("kind", "r");
+  t_.getProperties().set("kind", "t"); r_.getProperties().set("kind", "r"); mon_.getProperties().set("kind", "mon");
+  for (juce::Button* b : {(juce::Button*)&m_, (juce::Button*)&s_, (juce::Button*)&mon_, (juce::Button*)&t_, (juce::Button*)&r_})
+    b->getProperties().set("sw", true);  // bat-handle toggles when Display > Hardware > Buttons is Toggles
   if (isBus(id)) {
     chn_.setButtonText("Bus"); chn_.setEnabled(false); in_.setVisible(false);
     route_.setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x86\x92 Master"))); route_.setEnabled(false);
@@ -111,15 +117,9 @@ Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
   s_.onClick = [this] { if (auto* e = ctx_.engine()) if (auto* c = channelOf(*e, id_)) c->solo = !c->solo.load(); };
   addAndMakeVisible(gain_);
   gain_.onChange = [this](float v) { if (auto* e = ctx_.engine()) if (auto* c = channelOf(*e, id_)) c->trimDb = v; };
-  for (int i = 0; i < (int)slots_.size(); ++i) {
-    auto& sl = slots_[(size_t)i];
-    addChildComponent(sl);
-    sl.channelId = id; sl.slot = i;
-    sl.onClick = [this, i] { ctx_.showInserts(id_, i); };
-    sl.onDropFrom = [this, i](int from) { if (ctx_.moveInsert) ctx_.moveInsert(id_, from, i); };
-  }
-  addChildComponent(summary_);
-  summary_.onClick = [this] { ctx_.showInserts(id_, -1); };
+  ins_.summary = true; ins_.channelId = id;
+  ins_.onClick = [this] { ctx_.showInserts(id_, -1); };
+  addAndMakeVisible(ins_);
   addAndMakeVisible(pan_);
   pan_.onChange = [this](float v) { if (auto* e = ctx_.engine()) if (auto* c = channelOf(*e, id_)) c->pan = v; };
   addAndMakeVisible(fader_);
@@ -209,14 +209,7 @@ void Strip::sync() {
   if (!pan_.isMouseButtonDown()) pan_.setValue(c.pan.load());
   if (!fader_.isMouseButtonDown()) fader_.setDb(c.gainDb.load());
   fader_.setMeter(c.meter.peakL.load(), c.meter.peakR.load());
-  const int want = slotsToShow(*e, id_);
-  if (want != shownSlots_) { shownSlots_ = want; layoutSlots(); resized(); }
-  for (int s = 0; s < shownSlots_; ++s) syncSlot(ctx_, *e, id_, s, slots_[(size_t)s]);
-  if (compact_) {
-    int used = 0; for (int s = 0; s < airdaw::kMaxInserts; ++s) used += e->insertAt(id_, s) != nullptr;
-    const juce::String n = used ? juce::String(used) + (used == 1 ? " insert" : " inserts") : juce::String();
-    if (n != summary_.name) { summary_.name = n; summary_.repaint(); }
-  }
+  syncInserts(ctx_, *e, id_, ins_);
 }
 
 void Strip::paint(juce::Graphics& g) {
@@ -225,28 +218,18 @@ void Strip::paint(juce::Graphics& g) {
   g.setColour(juce::Colour(0x14ffffff)); g.fillRect(getWidth() - 2, 0, 1, getHeight());
 }
 
-void Strip::layoutSlots() {
-  for (int s = 0; s < (int)slots_.size(); ++s) slots_[(size_t)s].setVisible(!compact_ && s < shownSlots_);
-  summary_.setVisible(compact_);
-}
-
 void Strip::resized() {
   auto r = getLocalBounds().reduced(6, 7);
   const int gap = 5;
-  // Fixed rows take ~230 px; if the slot list would leave the fader less than 130 px, fold it into one row.
-  compact_ = r.getHeight() - 230 - shownSlots_ * 21 < 130;
   auto take = [&](int h) { auto x = r.removeFromTop(h); r.removeFromTop(gap); return x; };
   plate_.setBounds(take(24));
   auto row = take(26);
   if (isBus(id_)) chn_.setBounds(row); else { chn_.setBounds(row.removeFromLeft(row.getWidth() / 2 + 6).reduced(1, 0)); in_.setBounds(row.reduced(1, 0)); }
   gain_.setBounds(take(40));
-  layoutSlots();
-  if (compact_) { summary_.setBounds(r.removeFromTop(19)); r.removeFromTop(2); }
-  else for (int s = 0; s < shownSlots_; ++s) { slots_[(size_t)s].setBounds(r.removeFromTop(19)); r.removeFromTop(2); }
-  r.removeFromTop(gap - 2);
+  ins_.setBounds(take(22));
   route_.setBounds(take(26));
   pan_.setBounds(take(20));
-  row = take(26);
+  row = take(T().buttons == "toggle" ? 38 : 26);  // toggles: a printed label above each switch
   const int nb = isBus(id_) ? 2 : 5, bw = row.getWidth() / nb;
   for (juce::Button* b : {(juce::Button*)&m_, (juce::Button*)&s_, (juce::Button*)&mon_, (juce::Button*)&t_, (juce::Button*)&r_})
     if (b->isVisible()) b->setBounds(row.removeFromLeft(bw).reduced(1, 0));
@@ -259,13 +242,9 @@ MasterStrip::MasterStrip(AppCtx& ctx) : ctx_(ctx) {
   plate_.setName2("Master"); plate_.setRenamable(false); plate_.setColourBar(channelColour(kMasterId));
   plate_.onClick = [this] { ctx_.showInserts(kMasterId, -1); };
   addAndMakeVisible(plate_);
-  for (int i = 0; i < (int)slots_.size(); ++i) {
-    auto& sl = slots_[(size_t)i];
-    addChildComponent(sl);
-    sl.channelId = kMasterId; sl.slot = i;
-    sl.onClick = [this, i] { ctx_.showInserts(kMasterId, i); };
-    sl.onDropFrom = [this, i](int from) { if (ctx_.moveInsert) ctx_.moveInsert(kMasterId, from, i); };
-  }
+  ins_.summary = true; ins_.channelId = kMasterId;
+  ins_.onClick = [this] { ctx_.showInserts(kMasterId, -1); };
+  addAndMakeVisible(ins_);
   for (auto* c : std::initializer_list<juce::Component*>{&vuL_, &vuR_, &lm_, &ls_, &li_, &tp_, &rms_, &clip_, &corr_, &fader_}) addAndMakeVisible(c);
   lm_.setTooltip("Momentary loudness (400 ms), LUFS");
   ls_.setTooltip("Short-term loudness (3 s), LUFS");
@@ -289,9 +268,7 @@ void MasterStrip::sync() {
   auto vu = [](float rms) { const float db = rms > 0.f ? 20.f * std::log10(rms) + 18.f : -40.f; return juce::jlimit(0.f, 1.05f, (db + 20.f) / 23.f); };
   vuL += (vu(rl) - vuL) * 0.25f; vuR += (vu(rr) - vuR) * 0.25f;
   vuL_.setLevel(vuL); vuR_.setLevel(vuR);
-  const int want = slotsToShow(*e, kMasterId);
-  if (want != shownSlots_) { shownSlots_ = want; resized(); }
-  for (int s = 0; s < shownSlots_; ++s) syncSlot(ctx_, *e, kMasterId, s, slots_[(size_t)s]);
+  syncInserts(ctx_, *e, kMasterId, ins_);
 }
 
 void MasterStrip::setLoudness(const airdaw::LoudnessReadout& r) {
@@ -339,13 +316,7 @@ void MasterStrip::resized() {
   auto r = getLocalBounds().reduced(8, 7);
   r.removeFromLeft(2);
   plate_.setBounds(r.removeFromTop(26)); r.removeFromTop(6);
-  const int rows = (shownSlots_ + 1) / 2;
-  auto grid = r.removeFromTop(rows * 24 + (rows - 1) * 4); r.removeFromTop(6);
-  for (int s = 0; s < (int)slots_.size(); ++s) {
-    slots_[(size_t)s].setVisible(s < shownSlots_);
-    const int row = s / 2, col = s % 2, w = (grid.getWidth() - 4) / 2;
-    slots_[(size_t)s].setBounds(grid.getX() + col * (w + 4), grid.getY() + row * 28, w, 24);
-  }
+  ins_.setBounds(r.removeFromTop(24)); r.removeFromTop(6);
   const int vuH = 64;
   // Short windows: the VU pair, then the correlation bar, make way for the fader (kept >= 110 px).
   const int rowH = fader_.bigReadout ? 64 : 34, readH = 2 * rowH + 4 + 8, corrH = 30, faderMin = 110 + 30;

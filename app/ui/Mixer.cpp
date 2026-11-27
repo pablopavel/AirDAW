@@ -2,6 +2,12 @@
 
 namespace ui {
 
+void Mixer::restyle() {
+  for (auto& s : tracks_) s->resized();
+  for (auto& s : buses_) s->resized();
+  master_.resized();
+}
+
 Mixer::Mixer(AppCtx& ctx) : ctx_(ctx), master_(ctx) {
   for (int i = 0; i < airdaw::kMaxTracks; ++i) { tracks_.push_back(std::make_unique<Strip>(ctx, i)); content_.addChildComponent(*tracks_.back()); }
   for (int b = 0; b < airdaw::kNumBuses; ++b) { buses_.push_back(std::make_unique<Strip>(ctx, 100 + b)); content_.addAndMakeVisible(*buses_.back()); }

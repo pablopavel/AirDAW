@@ -73,7 +73,7 @@ class InsertPanel : public juce::Component {
   juce::Rectangle<int> chassis_;  // wood cheeks + rail around the viewport
   std::vector<std::unique_ptr<InsertCard>> cards_;
   std::unique_ptr<juce::Component> addCard_;
-  juce::TextButton close1_{juce::String(juce::CharPointer_UTF8("\xe2\x9c\x95 Close"))}, close2_{juce::String(juce::CharPointer_UTF8("\xe2\x9c\x95 Close"))};
+  juce::TextButton close1_, close2_;  // a plain X at each end (like the takes bar)
   bool showOld_ = false;
   bool rack_ = false;  // Display > Hardware > Inserts: Cards (default) or Rack
 };

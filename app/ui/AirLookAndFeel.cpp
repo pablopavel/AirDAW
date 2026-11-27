@@ -42,7 +42,7 @@ void AirLookAndFeel::refreshColours() {
   setColour(juce::GroupComponent::textColourId, Theme::cream());
 }
 
-// Colours of a lit button by kind (top, bottom, text). Amber-family ones follow the accent.
+// Colours of a lit button by kind (top, bottom, text). Amber-family ones follow the accent. (Classic look.)
 static void litColours(const juce::String& kind, juce::Colour& top, juce::Colour& bot, juce::Colour& txt, juce::Colour& glow) {
   auto& t = T();
   if (kind == "m") { top = t.c(0xffffd27a); bot = t.c(0xffe0a02a); txt = juce::Colour(0xff2a1800); glow = t.am(); }
@@ -50,6 +50,73 @@ static void litColours(const juce::String& kind, juce::Colour& top, juce::Colour
   else if (kind == "r") { top = juce::Colour(0xffff6b6f); bot = juce::Colour(0xffc22b30); txt = juce::Colours::white; glow = juce::Colour(0xffe5484d); }
   else if (kind == "t") { top = juce::Colour(0xffd9c8ff); bot = juce::Colour(0xff8b6fd6); txt = juce::Colour(0xff120a2a); glow = juce::Colour(0xffb38cff); }
   else { top = t.c(0xffffc46b); bot = t.c(0xffd98e24); txt = juce::Colour(0xff2a1800); glow = t.am(); }
+}
+
+static bool classicLook() { return T().buttons == "classic"; }
+
+// Console look: the cap colour of a button. `coloured` false = a neutral cap (grey, the accent when lit).
+static juce::Colour capColour(const juce::Button& b, bool& coloured) {
+  auto& t = T();
+  const auto& pr = b.getProperties();
+  coloured = true;
+  if (pr.contains("cap")) { const juce::int64 v = pr["cap"]; return v == 0 ? t.am() : juce::Colour((juce::uint32)v); }
+  const auto kind = pr["kind"].toString();
+  if (kind == "m") return t.c(0xffffc04a);
+  if (kind == "s") return juce::Colour(0xff4aa3ff);
+  if (kind == "r") return juce::Colour(0xffe5484d);
+  if (kind == "t") return juce::Colour(0xffb38cff);
+  if (kind == "mon") return juce::Colour(0xff5cc977);
+  coloured = false;
+  return t.c(0xffffbe55);
+}
+static bool consoleLit(const juce::Button& b, bool down) {  // deck menu keys light while held, like real console keys
+  return b.getToggleState() || (down && b.getProperties()["kind"].toString() == "key");
+}
+static juce::Colour consoleFace(const juce::Button& b, bool down) {
+  bool coloured; const auto cap = capColour(b, coloured);
+  if (consoleLit(b, down)) return cap;
+  return coloured ? cap.withMultipliedBrightness(0.42f).withMultipliedSaturation(0.85f) : juce::Colour(0xff47474c);
+}
+
+bool AirLookAndFeel::isSwitch(const juce::Button& b) { return T().buttons == "toggle" && (bool)b.getProperties()["sw"]; }
+
+// A toggle's printed label strip, taken off the top of `r` (the switch goes below it).
+static juce::Rectangle<float> switchLabel(juce::Rectangle<float>& r) { return r.removeFromTop(juce::jmax(9.f, r.getHeight() * 0.3f)); }
+
+juce::Rectangle<float> AirLookAndFeel::legendArea(juce::Button& b, bool down) {
+  auto r = b.getLocalBounds().toFloat();
+  const auto kind = b.getProperties()["kind"].toString();
+  if (isSwitch(b)) return switchLabel(r);
+  if (kind == "flat" || kind == "lcd") return r.reduced(4.f, 1.f);
+  if (classicLook()) {
+    r = r.reduced(4.f, 1.f);
+    if (kind == "key") { r = r.withTrimmedBottom(4.f); if (down || b.getToggleState()) r = r.translated(0.f, 3.f); }
+    else if (down) r = r.translated(0.f, 1.f);
+    return r;
+  }
+  r = r.reduced(0.5f);
+  const float inset = juce::jlimit(1.5f, 3.f, r.getHeight() * 0.1f);
+  auto c = r.reduced(inset);
+  return (down || b.getToggleState()) ? c.withTrimmedTop(1.f) : c.withTrimmedBottom(1.5f);
+}
+
+juce::Colour AirLookAndFeel::legendColour(juce::Button& b, bool down) {
+  const auto kind = b.getProperties()["kind"].toString();
+  juce::Colour col;
+  if (kind == "flat") col = Theme::dim();
+  else if (isSwitch(b)) {
+    bool coloured; const auto cap = capColour(b, coloured);
+    col = b.getToggleState() ? cap.interpolatedWith(juce::Colours::white, 0.35f) : Theme::dim();
+  } else if (classicLook()) {
+    col = b.findColour(juce::TextButton::textColourOffId);
+    if (b.getToggleState()) { juce::Colour a, c, txt, gl; litColours(kind, a, c, txt, gl); col = txt; }
+  } else if (consoleLit(b, down)) {
+    col = consoleFace(b, down).getPerceivedBrightness() > 0.55f ? juce::Colour(0xff1a1206) : juce::Colours::white;
+  } else {
+    bool coloured; const auto cap = capColour(b, coloured);
+    col = coloured ? cap.interpolatedWith(juce::Colours::white, 0.45f) : b.findColour(juce::TextButton::textColourOffId);
+  }
+  return b.isEnabled() ? col : col.withMultipliedAlpha(0.7f);
 }
 
 void AirLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool down) {
@@ -70,16 +137,26 @@ void AirLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, co
     g.setColour(over ? T().amd() : juce::Colours::black); g.drawRoundedRectangle(r, 3.f, 1.f);
     return;
   }
-  if (kind == "key") {  // deck menu keys: the transport keys' look at button size
-    auto& t = T();
+  if (isSwitch(b)) {  // bat-handle toggle under a small printed label
+    bool coloured; const auto cap = capColour(b, coloured);
+    auto sw = b.getLocalBounds().toFloat();
+    switchLabel(sw);  // (removed from the top; the legend goes there)
+    T().drawToggleSwitch(g, sw.reduced(1.f, 0.f), b.getToggleState(), cap, over && b.isEnabled());
+    return;
+  }
+  if (!classicLook()) {  // console: coloured cap in a bezel
+    T().drawConsoleButton(g, r, consoleFace(b, down), consoleLit(b, down), down || b.getToggleState(), over, b.isEnabled());
+    return;
+  }
+  if (kind == "key") {  // deck menu keys: the transport keys' look at button size (classic)
     const bool on = b.getToggleState(), pressed = on || down;
     auto k = r.withTrimmedBottom(4.f);
     const float kc = T().rad(4.f);
     if (!pressed) { g.setColour(juce::Colour(0xff070708)); g.fillRoundedRectangle(k.translated(0, 2), kc);
                     g.setColour(juce::Colours::black.withAlpha(0.7f)); g.fillRoundedRectangle(k.translated(0, 4), kc); }
     else k = k.translated(0, 3);
+    auto& t = T();
     if (on) {
-      t.drawGlow(g, k, t.am(), 14.f, 0.5f);
       juce::ColourGradient cg(t.c(0xffffe3a3), 0, k.getY(), t.c(0xffe3952a), 0, k.getBottom(), false); cg.addColour(0.45, t.c(0xffffbe55));
       g.setGradientFill(cg);
     } else {
@@ -99,7 +176,6 @@ void AirLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, co
   const bool on = b.getToggleState();
   if (on) {
     juce::Colour top, bot, txt, glow; litColours(kind, top, bot, txt, glow);
-    T().drawGlow(g, r, glow, 12.f, 0.33f);
     g.setGradientFill(juce::ColourGradient(top, r.getX(), r.getY(), bot, r.getX(), r.getBottom(), false));
     g.fillRoundedRectangle(r, corner);
     g.setColour(juce::Colour(0x66ffffff)); g.drawHorizontalLine((int)r.getY() + 1, r.getX() + 2, r.getRight() - 2);
@@ -121,15 +197,10 @@ juce::Font AirLookAndFeel::getTextButtonFont(juce::TextButton& b, int) {
 
 void AirLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& b, bool, bool down) {
   auto font = getTextButtonFont(b, b.getHeight());
-  g.setFont(font);
-  juce::Colour col = b.findColour(juce::TextButton::textColourOffId);
-  if (b.getToggleState()) { juce::Colour a, c, txt, gl; litColours(b.getProperties()["kind"].toString(), a, c, txt, gl); col = txt; }
-  if (!b.isEnabled()) col = col.withMultipliedAlpha(0.75f);
-  if (b.getProperties()["kind"].toString() == "flat") col = Theme::dim();
   auto text = b.getButtonText();
   if (!b.getProperties()["noUpper"]) text = text.toUpperCase();
-  auto r = b.getLocalBounds().reduced(4, 1);
   if (b.getProperties()["kind"].toString() == "lcd") {
+    auto r = b.getLocalBounds().reduced(4, 1);
     g.setFont(Theme::monoFont((float)b.getProperties().getWithDefault("fontH", 11.0), false));
     auto arrow = r.removeFromRight(10);
     T().drawGlowText(g, text, r.toFloat().withTrimmedLeft(3.f), juce::Justification::centredLeft, T().am(), 0.5f);
@@ -137,16 +208,21 @@ void AirLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& b, bool
     g.drawText(juce::String(juce::CharPointer_UTF8("\xe2\x96\xbe")), arrow, juce::Justification::centred);
     return;
   }
-  if (b.getProperties()["kind"].toString() == "key") {  // follows the key face (see drawButtonBackground)
-    r = r.withTrimmedBottom(4);
-    if (down || b.getToggleState()) r = r.translated(0, 3);
-  } else if (down) r = r.translated(0, 1);
-  g.setColour(col);
-  g.drawFittedText(text, r, juce::Justification::centred, 3, 0.7f);
+  auto r = legendArea(b, down);
+  if (isSwitch(b)) font = Theme::spaced(Theme::uiFont(juce::jmin(10.f, r.getHeight()), true), 0.06f);
+  g.setFont(font);
+  g.setColour(legendColour(b, down));
+  g.drawFittedText(text, r.toNearestInt().reduced(classicLook() || isSwitch(b) ? 0 : 2, 0), juce::Justification::centred, 3, 0.7f);
 }
 
 void AirLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& b, bool over, bool) {
   auto r = b.getLocalBounds().toFloat();
+  if (T().buttons == "toggle") {  // a small bat-handle switch in place of the tick box
+    T().drawToggleSwitch(g, r.removeFromLeft(r.getHeight() * 0.9f).reduced(1.f), b.getToggleState(), T().am(), over);
+    g.setColour(Theme::tx()); g.setFont(Theme::uiFont(13.f));
+    g.drawText(b.getButtonText(), r.withTrimmedLeft(4.f), juce::Justification::centredLeft, true);
+    return;
+  }
   auto box = r.removeFromLeft(r.getHeight()).reduced(r.getHeight() * 0.22f);
   g.setColour(juce::Colour(0xff080808)); g.fillRoundedRectangle(box, 3.f);
   g.setColour(over ? T().amd() : juce::Colour(0xff3a3a3c)); g.drawRoundedRectangle(box, 3.f, 1.f);

@@ -132,6 +132,7 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   void showMidiMappings();
 
   int dockHeight_ = 330;
+  int dockHeightIns_ = 0;  // the meter dock's height while the insert panel is open (0: what the panel leaves)
   bool dockShown_ = true;
   juce::File sessionFile_;  // empty = unsaved "Untitled"
   std::unique_ptr<airdaw::AutoSaver> autoSaver_;

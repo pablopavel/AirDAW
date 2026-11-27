@@ -214,7 +214,6 @@ void TakesBar::Chip::paint(juce::Graphics& g) {
   auto& t = T();
   auto r = getLocalBounds().toFloat().reduced(0.5f);
   if (active) {
-    t.drawGlow(g, r, t.am(), 12.f, 0.35f);
     g.setGradientFill(juce::ColourGradient(t.c(0xffffc46b), 0, r.getY(), t.c(0xffd98e24), 0, r.getBottom(), false));
   } else g.setGradientFill(juce::ColourGradient(juce::Colour(0xff3c3c3f), 0, r.getY(), juce::Colour(0xff262628), 0, r.getBottom(), false));
   g.fillRoundedRectangle(r, T().rad(4.f));

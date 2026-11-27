@@ -6,7 +6,7 @@
 
 using ui::T;
 static constexpr int kMeterSlot = 7;  // last master insert slot: the meter listens to the final mix
-static constexpr int kFooterH = 26, kOverviewH = 100, kMixerMin = 480;
+static constexpr int kFooterH = 26, kOverviewH = 100, kMixerMin = 380, kInsertsMin = 150, kDockMin = 150;
 
 // Recreates hosted plugins from session ids ("vst3:<path>"); Airwindows effects are built in.
 static std::unique_ptr<airdaw::InsertProcessor> pluginFactory(const std::string& id, double sr) {
@@ -71,6 +71,7 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   ctx_.removeTrack = [this](int t) { removeTrack(t); };
   mixer_.onRemovedChanged = [this] { setProjectValue("removedTracks", mixer_.removedTracks()); };
   ctx_.isCardOpen = [this](int ch, int slot) { return inserts_.isOpen(ch, slot); };
+  ctx_.insertPanelChannel = [this] { return inserts_.isVisible() ? inserts_.channel() : -1; };
   ctx_.layoutChanged = [this] { resized(); };
   ctx_.openPluginWindow = [this](int ch, int slot) { openPluginWindow(ch, slot); };
   mixer_.master().onResetLoudness = [this] { resetMeters(); };
@@ -102,8 +103,15 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   };
   dock_.onLoadMeter = [this] { chooseMeterPlugin(); };
   inserts_.setVisible(false);
-  splitter_.current = [this] { return dockHeight_; };
-  splitter_.onDrag = [this](int h) { dockHeight_ = juce::jlimit(150, 900, h); props_->setValue("dockHeight", dockHeight_); resized(); };
+  // The divider drags from the height the dock has on screen. With the insert panel open the dock keeps a height of
+  // its own, so it can be resized there too without changing its usual height.
+  splitter_.current = [this] { return dock_.isVisible() ? dock_.getHeight() + 10 : inserts_.isVisible() ? dockHeightIns_ : dockHeight_; };
+  splitter_.onDrag = [this](int h) {
+    h = juce::jlimit(kDockMin, 1400, h);
+    if (inserts_.isVisible()) { dockHeightIns_ = h; props_->setValue("dockHeightIns", h); }
+    else { dockHeight_ = h; props_->setValue("dockHeight", h); }
+    resized();
+  };
   splitter_.onDragState = [this](bool on) { dock_.setLiveResize(on); };
   splitter_.setTooltip("Drag to resize the meter section");
   display_.setVisible(false);
@@ -119,6 +127,7 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   inserts_.setVisible(false);
 
   dockHeight_ = props_->getIntValue("dockHeight", 330);
+  dockHeightIns_ = props_->getIntValue("dockHeightIns", 0);
   dockShown_ = props_->getBoolValue("dockShown", true);
   autoOn_ = props_->getBoolValue("autosaveOn", false);
   const int secs[] = {0, 60, 120, 300, 600, 900, 1800};
@@ -186,7 +195,7 @@ void MainComponent::applyTheme() {
   if (!snapshotMode_) T().save(*props_);
   display_.syncFromTheme();
   sendLookAndFeelChange();
-  resized(); deck_.resized();  // trim width, reels
+  resized(); deck_.resized(); mixer_.restyle();  // trim width, strip rows (Buttons option)
   if (!T().pixelShift) setTransform({});
   if (auto* top = getTopLevelComponent()) top->repaint();
   if (settings_) settings_->repaint();
@@ -269,14 +278,23 @@ void MainComponent::resized() {
                             juce::jmin(pluginsPanel_.preferredHeight(), getHeight() - deck_.getBottom() - 20));
   r = r.reduced(12, 0);
   r.removeFromTop(10);
-  // Space is shared mixer-first: the meter dock gives way, then the insert panel scrolls.
-  int avail = r.getHeight() - 10;
-  int ins = 0;
-  // Compact strips (slot list folded) still show a usable fader at ~400 px, so the panel may push the mixer down to that.
-  if (inserts_.isVisible()) ins = juce::jmin(inserts_.preferredHeight(), juce::jmax(150, juce::jmin(avail * 2 / 5, avail - 400 - 10)));
-  int dock = 0;
-  if (dockShown_) dock = juce::jmin(dockHeight_, avail - ins - (ins ? 10 : 0) - kMixerMin - 14);
-  if (dock < 150) dock = 0;
+  // Space is shared mixer-first (it keeps kMixerMin). Without the insert panel the dock gets its height. With it, the
+  // dock keeps a height of its own (dragged there; by default what the panel leaves, at least kDockMin) and the panel
+  // gets the rest up to what it needs (it scrolls when it gets less).
+  const int avail = r.getHeight() - 10;
+  int ins = 0, dock = 0;
+  if (inserts_.isVisible()) {
+    const int insPref = inserts_.preferredHeight();
+    if (dockShown_) {
+      int want = dockHeightIns_ > 0 ? dockHeightIns_ : juce::jmin(dockHeight_, avail - kMixerMin - insPref - 24);
+      dock = juce::jmin(juce::jmax(kDockMin, want), avail - kMixerMin - kInsertsMin - 24);
+      if (dock < kDockMin) dock = 0;
+    }
+    ins = juce::jmin(insPref, juce::jmax(kInsertsMin, avail - kMixerMin - 10 - (dock > 0 ? dock + 14 : 0)));
+  } else if (dockShown_) {
+    dock = juce::jmin(dockHeight_, avail - kMixerMin - 14);
+    if (dock < kDockMin) dock = 0;
+  }
   if (inserts_.isVisible()) { inserts_.setBounds(r.removeFromTop(ins)); r.removeFromTop(10); }
   listenRow_.setVisible(listen_);
   if (listen_) {  // Listen mode: big master left; reference suite top right; every other tool in a row below
@@ -1016,8 +1034,15 @@ void MainComponent::restoreProjectReference(bool adoptGlobal) {
 }
 
 // ---------------------------------------------------------------- snapshots (test hook)
-void MainComponent::runScenario(const juce::String& name) {
+void MainComponent::runScenario(const juce::String& nameIn) {
   auto* e = bridge_.engine(); if (!e) return;
+  // test hook: "<scenario>@key=value,key=value" sets Display options first (e.g. "inserts@btn=toggle,font=industrial")
+  const juce::String name = nameIn.upToFirstOccurrenceOf("@", false, false);
+  if (nameIn.containsChar('@')) {
+    for (auto& kv : juce::StringArray::fromTokens(nameIn.fromFirstOccurrenceOf("@", false, false), ",", ""))
+      T().setOption(kv.upToFirstOccurrenceOf("=", false, false), kv.fromFirstOccurrenceOf("=", false, false));
+    applyTheme();
+  }
   if (name == "asis") return;  // test hook: picture the window exactly as it opened (e.g. a project from the command line)
   if (name == "open") { openSessionFile(juce::File(juce::SystemStats::getEnvironmentVariable("AIRDAW_OPEN", {}))); return; }  // test hook
   const char* names[] = {"Kick", "Snare", "OH L", "OH R", "Bass DI", "Gtr L", "Gtr R", "Keys"};
@@ -1144,6 +1169,13 @@ void MainComponent::runScenario(const juce::String& name) {
     tools_.removeFromSuite("rta", 0);
     tools_.toggleMinimised("target");
   }
+  if (name == "many-inserts") {  // test hook: a chain longer than the old 8 slots
+    const char* fx[] = {"Console7Channel", "Pressure5", "Density3", "ToTape8", "Galactic3", "ADClip8", "Density2", "Pressure5",
+                        "ToTape8", "Console7Buss", "Density3", "ADClip8"};
+    for (int s = 0; s < 12; ++s) e->setInsert(0, s, fx[s]);
+    T().inserts = "rack"; inserts_.show(0, -1);
+  }
+  if (name == "widetools") { for (auto& id : tools_.suite()) tools_.setWidth(id, 1500); dock_.rebuildSuite(); }  // every tool dragged too wide
   if (name == "widemeter") dock_.setMeterWidth(1300);  // meter dragged most of the way across
   if (name == "fullmeter") dock_.setMeterWidth(5000);  // all the way
   if (name == "foldmeter") dock_.setMeterWidth(1580);  // two tools folded into tabs, one still open

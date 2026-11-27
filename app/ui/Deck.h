@@ -1,4 +1,4 @@
-// Top deck (mockup #deck): logo + reels + position LCD | transport keys | readouts + buttons.
+// Top deck (mockup #deck): logo + position LCD | transport keys | readouts + buttons.
 #pragma once
 #include "AppCtx.h"
 #include "Widgets.h"
@@ -53,7 +53,6 @@ class Deck : public juce::Component {
   juce::TextButton projectBtn{juce::String(juce::CharPointer_UTF8("Project \xe2\x96\xbe"))};
  private:
   AppCtx& ctx_;
-  Reels reels_;
   Lcd pos_{"Position", 40.f}, rate_{"Rate / depth", 15.f}, lat_{"Latency", 15.f}, dsp_{"DSP", 15.f};
   TransportKeys keys_;
   juce::TextButton tap_;

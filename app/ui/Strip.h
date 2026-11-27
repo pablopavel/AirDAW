@@ -39,17 +39,13 @@ class Strip : public juce::Component {
   void chooseInput();
   void chooseRoute();
   void chooseTake();
-  void layoutSlots();
   AppCtx& ctx_;
   const int id_;
   NamePlate plate_;
   juce::TextButton chn_, in_, route_, m_{"M"}, s_{"S"}, t_{"T"}, r_{"R"}, pol_;
   MonitorButton mon_;
   GainKnob gain_;
-  std::array<InsertSlot, airdaw::kMaxInserts> slots_;
-  InsertSlot summary_;  // compact mode (short window): one row "N inserts" instead of the slot list
-  int shownSlots_ = 4, used_ = 0;
-  bool compact_ = false;
+  InsertSlot ins_;  // the one Inserts button: opens the channel's insert panel
   PanSlider pan_;
   FaderBlock fader_;
 };
@@ -77,8 +73,7 @@ class MasterStrip : public juce::Component {
  private:
   AppCtx& ctx_;
   NamePlate plate_;
-  std::array<InsertSlot, airdaw::kMaxInserts> slots_;
-  int shownSlots_ = 4;
+  InsertSlot ins_;
   VuMeter vuL_{"VU L"}, vuR_{"VU R"};
   MiniReadout lm_{"LUFS M"}, ls_{"LUFS S"}, li_{"LUFS I"}, tp_{"TRUE PK"}, rms_{"RMS"}, clip_{"CLIP"};
   CorrBar corr_;

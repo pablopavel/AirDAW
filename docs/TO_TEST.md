@@ -3,7 +3,28 @@
 Built and covered by the engine tests and snapshot checks, but not yet tried with real hardware and real recordings.
 When something works, it is removed from this list; when it doesn't, it gets a note and a fix.
 
-Last updated: 2026-11-26
+Last updated: 2026-11-27
+
+## Controls, inserts and layout (new)
+- [ ] Menu keys in the deck are grey console buttons that light in the accent while pressed; Listen / Meters / Display /
+      MIDI Learn stay lit when on. No square glow round a lit key.
+- [ ] Bigger AIRDAW logo; no tape reels in the deck any more (the position readout takes their place).
+- [ ] Display > Hardware > Buttons: Console (default: coloured caps, M amber, S blue, monitor green, T violet, R red, dim when
+      off), Toggles (strip M / S / monitor / T / R as bat-handle switches with a label and LED; Settings tick boxes as switches),
+      Classic (the old keys). Each switch still toggles and still answers MIDI Learn.
+- [ ] Knobs: Chrome, Knurled, Skirted, Bakelite, Soft touch, Ivory, Gold (gain knobs and insert-card knobs). Faders: Chrome,
+      Black, Console grey, Cream, Red, Wood (grooved caps with a soft shadow).
+- [ ] Typefaces: Modern, Industrial, Condensed, Grotesque, Humanist, Engraved, Typewriter, Tape label all look different;
+      nothing important is cut off with the wider ones.
+- [ ] Each strip (and the master) has one INSERTS button: the number of plugins on the right, LED lit while one runs,
+      outlined while the insert panel shows that channel, the plugin list in its tooltip; click opens the panel.
+- [ ] More than 8 inserts on one channel (up to 32): load 10 or more, they all process, save and reopen keeps them all.
+      Reordering a long chain by drag still works.
+- [ ] Insert panel: a plain X at the left and one at the right (centred in its column, halfway down); no "AIRDAW 500 / SLOTS"
+      text on the rack rail.
+- [ ] With the insert panel open, the meter dock stays (when the window has room) and its divider resizes it; that height is
+      remembered separately from the height without the insert panel.
+- [ ] Dragging the dividers between reference tools: no tool slides off the right end; the last tool stops at its minimum width.
 
 ## Removing tracks (new)
 - [ ] Right-click a track's name: Rename…, Show inserts, Remove track…. Remove asks first (it says how many takes leave the project).
@@ -12,7 +33,7 @@ Last updated: 2026-11-26
 - [ ] Save, reopen: removed tracks stay removed; another project has its own set. The recorded files are still in the project folder.
 - [ ] Removing an armed track while recording is refused with a note.
 
-## Rack, reels and icon (new)
+## Rack and icon (new)
 - [ ] Display > Hardware > Inserts: Cards (the default, the original insert cards) or Rack; switching changes an open insert panel straight away
       and is remembered after a restart.
 - [ ] Insert rack (Inserts: Rack): modules stand side by side in a chassis with wood cheeks; the faceplate finish follows the plugin's category
@@ -22,8 +43,6 @@ Last updated: 2026-11-26
 - [ ] Preset readout menu: Default, your saved presets, "Save current settings as a preset…", Delete preset ▸. The readout shows the last preset applied.
 - [ ] Rack knobs: drag and mouse wheel; MIDI learn on a rack knob.
 - [ ] A hosted VST3 module: "Open plugin window" still opens it.
-- [ ] Reels ("Amber Night"): the aluminium reels turn while playing (the left, full one slower) while their highlights stay put;
-      the lamp flickers now and then; the small REC lamp under the plate pulses red only while recording; no extra CPU in the DSP readout.
 - [ ] App icon (Scope A) on the taskbar, title bar, Alt+Tab and AirDAW.exe in Explorer. A pinned taskbar shortcut may keep the
       old icon until it is unpinned and pinned again (Windows caches icons).
 - [ ] Song overview: the playhead's glow sits evenly on both sides of the line while it moves.
