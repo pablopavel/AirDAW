@@ -55,7 +55,11 @@ void TransportKeys::paint(juce::Graphics& g) {
       const bool rec = k == Rec;
       juce::Colour a = rec ? juce::Colour(0xffffb4b4) : t.c(0xffffe3a3), b = rec ? juce::Colour(0xffff5a5f) : t.c(0xffffbe55),
                    c = rec ? juce::Colour(0xffc22b30) : t.c(0xffe3952a);
-      t.drawGlow(g, r, rec ? juce::Colour(0xffe5484d) : t.am(), 24.f, 0.75f);
+      {  // the glow inside the key's own area (its corners); the glow over the neighbours comes after all keys
+        juce::Graphics::ScopedSaveState ss(g);
+        g.reduceClipRegion(r.toNearestInt());
+        t.drawSoftGlow(g, r, rec ? juce::Colour(0xffe5484d) : t.am(), 24.f, 0.75f);
+      }
       juce::ColourGradient cg(a, 0, r.getY(), c, 0, r.getBottom(), false); cg.addColour(0.45, b);
       g.setGradientFill(cg);
     } else {
@@ -75,7 +79,7 @@ void TransportKeys::paint(juce::Graphics& g) {
     const auto c = r.getCentre();
     if (k == Rec) {
       juce::Rectangle<float> d(c.x - 13, c.y - 13, 26, 26);
-      t.drawGlow(g, d.reduced(3), juce::Colour(0xffe5484d), 12.f, 0.7f);
+      t.drawSoftGlow(g, d.reduced(3), juce::Colour(0xffe5484d), 12.f, 0.7f);
       g.setGradientFill(juce::ColourGradient(juce::Colour(0xffff9a9a), d.getX() + 9, d.getY() + 8, juce::Colour(0xffa81e24),
                                              d.getRight(), d.getBottom(), true));
       g.fillEllipse(d);
@@ -93,6 +97,14 @@ void TransportKeys::paint(juce::Graphics& g) {
     }
     if (bl && !on) drawFrostedLegend(g, p, lc, L);
     else { g.setColour(on ? juce::Colour(0xff2a1800) : Theme::cream()); g.fillPath(p); }
+  }
+  // An engaged key's glow spills over its neighbours on both sides alike: drawn after every key, outside the key itself.
+  for (int k = 0; k < kNum; ++k) {
+    if (!lit_[k]) continue;
+    const auto r = keyRect(k).translated(0, 3);
+    juce::Graphics::ScopedSaveState ss(g);
+    g.excludeClipRegion(r.toNearestInt());
+    t.drawSoftGlow(g, r, k == Rec ? juce::Colour(0xffe5484d) : t.am(), 24.f, 0.75f);
   }
 }
 

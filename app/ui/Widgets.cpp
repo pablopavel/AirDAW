@@ -110,7 +110,7 @@ void PanSlider::paint(juce::Graphics& g) {
   g.setColour(juce::Colour(0x12ffffff)); g.drawRoundedRectangle(track, 2.f, 1.f);
   const float x = juce::jmap(v_, -1.f, 1.f, r.getX() + 7.5f, r.getRight() - 7.5f);
   juce::Rectangle<float> th(x - 7.5f, cy - 7.5f, 15.f, 15.f);
-  t.drawGlow(g, th.reduced(2.5f), t.am(), 9.f, 0.7f);
+  t.drawGlow(g, th.reduced(2.5f), t.am(), 9.f, 0.7f, th.reduced(2.5f).getWidth() / 2.f);  // round, like the thumb
   g.setColour(juce::Colours::black.withAlpha(0.7f)); g.fillEllipse(th.translated(0.f, 2.f));
   g.setGradientFill(juce::ColourGradient(t.c(0xffffe9bd), th.getX() + 5.f, th.getY() + 4.f, t.am(), th.getCentreX(), th.getBottom(), true));
   g.fillEllipse(th);

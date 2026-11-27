@@ -90,9 +90,13 @@ class GainKnob : public DragControl {
 };
 
 // Pan: thin track with a centre tick and a glowing round thumb. -1..1.
+// The component is kGlowPad taller above and below than its row, so the thumb's glow is not cut off; only the row
+// itself takes clicks.
 class PanSlider : public DragControl {
  public:
   PanSlider() { setRange(-1.f, 1.f, 0.f); horizontal = true; pixelsForRange = 110.f; wheelStep = 0.06f; }
+  static constexpr int kGlowPad = 9;  // fits the glow up to the Max setting
+  bool hitTest(int, int y) override { return y >= kGlowPad && y < getHeight() - kGlowPad; }
   void paint(juce::Graphics&) override;
 };
 

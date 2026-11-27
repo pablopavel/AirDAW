@@ -77,6 +77,8 @@ class Theme : public juce::ChangeBroadcaster {
   // (`corner` < 0: the Corners setting's small radius) and fades out evenly, so no square halo shows round round things.
   void drawGlow(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour col, float radius, float alpha = 0.55f,
                 float corner = -1.f) const;
+  // The original soft blurred glow (a drop shadow round the rectangle). The transport keys keep this look.
+  void drawSoftGlow(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour col, float radius, float alpha = 0.55f) const;
   // Text with an LCD-style glow halo.
   void drawGlowText(juce::Graphics& g, const juce::String& s, juce::Rectangle<float> r, juce::Justification j,
                     juce::Colour col, float glowAmt = 1.f) const;

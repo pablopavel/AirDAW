@@ -262,6 +262,13 @@ void Theme::drawGlow(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour c
   g.setColour(col.withAlpha(a)); g.fillRoundedRectangle(r, c0);
 }
 
+void Theme::drawSoftGlow(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour col, float radius, float alpha) const {
+  if (glow <= 0.f) return;
+  const int rad = glowRadius(radius);
+  if (rad <= 0) return;
+  juce::DropShadow(col.withAlpha(glowAlpha(alpha)), rad, {}).drawForRectangle(g, r.toNearestInt());
+}
+
 void Theme::drawGlowText(juce::Graphics& g, const juce::String& s, juce::Rectangle<float> r, juce::Justification j,
                          juce::Colour col, float glowAmt) const {
   if (glow > 0.f && glowAmt > 0.f) {

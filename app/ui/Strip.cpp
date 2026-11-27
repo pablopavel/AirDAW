@@ -228,7 +228,7 @@ void Strip::resized() {
   gain_.setBounds(take(40));
   ins_.setBounds(take(22));
   route_.setBounds(take(26));
-  pan_.setBounds(take(20));
+  pan_.setBounds(take(20).expanded(0, PanSlider::kGlowPad));  // room for the thumb's glow (drawn over the rows around it)
   row = take(T().buttons == "toggle" ? 38 : 26);  // toggles: a printed label above each switch
   const int nb = isBus(id_) ? 2 : 5, bw = row.getWidth() / nb;
   for (juce::Button* b : {(juce::Button*)&m_, (juce::Button*)&s_, (juce::Button*)&mon_, (juce::Button*)&t_, (juce::Button*)&r_})
