@@ -20,11 +20,10 @@ class Lcd : public juce::Component, public juce::SettableTooltipClient {
   juce::String caption_, text_; float h_; juce::Colour col_;
 };
 
-// Cream name plate with a coloured bar (click = select, double-click = rename).
+// Cream name plate (click = inserts, double-click = rename, right-click = menu, drag = move the strip).
 class NamePlate : public juce::Component {
  public:
   void setName2(const juce::String& n) { if (n != name_) { name_ = n; repaint(); } }
-  void setColourBar(juce::uint32 c) { bar_ = c; repaint(); }
   void setRenamable(bool r) { renamable_ = r; }
   std::function<void()> onClick;
   std::function<void()> onMenu;  // right-click
@@ -41,7 +40,7 @@ class NamePlate : public juce::Component {
   void resized() override { if (ed_) ed_->setBounds(getLocalBounds()); }
  private:
   void finishEdit(bool ok);
-  juce::String name_; juce::uint32 bar_ = 0xff999999; bool renamable_ = true, dragged_ = false;
+  juce::String name_; bool renamable_ = true, dragged_ = false;
   std::unique_ptr<juce::TextEditor> ed_;
 };
 

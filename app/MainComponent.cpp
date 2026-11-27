@@ -368,6 +368,8 @@ bool MainComponent::keyPressed(const juce::KeyPress& k, juce::Component*) {
     if (display_.isVisible()) { toggleDisplayPanel(); return true; }
     if (pluginsPanel_.isVisible()) { togglePluginsPanel(); return true; }
     if (inserts_.isVisible()) { inserts_.close(); return true; }
+    auto& d = juce::Desktop::getInstance();  // nothing left to close: leave full screen
+    if (d.getKioskModeComponent() != nullptr) { d.setKioskModeComponent(nullptr, false); return true; }
   }
   return false;
 }
@@ -1207,6 +1209,14 @@ void MainComponent::runScenario(const juce::String& nameIn) {
     T().inserts = "rack"; inserts_.show(0, -1);
   }
   if (name == "strip-order") { mixer_.moveStrip(0, 3, true); mixer_.moveStrip(102, 100, false); }  // test hook: Kick after OH R, Bus 3 first
+  if (name == "fullscreen") juce::Desktop::getInstance().setKioskModeComponent(getTopLevelComponent(), false);  // test hook
+  if (name == "tempo-map") {  // test hook: tempo / time-signature changes on the bar ruler, the list as a child
+    e->metronome().bpm = 120.f; e->metronome().beatsPerBar = 4;
+    e->setTempoMap({{5, 140.f, 4}, {9, 96.f, 3}, {13, 120.f, 7}});
+    auto list = std::make_unique<ui::TempoList>(ctx_);
+    list->setBounds(dock_.getX() + 40, dock_.getY() - 200, 520, list->preferredHeight());
+    addAndMakeVisible(*list); testOverlay_ = std::move(list);
+  }
   if (name == "meter-info") {  // test hook: the meter's (i) panel, as a child so the picture shows it
     testOverlay_ = std::make_unique<ui::HitMeterInfo>();
     addAndMakeVisible(*testOverlay_);

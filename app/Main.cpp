@@ -46,6 +46,7 @@ class AirDawApp : public juce::JUCEApplication {
                                                  size.fromFirstOccurrenceOf("x", false, false).getIntValue());
     if (const auto f = projectArg(getCommandLineParameters()); f != juce::File()) window_->content->openOnStart(f);
     if (snap.isNotEmpty()) window_->content->takeSnapshot(juce::File(snap), arg("--scenario"));
+    else juce::Desktop::getInstance().setKioskModeComponent(window_.get(), false);  // opens full screen (Esc or the Full key leaves it)
   }
   void shutdown() override { window_.reset(); }
   void systemRequestedQuit() override { quit(); }

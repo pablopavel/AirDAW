@@ -23,7 +23,8 @@ Runs on Windows 11 with ASIO (tested with a Black Lion Revolution 2x2 at 96 kHz 
 
 - **Engine:** 24 tracks (mono/stereo), 4 buses, master; up to 32 inserts per channel (Airwindows or VST3), reorderable; fader, pan,
   gain, mute, solo, polarity; click-free ramps; lock-free insert changes; multi-core processing with bit-identical
-  output for any thread count; metronome (never recorded) with count-in and tap tempo.
+  output for any thread count; metronome (never recorded) with count-in, tap tempo, seven click sounds and a
+  tempo map (tempo / time-signature changes by bar, edited on a bar ruler or as a list).
 - **Recording:** lock-free disk writer (32-bit float WAV), punch in/out, loop passes as separate takes, input monitoring on
   armed tracks. Takes bar: keep / delete unkept, and **comping** (pick a take per loop region, adjustable crossfades,
   outside the regions the track's take or silence).

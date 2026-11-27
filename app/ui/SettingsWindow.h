@@ -3,15 +3,16 @@
 #pragma once
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "AppCtx.h"
+#include "Tempo.h"
 #include "Theme.h"
 
 namespace ui {
 
 class SettingsContent : public juce::Component, private juce::Timer {
  public:
-  SettingsContent(AppCtx& ctx) : ctx_(ctx), selector_(ctx.devices, 0, 2, 0, 2, true, false, true, false) {
+  SettingsContent(AppCtx& ctx) : ctx_(ctx), selector_(ctx.devices, 0, 2, 0, 2, true, false, true, false), tempo_(ctx) {
     for (juce::Component* c : std::initializer_list<juce::Component*>{&selector_, &tone_, &bpm_, &tap_, &beats_, &countIn_, &level_,
-                                                                      &autoSave_, &autoEvery_, &autoInfo_})
+                                                                      &sound_, &tempo_, &autoSave_, &autoEvery_, &autoInfo_})
       addAndMakeVisible(c);
     tone_.setButtonText("Test tone on track 1 (440 Hz, -15 dBFS)");
     tone_.onClick = [this] { ctx_.bridge.testTone = tone_.getToggleState(); if (tone_.getToggleState()) ctx_.requireAudio("Test tone"); };
@@ -24,6 +25,9 @@ class SettingsContent : public juce::Component, private juce::Timer {
     level_.setRange(-40.0, 0.0, 0.5); level_.setTextValueSuffix(" dB");
     for (int b = 1; b <= 12; ++b) beats_.addItem(juce::String(b) + "/4", b);
     countIn_.addItem("No count-in", 1); countIn_.addItem("Count-in 1 bar", 2); countIn_.addItem("Count-in 2 bars", 3);
+    for (int s = 0; s < airdaw::kNumClickSounds; ++s) sound_.addItem(airdaw::clickSoundName(s), s + 1);
+    sound_.onChange = [this] { apply(); };
+    tempo_.onHeightChanged = [this] { updateSize(); };
     bpm_.onValueChange = [this] { apply(); }; level_.onValueChange = [this] { apply(); };
     beats_.onChange = [this] { apply(); }; countIn_.onChange = [this] { apply(); };
     autoSave_.setButtonText("Auto-save every");
@@ -34,8 +38,9 @@ class SettingsContent : public juce::Component, private juce::Timer {
     autoInfo_.setColour(juce::Label::textColourId, Theme::dim());
     sync();
     startTimerHz(4);
-    setSize(640, 840);
+    updateSize();
   }
+  void updateSize() { setSize(640, 900 + tempo_.preferredHeight()); resized(); }
 
   std::function<void(bool on, int intervalId)> onAutoSave;
   std::function<juce::String()> autoSaveInfo;
@@ -48,6 +53,8 @@ class SettingsContent : public juce::Component, private juce::Timer {
     if (!level_.isMouseButtonDown()) level_.setValue(m.levelDb.load(), juce::dontSendNotification);
     beats_.setSelectedId(juce::jlimit(1, 12, m.beatsPerBar.load()), juce::dontSendNotification);
     countIn_.setSelectedId(juce::jlimit(0, 2, m.countInBars.load()) + 1, juce::dontSendNotification);
+    sound_.setSelectedId(juce::jlimit(0, airdaw::kNumClickSounds - 1, m.sound.load()) + 1, juce::dontSendNotification);
+    tempo_.sync();
     tone_.setToggleState(ctx_.bridge.testTone.load(), juce::dontSendNotification);
     if (autoSaveState) { auto [on, id] = autoSaveState(); autoSave_.setToggleState(on, juce::dontSendNotification);
                          autoEvery_.setSelectedId(id, juce::dontSendNotification); }
@@ -68,6 +75,11 @@ class SettingsContent : public juce::Component, private juce::Timer {
     g.drawText("Tempo (BPM)", 24, bpm_.getY(), 120, 26, juce::Justification::centredLeft);
     g.drawText("Beats / count-in", 24, beats_.getY(), 120, 26, juce::Justification::centredLeft);
     g.drawText("Click level", 24, level_.getY(), 120, 26, juce::Justification::centredLeft);
+    g.drawText("Click sound", 24, sound_.getY(), 120, 26, juce::Justification::centredLeft);
+    g.drawText("Tempo changes", 24, tempoY_, 140, 26, juce::Justification::centredLeft);
+    g.setFont(Theme::uiFont(12.f));
+    g.drawText("Bar 1 plays the tempo above; also on the overview's bar ruler (double-click a bar).", 24, tempoY_ + 22, getWidth() - 48, 20,
+               juce::Justification::centredLeft);
   }
 
   void resized() override {
@@ -82,6 +94,10 @@ class SettingsContent : public juce::Component, private juce::Timer {
     beats_.setBounds(row.removeFromLeft(80)); row.removeFromLeft(8); countIn_.setBounds(row.removeFromLeft(150));
     r.removeFromTop(8);
     level_.setBounds(r.removeFromTop(28).withTrimmedLeft(140).withWidth(300));
+    r.removeFromTop(8);
+    sound_.setBounds(r.removeFromTop(28).withTrimmedLeft(140).withWidth(160));
+    r.removeFromTop(10); tempoY_ = r.getY(); r.removeFromTop(48);
+    tempo_.setBounds(r.removeFromTop(tempo_.preferredHeight()).withTrimmedLeft(24));
     r.removeFromTop(22); autoY_ = r.getY(); r.removeFromTop(28);
     row = r.removeFromTop(28).withTrimmedLeft(8);
     autoSave_.setBounds(row.removeFromLeft(150)); autoEvery_.setBounds(row.removeFromLeft(100));
@@ -94,6 +110,7 @@ class SettingsContent : public juce::Component, private juce::Timer {
     auto& m = e->metronome();
     m.bpm = (float)bpm_.getValue(); m.levelDb = (float)level_.getValue();
     m.beatsPerBar = juce::jlimit(1, 16, beats_.getSelectedId()); m.countInBars = juce::jlimit(0, 4, countIn_.getSelectedId() - 1);
+    if (sound_.getSelectedId() > 0) m.sound = sound_.getSelectedId() - 1;
   }
   void timerCallback() override { sync(); }
   AppCtx& ctx_;
@@ -101,9 +118,10 @@ class SettingsContent : public juce::Component, private juce::Timer {
   juce::ToggleButton tone_, autoSave_;
   juce::TextButton tap_;
   juce::Slider bpm_, level_;
-  juce::ComboBox beats_, countIn_, autoEvery_;
+  juce::ComboBox beats_, countIn_, autoEvery_, sound_;
+  TempoList tempo_;
   juce::Label autoInfo_;
-  int metroY_ = 0, autoY_ = 0;
+  int metroY_ = 0, autoY_ = 0, tempoY_ = 0;
 };
 
 class SettingsWindow : public juce::DocumentWindow {
@@ -114,12 +132,19 @@ class SettingsWindow : public juce::DocumentWindow {
     if (wire) wire(*c);
     c->sync();
     setUsingNativeTitleBar(true);
-    setContentOwned(c, true);
+    // the page scrolls when it is taller than the window (a long tempo list)
+    view_.setViewedComponent(c, true);
+    view_.setScrollBarsShown(true, false);
+    view_.setSize(c->getWidth() + view_.getScrollBarThickness(), juce::jmin(c->getHeight(), 900));
+    setContentNonOwned(&view_, true);
     setResizable(true, false);
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
   }
+  ~SettingsWindow() override { clearContentComponent(); }  // the viewport is a member: let go of it first
   void closeButtonPressed() override { setVisible(false); }
+ private:
+  juce::Viewport view_;
 };
 
 }  // namespace ui

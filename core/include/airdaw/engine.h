@@ -49,7 +49,23 @@ struct Metronome {
   std::atomic<int> beatsPerBar{4};    // 1..16; beat 1 of each bar is accented
   std::atomic<float> levelDb{-6.f};   // click level at the output
   std::atomic<int> countInBars{0};    // 0..4 bars of click before recording starts (plays even if `enabled` is off)
+  std::atomic<int> sound{0};          // click sound, see ClickSound
 };
+enum ClickSound { kClickBeep = 0, kClickWoodblock, kClickClave, kClickCowbell, kClickStick, kClickHat, kClickSoft, kNumClickSounds };
+const char* clickSoundName(int sound);  // "Beep", "Woodblock", ...
+
+// Tempo map: tempo / time-signature changes at the start of a bar. Bar 1 always plays the metronome's own tempo and
+// beats per bar (so Tap and the Audio settings set it); each change takes over from its bar on. The click and the
+// bar ruler follow it. Published whole (setTempoMap) and kept alive, like takes and comps.
+struct TempoChange { int bar = 2; float bpm = 120.f; int beatsPerBar = 4; };  // bar: 1-based, >= 2
+constexpr int kMaxTempoChanges = 64;
+struct TempoMap { std::vector<TempoChange> changes; };  // sorted by bar, no duplicates, bars >= 2
+// The map as sections: where each starts (sample), samples per beat, beats per bar, first bar (0-based). Section 0 is
+// bar 1 with the metronome's tempo. `out` holds at least kMaxTempoChanges + 1; returns the number of sections.
+struct TempoSection { double start, beat; int bpb, bar; };
+int tempoSections(const TempoMap* m, double bpm0, int bpb0, double sampleRate, TempoSection* out);
+double barAtSample(const TempoSection* s, int n, double sample);  // 0 = start of bar 1 (fractional)
+double sampleAtBar(const TempoSection* s, int n, double bar);
 
 // A reference track for A/B listening: decoded stereo audio at the engine's sample rate.
 struct Reference {
@@ -131,6 +147,9 @@ class Engine {
   // --- transport & recording (UI thread) ---
   Transport& transport() { return transport_; }
   Metronome& metronome() { return metro_; }
+  // Replaces the tempo map (sorted and cleaned up here; empty = one tempo all the way). UI thread.
+  void setTempoMap(std::vector<TempoChange> changes);
+  const TempoMap* tempoMap() const { return tempo_.load(); }  // null: no changes
   Monitor& monitor() { return mon_; }
   // Installs a reference track (UI thread). The previous one stays in memory until the engine is destroyed,
   // because the audio thread may still be reading it. nullptr removes the reference.
@@ -227,6 +246,8 @@ class Engine {
   double sr_;
   Transport transport_;
   Metronome metro_;
+  std::atomic<const TempoMap*> tempo_{nullptr};
+  std::vector<std::unique_ptr<TempoMap>> tempoMaps_;  // every map published (the audio thread may still read one)
   std::unique_ptr<DiskWriter> writer_;
   std::array<std::vector<std::unique_ptr<Take>>, kMaxTracks> takes_;
   std::array<int, kMaxTracks> takeBase_{};  // first take of the current session's list

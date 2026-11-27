@@ -1,8 +1,10 @@
 #include "Overview.h"
+#include "Tempo.h"
 
 namespace ui {
 
 static constexpr int kBuckets = 600;
+static constexpr float kRulerH = 17.f;
 
 Overview::Overview(AppCtx& ctx) : ctx_(ctx) {
   addAndMakeVisible(elapsed_); addAndMakeVisible(total_);
@@ -62,6 +64,9 @@ void Overview::sync() {
   const auto li = tr.loopIn.load(), lo = tr.loopOut.load(); const bool lon = tr.loopOn.load();
   if (p > len_) { len_ = p * 1.25; waveKey_.clear(); }
   double nk = (double)ctx_.notes.items.size(); for (auto& n : ctx_.notes.items) nk += n.seconds;  // notes added / removed
+  if (e->tempoMap() != mapKey_ || e->metronome().bpm.load() != bpmKey_ || e->metronome().beatsPerBar.load() != bpbKey_) {
+    mapKey_ = e->tempoMap(); bpmKey_ = e->metronome().bpm.load(); bpbKey_ = e->metronome().beatsPerBar.load(); repaint();
+  }
   if (p != pos_ || li != loopIn_ || lo != loopOut_ || lon != loopOn_ || nk != notesKey_) {
     pos_ = p; loopIn_ = li; loopOut_ = lo; loopOn_ = lon; notesKey_ = nk; repaint();
   }
@@ -70,7 +75,76 @@ void Overview::sync() {
 }
 
 juce::Rectangle<float> Overview::bar() const {
-  return getLocalBounds().reduced(16, 8).withTrimmedLeft(92).withTrimmedRight(92).toFloat();
+  return getLocalBounds().reduced(16, 8).withTrimmedLeft(92).withTrimmedRight(92).toFloat().withTrimmedTop(kRulerH + 2.f);
+}
+juce::Rectangle<float> Overview::ruler() const {
+  return getLocalBounds().reduced(16, 8).withTrimmedLeft(92).withTrimmedRight(92).toFloat().withHeight(kRulerH);
+}
+
+int Overview::barAtX(float x) const {
+  auto* e = ctx_.engine(); if (!e) return 1;
+  airdaw::TempoSection sec[airdaw::kMaxTempoChanges + 1];
+  const int n = airdaw::tempoSections(e->tempoMap(), e->metronome().bpm.load(), e->metronome().beatsPerBar.load(), sr_, sec);
+  return 1 + (int)std::floor(airdaw::barAtSample(sec, n, sampleAt(x)) + 1e-9);
+}
+
+int Overview::markerAt(juce::Point<float> p) const {
+  for (auto it = markers_.rbegin(); it != markers_.rend(); ++it) if (it->r.expanded(3.f, 2.f).contains(p)) return it->bar;
+  return -1;
+}
+
+void Overview::editTempo(int bar, juce::Rectangle<int> near) {
+  juce::CallOutBox::launchAsynchronously(std::make_unique<TempoEditor>(ctx_, bar), localAreaToGlobal(near), nullptr);
+}
+
+juce::String Overview::getTooltip() {
+  const auto p = getMouseXYRelative().toFloat();
+  if (!ruler().expanded(0.f, 2.f).contains(p)) return {};
+  if (markerAt(p) > 1) return "Tempo change: click to edit, drag to move by bars, right-click to delete";
+  if (markerAt(p) == 1) return "Bar 1: the metronome's tempo (also set with Tap). Click to edit.";
+  return "Bars. Double-click a bar to add a tempo / time-signature change there.";
+}
+
+// The bar ruler: bar lines and numbers (as dense as there is room for), a marker for bar 1 and for each change.
+void Overview::paintRuler(juce::Graphics& g) {
+  auto& t = T();
+  auto* e = ctx_.engine(); if (!e) return;
+  const auto rr = ruler();
+  t.drawWell(g, rr, juce::Colour(0xff060504), 3.f);
+  airdaw::TempoSection sec[airdaw::kMaxTempoChanges + 1];
+  const int n = airdaw::tempoSections(e->tempoMap(), e->metronome().bpm.load(), e->metronome().beatsPerBar.load(), sr_, sec);
+  const double bars = juce::jmax(1.0, airdaw::barAtSample(sec, n, len_));
+  const double pxPerBar = rr.getWidth() / bars;
+  int step = 1; while (step * pxPerBar < 26.0 && step < 1024) step *= 2;
+  g.setFont(Theme::monoFont(9.5f, false));
+  juce::Graphics::ScopedSaveState ss(g);
+  g.reduceClipRegion(rr.toNearestInt());
+  for (int b = 0; b < 4096; ++b) {
+    const double s = airdaw::sampleAtBar(sec, n, (double)b);
+    if (s > len_) break;
+    const float x = xAt(s);
+    const bool major = b % step == 0;
+    if (!major && pxPerBar < 4.0) continue;
+    g.setColour(t.am().withAlpha(major ? 0.45f : 0.16f));
+    g.fillRect(x, major ? rr.getY() + 3.f : rr.getBottom() - 5.f, 1.f, major ? rr.getHeight() - 3.f : 5.f);
+    if (major) { g.setColour(t.amd()); g.drawText(juce::String(b + 1), juce::Rectangle<float>(x + 3.f, rr.getY(), 40.f, rr.getHeight()), juce::Justification::centredLeft, false); }
+  }
+  // markers: bar 1 (the metronome) and each change
+  markers_.clear();
+  float lastRight = -1e9f;
+  for (int k = 0; k < n; ++k) {
+    const float x = xAt(sec[k].start);
+    const float bpm = (float)(sr_ * 60.0 / sec[k].beat);
+    const auto txt = TempoEdit::label(bpm, sec[k].bpb);
+    const float w = juce::GlyphArrangement::getStringWidth(Theme::monoFont(10.f, false), txt) + 10.f;
+    juce::Rectangle<float> m(x, rr.getY() + 1.f, w, rr.getHeight() - 2.f);
+    const bool full = x > lastRight + 2.f;  // markers too close together show only their line
+    if (!full) m = m.withWidth(5.f);
+    g.setColour(juce::Colour(0xff1c1408)); g.fillRoundedRectangle(m, 2.f);
+    g.setColour(t.am().withAlpha(0.9f)); g.fillRect(m.getX(), m.getY(), 2.f, m.getHeight());
+    if (full) { g.setFont(Theme::monoFont(10.f, false)); t.drawGlowText(g, txt, m.withTrimmedLeft(5.f), juce::Justification::centredLeft, t.am(), 0.4f); lastRight = m.getRight(); }
+    markers_.push_back({k == 0 ? 1 : sec[k].bar + 1, m});
+  }
 }
 double Overview::sampleAt(float x) const {
   auto b = bar(); return juce::jlimit(0.0, len_, (double)(x - b.getX()) / b.getWidth() * len_);
@@ -140,16 +214,57 @@ void Overview::paint(juce::Graphics& g) {
     g.setColour(lc.withAlpha(loopOn_ ? 1.f : 0.5f));
     g.fillRect(x0 - 1.f, b.getY(), 2.f, b.getHeight()); g.fillRect(x1 - 1.f, b.getY(), 2.f, b.getHeight());
   }
+  // tempo changes: a faint line down through the waveform
+  if (auto* e = ctx_.engine(); e && e->tempoMap()) {
+    airdaw::TempoSection sec[airdaw::kMaxTempoChanges + 1];
+    const int n = airdaw::tempoSections(e->tempoMap(), e->metronome().bpm.load(), e->metronome().beatsPerBar.load(), sr_, sec);
+    g.setColour(t.am().withAlpha(0.22f));
+    for (int k = 1; k < n; ++k) { const float x = xAt(sec[k].start); if (x > b.getX() && x < b.getRight()) g.fillRect(x, b.getY(), 1.f, b.getHeight()); }
+  }
   g.setColour(juce::Colours::black); g.drawRoundedRectangle(b, T().rad(4.f), 1.f);
+  paintRuler(g);
+}
+
+void Overview::mouseDoubleClick(const juce::MouseEvent& e) {
+  auto* en = ctx_.engine(); if (!en || !ruler().expanded(0.f, 2.f).contains(e.position) || markerAt(e.position) > 0) return;
+  const int bar = barAtX(e.position.x);
+  if (bar >= 2 && !TempoEdit::has(*en, bar)) { const auto t = TempoEdit::at(*en, bar); TempoEdit::set(*en, bar, t.bpm, t.beatsPerBar); }
+  editTempo(juce::jmax(1, bar), juce::Rectangle<int>((int)e.position.x - 2, (int)ruler().getY(), 4, (int)kRulerH));
 }
 
 void Overview::mouseMove(const juce::MouseEvent& e) {
+  if (ruler().expanded(0.f, 2.f).contains(e.position)) {
+    setMouseCursor(markerAt(e.position) > 1 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::PointingHandCursor);
+    return;
+  }
   const bool nearEdge = loopOut_ > loopIn_ && (std::abs(e.position.x - xAt((double)loopIn_)) < 8.f || std::abs(e.position.x - xAt((double)loopOut_)) < 8.f);
   setMouseCursor(nearEdge ? juce::MouseCursor::LeftRightResizeCursor : bar().contains(e.position) ? juce::MouseCursor::PointingHandCursor
                                                                                                    : juce::MouseCursor::NormalCursor);
 }
 
 void Overview::mouseDown(const juce::MouseEvent& e) {
+  tempoDrag_ = -1; tempoMoved_ = false;
+  if (auto* en = ctx_.engine(); en && ruler().expanded(0.f, 2.f).contains(e.position)) {  // the bar ruler
+    drag_ = Drag::None;
+    const int m = markerAt(e.position);
+    if (e.mods.isPopupMenu()) {
+      juce::PopupMenu menu;
+      const int bar = m > 0 ? m : barAtX(e.position.x);
+      if (m > 0) { menu.addItem(1, juce::String(juce::CharPointer_UTF8("Editâ¦"))); if (m > 1) menu.addItem(2, "Delete change"); }
+      else if (bar >= 2) menu.addItem(3, "Add tempo change at bar " + juce::String(bar));
+      const auto near = juce::Rectangle<int>((int)e.position.x - 2, (int)ruler().getY(), 4, (int)kRulerH);
+      menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition(),
+                         [this, bar, near](int r) {
+                           auto* en2 = ctx_.engine(); if (!en2) return;
+                           if (r == 1) editTempo(bar, near);
+                           if (r == 2) TempoEdit::remove(*en2, bar);
+                           if (r == 3) { const auto t = TempoEdit::at(*en2, bar); TempoEdit::set(*en2, bar, t.bpm, t.beatsPerBar); editTempo(bar, near); }
+                         });
+      return;
+    }
+    if (m > 0) tempoDrag_ = m;  // click: edit (on release); drag: move (not bar 1)
+    return;
+  }
   auto* en = ctx_.engine(); if (!en || !bar().expanded(0, 4).contains(e.position)) { drag_ = Drag::None; return; }
   if (loopOut_ > loopIn_ && std::abs(e.position.x - xAt((double)loopIn_)) < 8.f) drag_ = Drag::LoopIn;
   else if (loopOut_ > loopIn_ && std::abs(e.position.x - xAt((double)loopOut_)) < 8.f) drag_ = Drag::LoopOut;
@@ -159,6 +274,13 @@ void Overview::mouseDown(const juce::MouseEvent& e) {
 
 void Overview::mouseDrag(const juce::MouseEvent& e) {
   auto* en = ctx_.engine(); if (!en) return;
+  if (tempoDrag_ > 1 && e.getDistanceFromDragStart() > 3) {  // move the change by whole bars
+    const int to = juce::jmax(2, (int)std::lround(barAtX(e.position.x + 0.f)));
+    if (to != tempoDrag_ && TempoEdit::move(*en, tempoDrag_, to)) { tempoDrag_ = to; repaint(); }
+    tempoMoved_ = true;
+    return;
+  }
+  if (tempoDrag_ > 0) return;
   auto& tr = en->transport();
   const double s = sampleAt(e.position.x), minLen = sr_ * 0.25;
   switch (drag_) {
@@ -171,8 +293,12 @@ void Overview::mouseDrag(const juce::MouseEvent& e) {
   sync();
 }
 
-void Overview::mouseUp(const juce::MouseEvent&) {
+void Overview::mouseUp(const juce::MouseEvent& e) {
   auto* en = ctx_.engine();
+  if (tempoDrag_ > 0) {
+    if (!tempoMoved_) editTempo(tempoDrag_, juce::Rectangle<int>((int)e.position.x - 2, (int)ruler().getY(), 4, (int)kRulerH));
+    tempoDrag_ = -1; tempoMoved_ = false; return;
+  }
   if (en && drag_ == Drag::NewLoop) {
     auto& tr = en->transport();
     if ((double)(tr.loopOut.load() - tr.loopIn.load()) < sr_ * 0.25) { tr.loopIn = 0; tr.loopOut = 0; tr.loopOn = false; }

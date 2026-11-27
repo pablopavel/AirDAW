@@ -41,19 +41,101 @@ void Engine::startRecording(const std::string& folder) {
 
 double Engine::beatSamples() const { return sr_ * 60.0 / std::clamp((double)metro_.bpm.load(), 20.0, 400.0); }
 
-// Adds clicks for samples [pos, pos+n) of the beat grid that starts at sample 0. Stateless, so seeks,
-// loop wraps and block sizes cannot shift it. Beat 1 of a bar: 1500 Hz, other beats: 1000 Hz, ~30 ms decay.
+// ---------------- tempo map ----------------
+int tempoSections(const TempoMap* m, double bpm0, int bpb0, double sr, TempoSection* out) {
+  out[0] = {0.0, sr * 60.0 / std::clamp(bpm0, 20.0, 400.0), std::clamp(bpb0, 1, 16), 0};
+  int n = 1;
+  if (m)
+    for (auto& c : m->changes) {
+      if (n > kMaxTempoChanges) break;
+      const auto& p = out[n - 1];
+      const int bar = c.bar - 1;  // 0-based
+      if (bar <= p.bar) continue;
+      out[n++] = {p.start + (double)(bar - p.bar) * p.bpb * p.beat, sr * 60.0 / std::clamp((double)c.bpm, 20.0, 400.0),
+                  std::clamp(c.beatsPerBar, 1, 16), bar};
+    }
+  return n;
+}
+double barAtSample(const TempoSection* s, int n, double sample) {
+  int k = 0; while (k + 1 < n && sample >= s[k + 1].start) ++k;
+  return s[k].bar + (sample - s[k].start) / (s[k].beat * s[k].bpb);
+}
+double sampleAtBar(const TempoSection* s, int n, double bar) {
+  int k = 0; while (k + 1 < n && bar >= s[k + 1].bar) ++k;
+  return s[k].start + (bar - s[k].bar) * s[k].bpb * s[k].beat;
+}
+
+void Engine::setTempoMap(std::vector<TempoChange> changes) {
+  std::sort(changes.begin(), changes.end(), [](const TempoChange& a, const TempoChange& b) { return a.bar < b.bar; });
+  std::vector<TempoChange> clean;
+  for (auto c : changes) {
+    if (c.bar < 2 || (!clean.empty() && clean.back().bar == c.bar)) continue;
+    c.bpm = std::clamp(c.bpm, 20.f, 400.f); c.beatsPerBar = std::clamp(c.beatsPerBar, 1, 16);
+    clean.push_back(c);
+    if ((int)clean.size() == kMaxTempoChanges) break;
+  }
+  if (clean.empty()) { tempo_.store(nullptr); return; }
+  auto m = std::make_unique<TempoMap>(); m->changes = std::move(clean);
+  tempo_.store(m.get());
+  tempoMaps_.push_back(std::move(m));
+}
+
+// ---------------- click ----------------
+const char* clickSoundName(int s) {
+  static const char* names[kNumClickSounds] = {"Beep", "Woodblock", "Clave", "Cowbell", "Stick", "Hi-hat", "Soft"};
+  return s >= 0 && s < kNumClickSounds ? names[s] : names[0];
+}
+
+// One sample of a click, `t` seconds after its start (0..0.12 s). Pure functions of t (and the beat for the noise),
+// so the click stays stateless. Beat 1 of a bar is accented (higher, a little brighter).
+static float clickSample(int sound, bool accent, double t, uint64_t beat) {
+  constexpr double kTau = 6.283185307179586;
+  auto noise = [&](double tt) {  // repeatable white noise from the time and the beat
+    uint64_t x = (uint64_t)(tt * 192000.0) * 0x9E3779B97F4A7C15ull ^ (beat + 1) * 0xBF58476D1CE4E5B9ull;
+    x ^= x >> 31; x *= 0x94D049BB133111EBull; x ^= x >> 29;
+    return (double)(x >> 11) * (1.0 / 4503599627370496.0) - 1.0;
+  };
+  switch (sound) {
+    case kClickWoodblock: { const double f = accent ? 1850.0 : 1300.0;
+      return (float)(std::exp(-t / 0.011) * (std::sin(kTau * f * t) + 0.45 * std::exp(-t / 0.004) * std::sin(kTau * 2.63 * f * t)) * 0.9); }
+    case kClickClave: { const double f = accent ? 2700.0 : 2250.0;
+      return (float)(std::exp(-t / 0.018) * std::sin(kTau * f * t) * 0.85); }
+    case kClickCowbell: { const double k = accent ? 1.26 : 1.0;
+      const double a = std::tanh(3.0 * std::sin(kTau * 587.0 * k * t)) + 0.8 * std::tanh(3.0 * std::sin(kTau * 845.0 * k * t));
+      return (float)(std::exp(-t / (accent ? 0.06 : 0.045)) * a * 0.42); }
+    case kClickStick: { const double f = accent ? 2100.0 : 1700.0;
+      return (float)(std::exp(-t / 0.0025) * noise(t) * 0.9 + std::exp(-t / 0.008) * std::sin(kTau * f * t) * 0.5); }
+    case kClickHat: {
+      const double hp = noise(t) - noise(t - 1.0 / 192000.0);  // bright: a first difference of the noise
+      return (float)(std::exp(-t / (accent ? 0.04 : 0.022)) * hp * 0.5); }
+    case kClickSoft: { const double f = accent ? 880.0 : 660.0;
+      return (float)(std::min(1.0, t / 0.002) * std::exp(-t / 0.022) * std::sin(kTau * f * t) * 0.9); }
+    default: { const double f = accent ? 1500.0 : 1000.0;  // Beep: the original click
+      return (float)(std::exp(-t / 0.006) * std::sin(kTau * f * t)); }
+  }
+}
+
+// Adds clicks for samples [pos, pos+n) of the beat grid that starts at sample 0, following the tempo map. Stateless,
+// so seeks, loop wraps and block sizes cannot shift it.
 void Engine::addClick(float* l, float* r, int n, int64_t pos) {
-  const double beat = beatSamples(), clickLen = sr_ * 0.03, decay = sr_ * 0.006;
-  const int bpb = std::clamp(metro_.beatsPerBar.load(), 1, 16);
   const float amp = dbToLin(std::min(metro_.levelDb.load(), 6.f));
   if (amp <= 0.f) return;
+  TempoSection sec[kMaxTempoChanges + 1];
+  const int ns = tempoSections(tempo_.load(), metro_.bpm.load(), metro_.beatsPerBar.load(), sr_, sec);
+  const int sound = metro_.sound.load(std::memory_order_relaxed);
+  const double clickLen = sr_ * (sound == kClickBeep ? 0.03 : 0.12);
+  int k = 0;
   for (int i = 0; i < n; ++i) {
-    const double p = (double)(pos + i), b = std::floor(p / beat), off = p - b * beat;
+    const double p = (double)(pos + i);
+    while (k + 1 < ns && p >= sec[k + 1].start) ++k;
+    while (k > 0 && p < sec[k].start) --k;
+    const auto& s = sec[k];
+    const double b = std::floor((p - s.start) / s.beat), off = p - s.start - b * s.beat;
+    // (beats are at least 0.15 s apart and a click lasts at most 0.12 s, so one click never runs into the next)
     if (off >= clickLen) continue;
-    const double f = ((int64_t)b % bpb == 0) ? 1500.0 : 1000.0;
-    const float s = amp * (float)(std::exp(-off / decay) * std::sin(2.0 * 3.14159265358979 * f * off / sr_));
-    l[i] += s; r[i] += s;
+    const int64_t beatNo = (int64_t)b;
+    const float v = amp * clickSample(sound, beatNo % s.bpb == 0, off / sr_, (uint64_t)(beatNo + 1000 * k));
+    l[i] += v; r[i] += v;
   }
 }
 

@@ -26,7 +26,6 @@ void NamePlate::paint(juce::Graphics& g) {
   g.setGradientFill(juce::ColourGradient(Theme::cream().brighter(0.08f), 0.f, r.getY(), Theme::cream().darker(0.12f), 0.f, r.getBottom(), false));
   g.fillRoundedRectangle(r, T().rad(3.f));
   g.setColour(juce::Colours::white.withAlpha(0.5f)); g.drawHorizontalLine((int)r.getY(), r.getX() + 3.f, r.getRight() - 3.f);
-  if (T().trackColours) { g.setColour(T().c(bar_)); g.fillRoundedRectangle(r.getX() + 14.f, r.getBottom() - 3.f, r.getWidth() - 28.f, 3.f, 1.5f); }
   g.setColour(juce::Colour(0xff1b1b1b));
   g.setFont(Theme::spaced(Theme::uiFont(juce::jmin(15.f, r.getHeight() * 0.5f), true), 0.1f));
   g.drawFittedText(name_.toUpperCase(), getLocalBounds().reduced(4, 0).withTrimmedBottom(2), juce::Justification::centred, 1, 0.8f);

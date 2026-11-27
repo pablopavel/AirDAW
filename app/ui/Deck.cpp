@@ -1,4 +1,5 @@
 #include "Deck.h"
+#include "AirLookAndFeel.h"
 
 namespace ui {
 
@@ -165,6 +166,10 @@ void TransportKeys::drawFrostedLegend(juce::Graphics& g, const juce::Path& p, ju
 }
 
 void TransportKeys::mouseDown(const juce::MouseEvent& e) {
+  if (e.mods.isPopupMenu()) {
+    for (int k = 0; k < kNum; ++k) if (keyRect(k).contains(e.position) && onMenu) onMenu((Key)k);
+    down_ = -1; return;
+  }
   down_ = -1;
   for (int k = 0; k < kNum; ++k) if (keyRect(k).contains(e.position)) down_ = k;
   repaint();
@@ -174,14 +179,57 @@ void TransportKeys::mouseUp(const juce::MouseEvent& e) {
   if (k >= 0 && keyRect(k).contains(e.position) && onKey) onKey((Key)k);
 }
 
+// ---------------- IconKey ----------------
+void IconKey::paintButton(juce::Graphics& g, bool over, bool down) {
+  getLookAndFeel().drawButtonBackground(g, *this, {}, over, down);
+  const auto area = AirLookAndFeel::legendArea(*this, down);
+  const float s = juce::jmin(area.getWidth(), area.getHeight()) * 0.66f;
+  const auto c = area.getCentre();
+  g.setColour(AirLookAndFeel::legendColour(*this, down));
+  if (icon_ == Gear) {  // eight teeth round a hole
+    juce::Path p; p.setUsingNonZeroWinding(false);
+    const float R = s * 0.5f, r = R * 0.74f;
+    const int teeth = 8;
+    for (int i = 0; i < teeth * 4; ++i) {
+      const float a = juce::MathConstants<float>::twoPi * ((float)i - 0.5f) / (float)(teeth * 4);
+      const float rad = (i % 4 == 0 || i % 4 == 1) ? R : r;
+      const auto pt = c.getPointOnCircumference(rad, a);
+      if (i == 0) p.startNewSubPath(pt); else p.lineTo(pt);
+    }
+    p.closeSubPath();
+    p.addEllipse(c.x - R * 0.36f, c.y - R * 0.36f, R * 0.72f, R * 0.72f);
+    g.fillPath(p);
+    return;
+  }
+  // full screen: corner brackets pointing out (Expand) or in (Contract)
+  const float h = s * 0.5f, a = s * 0.36f;
+  juce::Path p;
+  for (int sx : {-1, 1})
+    for (int sy : {-1, 1}) {
+      const juce::Point<float> k(c.x + sx * h, c.y + sy * h);  // the corner
+      if (icon_ == Expand) {
+        p.startNewSubPath(k.x - sx * a, k.y); p.lineTo(k); p.lineTo(k.x, k.y - sy * a);
+      } else {
+        const juce::Point<float> in(c.x + sx * (h - a), c.y + sy * (h - a));
+        p.startNewSubPath(k.x, in.y); p.lineTo(in); p.lineTo(in.x, k.y);
+      }
+    }
+  g.strokePath(p, juce::PathStrokeType(juce::jmax(1.6f, s * 0.09f), juce::PathStrokeType::mitered, juce::PathStrokeType::square));
+}
+
 // ---------------- Deck ----------------
 Deck::Deck(AppCtx& ctx) : ctx_(ctx) {
   for (auto* c : std::initializer_list<juce::Component*>{&pos_, &rate_, &lat_, &dsp_, &keys_}) addAndMakeVisible(c);
   keys_.onKey = [this](TransportKeys::Key k) { if (onTransport) onTransport(k); };
   buttons_ = {&tap_, &listen_, &midi_, &plugins_, &projectBtn, &metersBtn, &displayBtn, &full_};
   tap_.setTriggeredOnMouseDown(true);  // the tap lands when the button goes down, not when it is released
-  tap_.setTooltip("Tap tempo: tap in time (2 taps or more) to set the metronome tempo. Shows the current tempo.");
+  tap_.setTooltip("Tempo: tap in time (2 taps or more), or hold and drag up / down (Shift: fine), or scroll. Sets bar 1's tempo; "
+                  "changes later in the song are on the overview's bar ruler.");
   tap_.onClick = [this] { ctx_.tapTempo(); };
+  tap_.getBpm = [this] { auto* e = ctx_.engine(); return e ? e->metronome().bpm.load() : 120.f; };
+  tap_.setBpm = [this](float v) { if (auto* e = ctx_.engine()) e->metronome().bpm = v; };
+  tap_.resetTaps = [this] { ctx_.tapper.taps.clear(); };
+  keys_.onMenu = [this](TransportKeys::Key k) { if (k == TransportKeys::Click) showClickMenu(); };
   tap_.setButtonText("Tap 120.0");
   for (auto* b : buttons_) { addAndMakeVisible(*b); b->getProperties().set("kind", "key"); b->getProperties().set("fontH", 11.0); }
   midi_.setTooltip("MIDI Learn: click a control, then move a knob, fader or pad on your controller. Right-click a control to unmap it.");
@@ -196,7 +244,9 @@ Deck::Deck(AppCtx& ctx) : ctx_(ctx) {
   projectBtn.onClick = [this] { if (onProject) onProject(); };
   metersBtn.onClick = [this] { if (onMeters) onMeters(); };
   displayBtn.onClick = [this] { if (onDisplay) onDisplay(); };
+  displayBtn.setTooltip("Display: looks, colours, hardware, type and screen");
   full_.onClick = [this] { if (onFull) onFull(); };
+  full_.setTooltip("Full screen (Esc leaves it)");
 }
 
 std::vector<std::pair<juce::String, juce::Rectangle<int>>> TransportKeys::midiRegions() const {
@@ -210,6 +260,23 @@ void Deck::setMidiState(bool learning, bool armed) {
   midi_.setToggleState(learning, juce::dontSendNotification);
   const juce::String t = armed ? juce::String(juce::CharPointer_UTF8("\xe2\x97\x8f Move a knob\xe2\x80\xa6")) : juce::String("MIDI Learn");
   if (midi_.getButtonText() != t) { midi_.setButtonText(t); resized(); }
+}
+
+void Deck::showClickMenu() {
+  auto* e = ctx_.engine(); if (!e) return;
+  juce::PopupMenu m;
+  m.addSectionHeader("Click sound");
+  for (int s = 0; s < airdaw::kNumClickSounds; ++s) m.addItem(1 + s, airdaw::clickSoundName(s), true, e->metronome().sound.load() == s);
+  m.addSeparator();
+  m.addItem(100, juce::String(juce::CharPointer_UTF8("Metronome settingsâ¦")));
+  m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(keys_.localAreaToGlobal(keys_.keyRect(TransportKeys::Click).toNearestInt())),
+                  [this](int r) {
+                    if (r == 100) { if (onAudio) onAudio(); return; }
+                    if (r >= 1) if (auto* e2 = ctx_.engine()) {
+                      e2->metronome().sound = r - 1;
+                      ctx_.note(juce::String("Click sound: ") + airdaw::clickSoundName(r - 1));
+                    }
+                  });
 }
 
 void Deck::paintOverChildren(juce::Graphics& g) {
@@ -239,6 +306,9 @@ void Deck::sync() {
     keys_.setLit(TransportKeys::Rec, tr.recording.load());
     keys_.setLit(TransportKeys::Loop, tr.loopOn.load());
     keys_.setLit(TransportKeys::Click, e->metronome().enabled.load());
+    const bool fs = juce::Desktop::getInstance().getKioskModeComponent() != nullptr;
+    full_.setIcon(fs ? IconKey::Contract : IconKey::Expand);
+    full_.setTooltip(fs ? "Leave full screen (or press Esc)" : "Full screen (Esc leaves it)");
     const auto tt = "Tap " + juce::String(e->metronome().bpm.load(), 1);
     if (tap_.getButtonText() != tt) tap_.setButtonText(tt);
   }
@@ -291,12 +361,19 @@ void Deck::paint(juce::Graphics& g) {
 static constexpr int kKeysW = TransportKeys::kNum * TransportKeys::kKeyW + (TransportKeys::kNum - 1) * TransportKeys::kGap + 60;
 // Right side of the deck: the readouts centred on top, below them the menu keys, all the same size and evenly spread
 // (one row of eight, or two rows of four when the window is narrow).
-static constexpr int kLcdH = 40, kMenuKeyH = 34, kMenuGap = 6, kMenuKeyMinW = 76;
-static int menuCols(int width, int n) { return width >= n * kMenuKeyMinW + (n - 1) * kMenuGap ? n : (n + 1) / 2; }
+static constexpr int kLcdH = 40, kMenuKeyH = 34, kMenuGap = 6, kMenuKeyMinW = 76, kIconKeyW = 48;
+static bool isIconKey(const juce::Component* b) { return (bool)b->getProperties()["icon"]; }
+// One row if every key fits at its smallest, else two rows.
+static int menuCols(int width, const std::vector<juce::TextButton*>& keys) {
+  const int n = (int)keys.size();
+  int need = (n - 1) * kMenuGap;
+  for (auto* b : keys) need += isIconKey(b) ? kIconKeyW : kMenuKeyMinW;
+  return width >= need ? n : (n + 1) / 2;
+}
 static int rightWidth(int deckWidth) { return (deckWidth - 32 - kKeysW) / 2 - 12; }
 
 int Deck::preferredHeight(int width) const {
-  const int n = (int)buttons_.size(), cols = menuCols(rightWidth(width), n), rows = (n + cols - 1) / cols;
+  const int n = (int)buttons_.size(), cols = menuCols(rightWidth(width), buttons_), rows = (n + cols - 1) / cols;
   return juce::jmax(100, 20 + kLcdH + 8 + rows * kMenuKeyH + (rows - 1) * kMenuGap);
 }
 
@@ -316,10 +393,19 @@ void Deck::resized() {
   int x = lcds.getCentreX() - lcdTotal / 2, k = 0;
   for (auto* l : {&rate_, &lat_, &dsp_}) { l->setBounds(x, lcds.getY(), lw[k], kLcdH); x += lw[k++] + 8; }
   right.removeFromTop(8);
-  const int n = (int)buttons_.size(), cols = menuCols(right.getWidth(), n);
-  const int kw = (right.getWidth() - (cols - 1) * kMenuGap) / cols;
-  for (int i = 0; i < n; ++i)
-    buttons_[(size_t)i]->setBounds(right.getX() + (i % cols) * (kw + kMenuGap), right.getY() + (i / cols) * (kMenuKeyH + kMenuGap), kw, kMenuKeyH);
+  const int n = (int)buttons_.size(), cols = menuCols(right.getWidth(), buttons_);
+  for (int row = 0; row * cols < n; ++row) {  // per row: icon keys narrow, the word keys share the rest evenly
+    const int first = row * cols, last = juce::jmin(n, first + cols);
+    int icons = 0; for (int i = first; i < last; ++i) icons += isIconKey(buttons_[(size_t)i]);
+    const int words = (last - first) - icons;
+    const int kw = words > 0 ? (right.getWidth() - icons * kIconKeyW - (last - first - 1) * kMenuGap) / words : kIconKeyW;
+    int x = right.getX();
+    for (int i = first; i < last; ++i) {
+      const int w = isIconKey(buttons_[(size_t)i]) ? kIconKeyW : kw;
+      buttons_[(size_t)i]->setBounds(x, right.getY() + row * (kMenuKeyH + kMenuGap), w, kMenuKeyH);
+      x += w + kMenuGap;
+    }
+  }
 }
 
 }  // namespace ui

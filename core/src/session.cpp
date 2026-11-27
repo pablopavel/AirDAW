@@ -41,7 +41,12 @@ std::string sessionToJson(Engine& e, const std::string& baseDir) {
   auto& m = e.metronome();
   JVal mj = JVal::obj();
   mj.set("enabled", JVal::boolean(m.enabled)).set("bpm", JVal::num(m.bpm)).set("beatsPerBar", JVal::num(m.beatsPerBar))
-    .set("levelDb", JVal::num(m.levelDb)).set("countInBars", JVal::num(m.countInBars));
+    .set("levelDb", JVal::num(m.levelDb)).set("countInBars", JVal::num(m.countInBars)).set("sound", JVal::num(m.sound));
+  if (auto* tm = e.tempoMap()) {  // tempo / time-signature changes: [bar, bpm, beats per bar]
+    JVal ch = JVal::arr();
+    for (auto& c : tm->changes) { JVal q = JVal::arr(); q.push(JVal::num(c.bar)); q.push(JVal::num(c.bpm)); q.push(JVal::num(c.beatsPerBar)); ch.push(q); }
+    mj.set("tempoMap", ch);
+  }
   root.set("metronome", mj);
   { JVal cj = JVal::obj(); cj.set("crossfadeMs", JVal::num(e.compCrossfadeMs.load())); root.set("comping", cj); }
   {  // app-side per-project data (reference track, plugin MIDI mappings...), kept as a JSON object
@@ -128,6 +133,12 @@ SessionResult loadSession(Engine& e, const std::string& path) {
     m.enabled = mj->flag("enabled", false); m.bpm = std::clamp((float)mj->num("bpm", 120), 20.f, 400.f);
     m.beatsPerBar = std::clamp((int)mj->num("beatsPerBar", 4), 1, 16); m.levelDb = (float)mj->num("levelDb", -6);
     m.countInBars = std::clamp((int)mj->num("countInBars", 0), 0, 4);
+    m.sound = std::clamp((int)mj->num("sound", 0), 0, kNumClickSounds - 1);
+    std::vector<TempoChange> ch;
+    if (auto* tm = mj->get("tempoMap"))
+      for (auto& q : tm->a)
+        if (q.a.size() >= 3) ch.push_back({(int)q.a[0].n, (float)q.a[1].n, (int)q.a[2].n});
+    e.setTempoMap(std::move(ch));
   }
   { const JVal* app = root.get("app"); e.appData = app && app->type == JVal::Obj ? app->dump() : std::string(); }  // "" = older session
   // The loaded session's takes replace the current ones (not appended to them).

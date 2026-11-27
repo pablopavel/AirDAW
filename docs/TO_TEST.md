@@ -39,18 +39,36 @@ Last updated: 2026-11-27
 - [ ] The (i) after "HIT RECORD METER" opens a plain-words guide (what each band measures, how to move each readout,
       the letters, tone bar and hints, tips); it scrolls and closes when you click elsewhere.
 
+## Full screen (new)
+- [ ] AirDAW opens full screen. Esc leaves it (after closing an open Display / Plugins / insert panel first); the Full key
+      toggles it. Leaving it gives the normal window back.
+- [ ] The Full key is an icon only: corners pointing out when windowed, pointing in when full screen. The Display key is
+      a gear icon only (still lit while the Display panel is open). Both keys are narrow; the other keys share the row.
+
+## Tempo, click and tempo map (new)
+- [ ] Tap key: tapping still sets the tempo; hold it and drag up / down to change the tempo (Shift: fine steps); the mouse
+      wheel changes it by 1 BPM (Shift: 0.1). After a drag or scroll the next taps start fresh.
+- [ ] Click sounds: Beep (as before), Woodblock, Clave, Cowbell, Stick, Hi-hat, Soft; beat 1 of each bar accented. Choose
+      them in Audio settings > Click sound, or right-click the Click key. Saved with the project.
+- [ ] Bar ruler above the song overview: bar numbers, a marker for bar 1 (the metronome's tempo) and one per change.
+      Double-click a bar to add a change there (it opens an editor: tempo, beats per bar, Delete); click a marker to edit
+      it; drag a marker to move it by whole bars; right-click for Edit / Delete / Add.
+- [ ] The click follows the changes (tempo and accents, e.g. 3/4 after 4/4); count-in uses bar 1's tempo.
+- [ ] Audio settings > Tempo changes: the same changes as rows (from bar, tempo, beats, X) and "+ Add change"; edits
+      show on the ruler and the other way round. The changes are saved with the project.
+
 ## Moving strips (new)
 - [ ] Drag a track by its name plate onto another track: a line shows where it lands (left or right half), it moves
       there; buses move among buses the same way. A click on the name still opens the inserts, a right-click the menu,
       a double-click renames.
 - [ ] The order is saved with the project and comes back on reopening; another project has its own order; the sound
       and routing don't change. "+ Add track" puts a re-added track at the end.
-- [ ] No coloured bar under the channel names; Display > Surfaces > Track colours: On brings them back.
+- [ ] No coloured bar under the channel names (the option is gone too).
 
 ## New default view (new)
 - [ ] On a fresh install (or after Display > Reset) the look is today's: amber, normal glow, matte faceplate, sharp
       corners, ivory knobs, cream faders, Industrial type, screws, rack inserts, classic buttons. The eras and the
-      other classic looks are unchanged. No track colours.
+      other classic looks are unchanged.
 - [ ] Fresh settings also start with the meter dock at 377 px (469 px with the insert panel open), the dark meter view
       on and 1339 px wide, and the reference suite Stereo field, Listening notes, Loudness, Band phase, Reference A/B.
 
@@ -83,7 +101,7 @@ Last updated: 2026-11-27
 - [ ] Insert slot > "Choose Airwindows plugin...": the list shows categories (with counts); each opens to its plugins; favourites stay on top.
 - [ ] Dragging the divider between mixer and meters, and between meter / tool columns: follows the mouse smoothly; can be grabbed anywhere along its line (it lights up).
 - [ ] The Hit Record Meter's display catches up to its final size when you let go.
-- [ ] Deck: readouts centred, the eight menu keys the same size; keys press down, Listen / Meters / Display / MIDI Learn stay lit when on.
+- [ ] Deck: readouts centred, the word keys the same size (Display and Full narrow icon keys); keys press down, Listen / Meters / Display / MIDI Learn stay lit when on.
 - [ ] Takes bar: the ✕ at either end closes it (loop and takes stay); it comes back for a new loop region or a T button.
 
 ## Comping

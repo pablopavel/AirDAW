@@ -23,15 +23,14 @@ class Theme : public juce::ChangeBroadcaster {
   // (the original flat keys).
   juce::String buttons = "classic";
   bool screws = true, trim = true, pixelShift = true;
-  bool trackColours = false;  // the coloured bar under each channel's name
 
   void load(juce::PropertiesFile& p);
   void save(juce::PropertiesFile& p) const;
-  void resetLook();  // the Studio look (the default), 100% scale, pixel shift on, rack inserts, classic buttons, no track colours
+  void resetLook();  // the Studio look (the default), 100% scale, pixel shift on, rack inserts, classic buttons
   void changed() { tile_ = {}; sendChangeMessage(); }
 
   // Generic option access for the Display panel. Keys: hue, glow, panel, fp, tint, rd, knob, fd, vu, lcd, font,
-  // mat, ws, gr, ww, scr, wood, shift, ins, btn, chc (booleans as "1" / "0").
+  // mat, ws, gr, ww, scr, wood, shift, ins, btn (booleans as "1" / "0").
   juce::String option(const juce::String& key) const;
   void setOption(const juce::String& key, const juce::String& value);
   // Eras (e50 e60 e70 e80 e90 e00) and classics (amber neon ice lounge vintage): set a whole look at once.

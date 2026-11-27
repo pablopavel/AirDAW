@@ -120,7 +120,42 @@ static void testMetronome() {
     { Engine a(SR); auto& m = a.metronome(); m.enabled = true; m.bpm = 93.5f; m.beatsPerBar = 7; m.levelDb = -12; m.countInBars = 2;
       auto p = tmpDir() + "/metro.airdaw"; CHECK(saveSession(a, p).ok, "metro save");
       Engine b(SR); CHECK(loadSession(b, p).ok, "metro load"); auto& n = b.metronome();
-      CHECK(n.enabled && n.bpm == 93.5f && n.beatsPerBar == 7 && n.levelDb == -12.f && n.countInBars == 2, "metronome settings round trip"); } }
+      CHECK(n.enabled && n.bpm == 93.5f && n.beatsPerBar == 7 && n.levelDb == -12.f && n.countInBars == 2, "metronome settings round trip"); }
+  // Tempo map: 120 BPM 4/4 for bars 1-2, then 60 BPM 3/4 from bar 3. Clicks follow it, accent on each bar's first beat.
+  { const int beat = 48000, bar3 = 8 * beat, slow = 96000, clickLen = (int)(SR * 0.03);
+    auto peakIn = [](const std::vector<float>& v, size_t a, size_t b) { float p = 0; for (size_t i = a; i < b && i < v.size(); ++i) p = std::max(p, std::fabs(v[i])); return p; };
+    auto zeroCross = [](const std::vector<float>& v, size_t a, size_t b) { int z = 0; for (size_t i = a + 1; i < b; ++i) z += (v[i - 1] < 0) != (v[i] < 0); return z; };
+    Engine e(SR); auto& m = e.metronome(); m.enabled = true; m.bpm = 120; m.beatsPerBar = 4; m.levelDb = 0;
+    e.setTempoMap({{3, 60.f, 3}, {1, 200.f, 4}, {3, 90.f, 4}});  // bar 1 is ignored (the metronome's own), the duplicate bar 3 too
+    CHECK(e.tempoMap() && e.tempoMap()->changes.size() == 1 && e.tempoMap()->changes[0].bpm == 60.f, "tempo map cleaned up");
+    TempoSection sec[kMaxTempoChanges + 1];
+    const int ns = tempoSections(e.tempoMap(), 120.0, 4, SR, sec);
+    CHECK(ns == 2 && sec[1].start == bar3 && std::fabs(sampleAtBar(sec, ns, 2.0) - bar3) < 1e-6 && std::fabs(barAtSample(sec, ns, bar3 + slow) - (2.0 + 1.0 / 3.0)) < 1e-9,
+          "tempo sections / bar <-> sample");
+    e.transport().play(); long k = 0; auto out = stream(e, k, bar3 + 4 * slow, 64);
+    bool ok = true;
+    for (int b = 0; b < 8; ++b) ok &= peakIn(out, (size_t)b * beat, (size_t)b * beat + clickLen) > 0.3f;
+    for (int b = 0; b < 4; ++b) ok &= peakIn(out, (size_t)(bar3 + b * slow), (size_t)(bar3 + b * slow + clickLen)) > 0.3f;
+    ok &= peakIn(out, (size_t)(bar3 + beat), (size_t)(bar3 + beat + clickLen)) == 0.f;  // where 120 BPM would have clicked
+    CHECK(ok, "clicks follow the tempo map");
+    const int zA = zeroCross(out, bar3, bar3 + clickLen), zB = zeroCross(out, bar3 + slow, bar3 + slow + clickLen), zC = zeroCross(out, bar3 + 3 * slow, bar3 + 3 * slow + clickLen);
+    CHECK(zA > zB && zC == zA, "3/4 after the change: accent every 3 beats (%d %d %d)", zA, zB, zC);
+    // click sounds: each one sounds, and differs from the beep
+    std::vector<std::vector<float>> clicks;
+    for (int sd = 0; sd < kNumClickSounds; ++sd) {
+      Engine f(SR); auto& mm = f.metronome(); mm.enabled = true; mm.bpm = 120; mm.levelDb = 0; mm.sound = sd;
+      f.transport().play(); long kk = 0; clicks.push_back(stream(f, kk, beat, 64));
+      CHECK(peakIn(clicks.back(), 0, (size_t)(SR * 0.12)) > 0.2f && peakIn(clicks.back(), (size_t)(SR * 0.12), clicks.back().size()) == 0.f,
+            "click sound %s sounds, and stops in time", clickSoundName(sd));
+      if (sd > 0) { double d = 0; for (size_t i = 0; i < clicks[0].size(); ++i) d += std::fabs(clicks.back()[i] - clicks[0][i]); CHECK(d > 50.0, "%s differs from the beep", clickSoundName(sd)); }
+    }
+    // the sound and the map are saved with the session
+    m.sound = kClickCowbell; auto p = tmpDir() + "/tm.airdaw"; CHECK(saveSession(e, p).ok, "tempo save");
+    Engine g(SR); CHECK(loadSession(g, p).ok, "tempo load");
+    CHECK(g.metronome().sound == kClickCowbell && g.tempoMap() && g.tempoMap()->changes.size() == 1 && g.tempoMap()->changes[0].bar == 3 &&
+          g.tempoMap()->changes[0].bpm == 60.f && g.tempoMap()->changes[0].beatsPerBar == 3, "click sound and tempo map round trip");
+    e.setTempoMap({}); CHECK(e.tempoMap() == nullptr, "an empty map clears it");
+    std::printf("tempo map: clicks follow tempo and time-signature changes, %d click sounds, saved with the session\n", (int)kNumClickSounds); } }
 }
 
 // Two inputs: input 0 = sigAt(k), input 1 = a 300 Hz tone. Returns left/right output.

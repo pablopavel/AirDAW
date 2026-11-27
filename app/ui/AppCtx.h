@@ -18,7 +18,6 @@ inline airdaw::Channel* channelOf(airdaw::Engine& e, int id) {
   if (id == kMasterId) return &e.master();
   return nullptr;
 }
-juce::uint32 channelColour(int id);  // name-plate bar colour
 
 // Listening notes: time-stamped remarks, kept beside the project (<project>/listening-notes.json).
 struct ListeningNotes {

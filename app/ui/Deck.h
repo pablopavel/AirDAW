@@ -12,6 +12,7 @@ class TransportKeys : public juce::Component, public MidiRegionProvider {
   std::vector<std::pair<juce::String, juce::Rectangle<int>>> midiRegions() const override;
   enum Key { Rtz, Play, Stop, Rec, Loop, Click, kNum };
   std::function<void(Key)> onKey;
+  std::function<void(Key)> onMenu;  // right-click on a key
   void setLit(Key k, bool on) { if (lit_[k] != on) { lit_[k] = on; repaint(); } }
   void paint(juce::Graphics&) override;
   void mouseDown(const juce::MouseEvent&) override;
@@ -32,6 +33,42 @@ class TransportKeys : public juce::Component, public MidiRegionProvider {
   static void drawFrostedLegend(juce::Graphics& g, const juce::Path& p, juce::Colour lc, float L);
 };
 
+// A menu key that shows an icon instead of a word (Display: a gear; Full: expand / contract by the window's mode).
+class IconKey : public juce::TextButton {
+ public:
+  enum Icon { Gear, Expand, Contract };
+  explicit IconKey(Icon i) : icon_(i) { getProperties().set("icon", true); }
+  void setIcon(Icon i) { if (i != icon_) { icon_ = i; repaint(); } }
+  void paintButton(juce::Graphics&, bool over, bool down) override;
+ private:
+  Icon icon_;
+};
+
+// Tap tempo key: tap in time, or hold and drag up / down (Shift: fine), or scroll, to set the tempo.
+class TapButton : public juce::TextButton {
+ public:
+  std::function<float()> getBpm;
+  std::function<void(float)> setBpm;
+  std::function<void()> resetTaps;  // a drag or scroll is not a tap
+  void mouseDown(const juce::MouseEvent& e) override { dragging_ = false; startBpm_ = getBpm ? getBpm() : 120.f; juce::TextButton::mouseDown(e); }
+  void mouseDrag(const juce::MouseEvent& e) override {
+    const int dy = -e.getDistanceFromDragStartY();
+    if (!dragging_ && std::abs(dy) > 4) { dragging_ = true; if (resetTaps) resetTaps(); }
+    if (dragging_) set(startBpm_ + (float)dy * (e.mods.isShiftDown() ? 0.05f : 0.25f));
+  }
+  void mouseUp(const juce::MouseEvent& e) override { if (dragging_ && resetTaps) resetTaps(); dragging_ = false; juce::TextButton::mouseUp(e); }
+  void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override {
+    const float d = std::abs(w.deltaY) > std::abs(w.deltaX) ? w.deltaY : -w.deltaX;
+    if (d == 0.f || !getBpm) return;
+    if (resetTaps) resetTaps();
+    set(getBpm() + (d > 0.f ? 1.f : -1.f) * (e.mods.isShiftDown() ? 0.1f : 1.f));
+  }
+ private:
+  void set(float v) { if (setBpm) setBpm(juce::jlimit(20.f, 400.f, std::round(v * 10.f) / 10.f)); }
+  bool dragging_ = false;
+  float startBpm_ = 120.f;
+};
+
 class Deck : public juce::Component {
  public:
   explicit Deck(AppCtx& ctx);
@@ -48,16 +85,18 @@ class Deck : public juce::Component {
   juce::Component& pluginsButton() { return plugins_; }
   void setListenLit(bool on) { listen_.setToggleState(on, juce::dontSendNotification); }
   void previewAmbient(int state) { ambPreview_ = state; }  // test hook: transport light as if 1 = playing, 2 = recording
-  juce::TextButton displayBtn{juce::String(juce::CharPointer_UTF8("\xe2\x9a\x99 Display"))};
+  IconKey displayBtn{IconKey::Gear};
   juce::TextButton metersBtn{juce::String(juce::CharPointer_UTF8("\xe2\x97\x94 Meters"))};
   juce::TextButton projectBtn{juce::String(juce::CharPointer_UTF8("Project \xe2\x96\xbe"))};
  private:
   AppCtx& ctx_;
   Lcd pos_{"Position", 40.f}, rate_{"Rate / depth", 15.f}, lat_{"Latency", 15.f}, dsp_{"DSP", 15.f};
   TransportKeys keys_;
-  juce::TextButton tap_;
+  TapButton tap_;
+  void showClickMenu();  // right-click on the Click key: the click sound
   juce::TextButton listen_{juce::String(juce::CharPointer_UTF8("\xe2\x97\x89 Listen"))}, midi_{"MIDI Learn"},
-      plugins_{juce::String(juce::CharPointer_UTF8("\xe2\x9f\xb3 Plugins"))}, full_{juce::String(juce::CharPointer_UTF8("\xe2\x9b\xb6 Full"))};
+      plugins_{juce::String(juce::CharPointer_UTF8("\xe2\x9f\xb3 Plugins"))};
+  IconKey full_{IconKey::Expand};
   std::vector<juce::TextButton*> buttons_;
   bool pluginsBadge_ = false;
   void paintOverChildren(juce::Graphics&) override;
