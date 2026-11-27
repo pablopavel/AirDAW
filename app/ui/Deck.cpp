@@ -11,25 +11,43 @@ juce::Rectangle<float> TransportKeys::keyRect(int k) const {
 
 void TransportKeys::paint(juce::Graphics& g) {
   auto& t = T();
-  auto all = keyRect(0).getUnion(keyRect(kNum - 1));
-  // warm halo behind the keys
-  if (t.glow > 0.f) {
-    auto halo = all.expanded(56.f, 26.f);
-    g.setGradientFill(juce::ColourGradient(t.am().withAlpha(t.glowAlpha(0.32f)), halo.getCentreX(), halo.getY() + halo.getHeight() * 0.62f,
-                                           t.am().withAlpha(0.f), halo.getRight(), halo.getCentreY(), true));
-    g.fillEllipse(halo);
-  }
   // recessed well
-  auto well = all.expanded(10.f, 8.f).withTrimmedBottom(-2.f);
+  auto well = wellRect();
   g.setGradientFill(juce::ColourGradient(juce::Colour(0xff040404), 0, well.getY(), juce::Colour(0xff0f0f11), 0, well.getBottom(), false));
   g.fillRoundedRectangle(well, T().rad(9.f));
   g.setColour(juce::Colour(0x1affffff)); g.drawHorizontalLine((int)well.getBottom(), well.getX() + 8, well.getRight() - 8);
 
+  const bool bl = t.glow > 0.f;  // backlit keys (Glow 0 in Display: plain keys and cream legends)
+  const float L = juce::jlimit(0.f, 1.2f, lightLvl_);
+  const auto lc = lightCol_;
+  auto la = [&](float a) { return lc.withAlpha(t.glowAlpha(juce::jlimit(0.f, 1.f, a * L))); };
+  if (bl) {
+    // one even light source under the keys: the floor of the well is lit uniformly and dimly
+    juce::Graphics::ScopedSaveState ss(g);
+    juce::Path wp; wp.addRoundedRectangle(well, T().rad(9.f)); g.reduceClipRegion(wp);
+    g.setColour(la(0.08f)); g.fillRect(well);
+    // between the keys: faint slots of the same light
+    for (int k = 0; k + 1 < kNum; ++k) {
+      const float gx = (keyRect(k).getRight() + keyRect(k + 1).getX()) / 2.f;
+      juce::ColourGradient sg(la(0.f), gx - 5.f, 0, la(0.f), gx + 5.f, 0, false);
+      sg.addColour(0.5, la(0.26f)); sg.addColour(0.35, la(0.08f)); sg.addColour(0.65, la(0.08f));
+      g.setGradientFill(sg); g.fillRect(gx - 5.f, well.getY() + 2.f, 10.f, well.getHeight() - 4.f);
+    }
+  }
+
   for (int k = 0; k < kNum; ++k) {
     const bool on = lit_[k], pressed = on || down_ == k;
     auto r = keyRect(k);
-    if (!pressed) { g.setColour(juce::Colour(0xff070708)); g.fillRoundedRectangle(r.translated(0, 4), T().rad(5.f));
-                    g.setColour(juce::Colours::black.withAlpha(0.7f)); g.fillRoundedRectangle(r.translated(0, 7), T().rad(5.f)); }
+    if (!pressed) {
+      if (bl) {  // light escaping from under the raised key's front edge, with a dark contact line
+        g.setGradientFill(juce::ColourGradient(la(0.14f), 0, r.getBottom(), la(0.f), 0, r.getBottom() + 5.f, false));
+        g.fillRoundedRectangle(r.withY(r.getBottom() - 2.f).withHeight(7.f).reduced(4.f, 0.f), 3.f);
+        g.setColour(juce::Colours::black.withAlpha(0.8f)); g.fillRoundedRectangle(r.translated(0, 2), T().rad(5.f));
+      } else {
+        g.setColour(juce::Colour(0xff070708)); g.fillRoundedRectangle(r.translated(0, 4), T().rad(5.f));
+        g.setColour(juce::Colours::black.withAlpha(0.7f)); g.fillRoundedRectangle(r.translated(0, 7), T().rad(5.f));
+      }
+    }
     else r = r.translated(0, 3);
     if (on) {
       const bool rec = k == Rec;
@@ -47,29 +65,89 @@ void TransportKeys::paint(juce::Graphics& g) {
     g.setColour(juce::Colour(on ? 0x1f000000 : 0x2a000000));
     for (float y = r.getY() + 3.f; y < r.getBottom(); y += 4.f) g.fillRect(r.getX() + 1.f, y, r.getWidth() - 2.f, 1.f);
     g.setColour(juce::Colour(on ? 0xccffffff : 0x6effffff)); g.drawHorizontalLine((int)r.getY() + 1, r.getX() + 3, r.getRight() - 3);
+    if (bl && !on) {  // translucent key: its edges pick up a little of the light, evenly all round
+      g.setColour(la(0.07f)); g.drawRoundedRectangle(r.reduced(1.f), T().rad(5.f), 1.5f);
+    }
     g.setColour(juce::Colours::black); g.drawRoundedRectangle(r, T().rad(5.f), 1.f);
-    // symbol
+    // legend
     const auto c = r.getCentre();
-    const juce::Colour sym = on ? (k == Rec ? juce::Colours::white : juce::Colour(0xff2a1800)) : Theme::cream();
-    g.setColour(sym);
+    if (k == Rec) {
+      juce::Rectangle<float> d(c.x - 13, c.y - 13, 26, 26);
+      t.drawGlow(g, d.reduced(3), juce::Colour(0xffe5484d), 12.f, 0.7f);
+      g.setGradientFill(juce::ColourGradient(juce::Colour(0xffff9a9a), d.getX() + 9, d.getY() + 8, juce::Colour(0xffa81e24),
+                                             d.getRight(), d.getBottom(), true));
+      g.fillEllipse(d);
+      continue;
+    }
     juce::Path p;
     switch (k) {
       case Rtz: p.addRectangle(c.x - 11, c.y - 8, 3, 16); p.addTriangle(c.x - 8, c.y, c.x + 1, c.y - 8, c.x + 1, c.y + 8);
-                p.addTriangle(c.x + 1, c.y, c.x + 10, c.y - 8, c.x + 10, c.y + 8); g.fillPath(p); break;
-      case Play: p.addTriangle(c.x - 7, c.y - 10, c.x - 7, c.y + 10, c.x + 10, c.y); g.fillPath(p); break;
-      case Stop: g.fillRect(c.x - 8, c.y - 8, 16.f, 16.f); break;
-      case Rec: {
-        juce::Rectangle<float> d(c.x - 13, c.y - 13, 26, 26);
-        t.drawGlow(g, d.reduced(3), juce::Colour(0xffe5484d), 12.f, 0.7f);
-        g.setGradientFill(juce::ColourGradient(juce::Colour(0xffff9a9a), d.getX() + 9, d.getY() + 8, juce::Colour(0xffa81e24),
-                                               d.getRight(), d.getBottom(), true));
-        g.fillEllipse(d); break;
-      }
-      case Loop: g.setFont(Theme::uiFont(20.f)); g.drawText("LOOP", r, juce::Justification::centred); break;
-      case Click: g.setFont(Theme::uiFont(17.f)); g.drawText("CLICK", r, juce::Justification::centred); break;
+                p.addTriangle(c.x + 1, c.y, c.x + 10, c.y - 8, c.x + 10, c.y + 8); break;
+      case Play: p.addTriangle(c.x - 7, c.y - 10, c.x - 7, c.y + 10, c.x + 10, c.y); break;
+      case Stop: p.addRectangle(c.x - 8, c.y - 8, 16.f, 16.f); break;
+      case Loop: p = loopSymbol(c); break;
+      case Click: p = clickSymbol(c); break;
       default: break;
     }
+    if (bl && !on) drawFrostedLegend(g, p, lc, L);
+    else { g.setColour(on ? juce::Colour(0xff2a1800) : Theme::cream()); g.fillPath(p); }
   }
+}
+
+// Loop: two arrows chasing each other round a rounded loop.
+juce::Path TransportKeys::loopSymbol(juce::Point<float> c) {
+  juce::Path line;
+  line.startNewSubPath(c.x - 12.f, c.y + 3.f); line.lineTo(c.x - 12.f, c.y - 2.f);
+  line.quadraticTo(c.x - 12.f, c.y - 7.f, c.x - 7.f, c.y - 7.f); line.lineTo(c.x + 7.f, c.y - 7.f);
+  line.startNewSubPath(c.x + 12.f, c.y - 3.f); line.lineTo(c.x + 12.f, c.y + 2.f);
+  line.quadraticTo(c.x + 12.f, c.y + 7.f, c.x + 7.f, c.y + 7.f); line.lineTo(c.x - 7.f, c.y + 7.f);
+  juce::Path p;
+  juce::PathStrokeType(3.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded).createStrokedPath(p, line);
+  p.addTriangle(c.x + 6.f, c.y - 12.f, c.x + 13.f, c.y - 7.f, c.x + 6.f, c.y - 2.f);   // arrow heading right along the top
+  p.addTriangle(c.x - 6.f, c.y + 2.f, c.x - 13.f, c.y + 7.f, c.x - 6.f, c.y + 12.f);   // and left along the bottom
+  return p;
+}
+
+// Click: a metronome (wedge-shaped case, pendulum swung to one side, weight on the arm).
+juce::Path TransportKeys::clickSymbol(juce::Point<float> c) {
+  juce::Path outline;
+  outline.startNewSubPath(c.x - 4.f, c.y - 11.f); outline.lineTo(c.x + 4.f, c.y - 11.f);
+  outline.lineTo(c.x + 10.f, c.y + 11.f); outline.lineTo(c.x - 10.f, c.y + 11.f); outline.closeSubPath();
+  outline.startNewSubPath(c.x - 7.f, c.y + 5.f); outline.lineTo(c.x + 7.f, c.y + 5.f);   // the face's lower edge
+  outline.startNewSubPath(c.x, c.y + 5.f); outline.lineTo(c.x + 8.f, c.y - 10.f);       // pendulum
+  juce::Path p;
+  juce::PathStrokeType(2.4f, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded).createStrokedPath(p, outline);
+  juce::Path weight; weight.addRectangle(-2.5f, -2.f, 5.f, 4.f);
+  p.addPath(weight, juce::AffineTransform::rotation(0.49f).translated(c.x + 4.5f, c.y - 3.5f));
+  return p;
+}
+
+// Frosted-glass legend: most of the light from the even source below comes out here. Only the window itself is lit:
+// hot glass in the lamp's colour with a near-white core, fine frost grain, a dark cut along its top edge, and a
+// hairline of light escaping right at the cut's edge (as a real backlit legend shows) instead of a halo.
+// The lamp behind the legends is strong: they stay bright when stopped and glow hot while playing.
+void TransportKeys::drawFrostedLegend(juce::Graphics& g, const juce::Path& p, juce::Colour lc, float L) {
+  auto& t = T();
+  const auto b = p.getBounds().expanded(1.f);
+  const float lv = juce::jlimit(0.f, 1.4f, 0.6f + 0.55f * L);
+  g.setColour(lc.withAlpha(t.glowAlpha(0.26f * lv)));  // edge bleed
+  g.strokePath(p, juce::PathStrokeType(2.f, juce::PathStrokeType::mitered, juce::PathStrokeType::butt), juce::AffineTransform::translation(0.f, 0.5f));
+  // the cut: a dark lip along the top edge gives it depth
+  g.setColour(juce::Colours::black.withAlpha(0.45f)); g.fillPath(p, juce::AffineTransform::translation(0.f, -1.f));
+  {
+    juce::Graphics::ScopedSaveState ss(g);
+    g.reduceClipRegion(p);
+    g.setColour(juce::Colour(0xfffff6e6).interpolatedWith(lc, juce::jlimit(0.f, 1.f, 0.25f + 0.3f * lv))); g.fillRect(b);
+    g.setColour(juce::Colours::white.withAlpha(juce::jlimit(0.f, 0.5f, 0.12f + 0.25f * (lv - 0.6f)))); g.fillRect(b);
+    juce::Random rng(17);  // frost grain (same pattern every frame)
+    const int n = (int)(b.getWidth() * b.getHeight() / 5.f);
+    for (int i = 0; i < n; ++i) {
+      const float x = b.getX() + rng.nextFloat() * b.getWidth(), y = b.getY() + rng.nextFloat() * b.getHeight();
+      g.setColour(rng.nextBool() ? juce::Colours::white.withAlpha(0.16f * rng.nextFloat()) : juce::Colours::black.withAlpha(0.05f * rng.nextFloat()));
+      g.fillRect(x, y, 1.f, 1.f);
+    }
+  }
+  g.setColour(juce::Colours::white.withAlpha(0.14f + 0.12f * lv)); g.strokePath(p, juce::PathStrokeType(0.6f));
 }
 
 void TransportKeys::mouseDown(const juce::MouseEvent& e) {
@@ -151,6 +229,19 @@ void Deck::sync() {
     keys_.setLit(TransportKeys::Click, e->metronome().enabled.load());
     const auto tt = "Tap " + juce::String(e->metronome().bpm.load(), 1);
     if (tap_.getButtonText() != tt) tap_.setButtonText(tt);
+  }
+  {  // the light under the transport keys follows its state, easing between levels
+    const bool live = e && ctx_.audioRunning;
+    const bool rec = ambPreview_ == 2 || (live && e->transport().recording.load());
+    const bool play = ambPreview_ == 1 || (live && e->transport().playing.load());
+    const float target = rec ? 0.85f : play ? 0.7f : 0.32f;
+    amb_ += (target - amb_) * 0.08f;
+    ambRed_ += ((rec ? 1.f : 0.f) - ambRed_) * 0.08f;
+    const float speed = rec ? 0.15f : 0.07f;  // ~1.4 s pulse recording, ~3 s breath playing (sync runs ~30x/s)
+    if (rec || play) ambPhase_ = std::fmod(ambPhase_ + speed, juce::MathConstants<float>::twoPi);
+    const float depth = rec ? 0.16f : play ? 0.08f : 0.f;
+    ambNow_ = amb_ * (1.f + depth * std::sin(ambPhase_));
+    keys_.setBacklight(ambNow_, T().am().interpolatedWith(juce::Colour(0xffe5484d), juce::jlimit(0.f, 1.f, ambRed_)));
   }
   auto* dev = ctx_.devices.getCurrentAudioDevice();
   if (!ctx_.audioRunning || !dev) {

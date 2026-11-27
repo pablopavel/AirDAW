@@ -108,8 +108,17 @@ void Overview::paint(juce::Graphics& g) {
   // played region wash + playhead
   g.setGradientFill(juce::ColourGradient(t.am().withAlpha(0.f), b.getX(), 0, t.am().withAlpha(0.08f), px, 0, false));
   g.fillRect(b.withRight(px));
-  t.drawGlow(g, {px - 1.f, b.getY(), 2.f, b.getHeight()}, t.am(), 16.f, 0.6f);
+  // Playhead glow: a bell-shaped band centred on the line (a drop shadow around a 2 px rectangle sat off to one side).
+  if (t.glow > 0.f) {
+    const float gw = 15.f * (0.6f + 0.4f * t.glow);
+    juce::ColourGradient lg(t.am().withAlpha(0.f), px - gw, 0.f, t.am().withAlpha(0.f), px + gw, 0.f, false);
+    for (auto [p, a] : {std::pair{0.22, 0.05f}, {0.36, 0.14f}, {0.45, 0.32f}, {0.5, 0.5f}, {0.55, 0.32f}, {0.64, 0.14f}, {0.78, 0.05f}})
+      lg.addColour(p, t.am().withAlpha(t.glowAlpha(a)));
+    g.setGradientFill(lg);
+    g.fillRect(juce::Rectangle<float>(px - gw, b.getY(), 2.f * gw, b.getHeight()).getIntersection(b));
+  }
   g.setColour(t.am()); g.fillRect(px - 1.f, b.getY(), 2.f, b.getHeight());
+  g.setColour(juce::Colour(0xfffff0d0).withAlpha(0.85f)); g.fillRect(px - 0.5f, b.getY(), 1.f, b.getHeight());  // hot core
   // listening-note markers (mockup .mk): a hairline with an accent triangle on top
   for (auto& n : ctx_.notes.items) {
     const float x = xAt(n.seconds * sr_);

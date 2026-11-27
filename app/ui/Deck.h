@@ -17,9 +17,19 @@ class TransportKeys : public juce::Component, public MidiRegionProvider {
   void mouseDown(const juce::MouseEvent&) override;
   void mouseUp(const juce::MouseEvent&) override;
   juce::Rectangle<float> keyRect(int k) const;
+  juce::Rectangle<float> wellRect() const { return keyRect(0).getUnion(keyRect(kNum - 1)).expanded(10.f, 8.f).withTrimmedBottom(-2.f); }
+  // Backlit keys: one even, dim light under the keys (faint in the gaps and under each key); most of it shines
+  // through the frosted legends. Level and colour follow the transport (set by the deck each sync).
+  void setBacklight(float level, juce::Colour c) {
+    if (std::abs(level - lightLvl_) > 0.006f || c != lightCol_) { lightLvl_ = level; lightCol_ = c; repaint(); }
+  }
   static constexpr int kKeyW = 70, kKeyH = 58, kGap = 3;
  private:
   bool lit_[kNum] = {}; int down_ = -1;
+  float lightLvl_ = 0.32f; juce::Colour lightCol_{0xffffb347};
+  static juce::Path loopSymbol(juce::Point<float> c);
+  static juce::Path clickSymbol(juce::Point<float> c);
+  static void drawFrostedLegend(juce::Graphics& g, const juce::Path& p, juce::Colour lc, float L);
 };
 
 class Deck : public juce::Component {
@@ -37,6 +47,7 @@ class Deck : public juce::Component {
   juce::Component& midiButton() { return midi_; }
   juce::Component& pluginsButton() { return plugins_; }
   void setListenLit(bool on) { listen_.setToggleState(on, juce::dontSendNotification); }
+  void previewAmbient(int state) { ambPreview_ = state; }  // test hook: transport light as if 1 = playing, 2 = recording
   juce::TextButton displayBtn{juce::String(juce::CharPointer_UTF8("\xe2\x9a\x99 Display"))};
   juce::TextButton metersBtn{juce::String(juce::CharPointer_UTF8("\xe2\x97\x94 Meters"))};
   juce::TextButton projectBtn{juce::String(juce::CharPointer_UTF8("Project \xe2\x96\xbe"))};
@@ -51,6 +62,10 @@ class Deck : public juce::Component {
   std::vector<juce::TextButton*> buttons_;
   bool pluginsBadge_ = false;
   void paintOverChildren(juce::Graphics&) override;
+  // The light under the transport keys: dim amber when stopped, warmer and breathing while playing, a red pulse
+  // while recording. Eased each sync() so changes fade instead of snapping.
+  int ambPreview_ = 0;
+  float amb_ = 0.35f, ambRed_ = 0.f, ambPhase_ = 0.f, ambNow_ = 0.35f;
 };
 
 }  // namespace ui

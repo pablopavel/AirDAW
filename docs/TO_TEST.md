@@ -17,6 +17,11 @@ Last updated: 2026-11-26
       the lamp flickers now and then; the small REC lamp under the plate pulses red only while recording; no extra CPU in the DSP readout.
 - [ ] App icon (Scope A) on the taskbar, title bar, Alt+Tab and AirDAW.exe in Explorer. A pinned taskbar shortcut may keep the
       old icon until it is unpinned and pinned again (Windows caches icons).
+- [ ] Song overview: the playhead's glow sits evenly on both sides of the line while it moves.
+- [ ] Backlit transport keys: the symbols are frosted glass lit from below (bright amber when stopped, hotter and slowly breathing
+      while playing, red and pulsing while recording, fading between them); only a faint light shows in the gaps and under the keys;
+      no glow round the transport. Glow 0 in Display gives plain keys with cream symbols.
+- [ ] Loop and Click keys show symbols (loop arrows, metronome) and still toggle loop / click; lit keys show dark symbols.
 
 ## Layout and menus
 - [ ] Insert slot > "Choose Airwindows plugin...": the list shows categories (with counts); each opens to its plugins; favourites stay on top.

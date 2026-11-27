@@ -1094,6 +1094,8 @@ void MainComponent::runScenario(const juce::String& name) {
   }
   if (name == "blue") { T().hue = 215.f; applyTheme(); }
   if (name == "glow-off") { T().glow = 0.f; applyTheme(); }
+  if (name == "ambient-play") deck_.previewAmbient(1);  // test hook: the transport's light as if playing / recording (nothing plays)
+  if (name == "ambient-rec") deck_.previewAmbient(2);
   if (name == "nodock") { dockShown_ = false; }
   if (name == "arrange") {  // the same calls the drag-and-drop makes: history into the suite, RTA out, Target minimised
     setListen(true);
