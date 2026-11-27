@@ -5,25 +5,6 @@ When something works, it is removed from this list; when it doesn't, it gets a n
 
 Last updated: 2026-11-27
 
-## Reference A/B (from step 2 notes)
-- [ ] Sync: the reference plays, stops and jumps with the song.
-- [ ] Each project remembers its own reference (Full Test1 picks up the one used before; a new project starts without one).
-
-## Tools per view (new)
-- [ ] Resize the reference suite tools (and the meter column) in the main view, switch to Listen mode and resize them
-      there: each view keeps its own sizes, also after a restart. Listen mode starts from the main view's sizes.
-- [ ] Pin different tools in each view (+ Tools, the x on a card, or drag between the suite and the Listen row): the
-      main view and Listen mode keep their own pinned tools, also after a restart. Listen starts with the main view's.
-
-## Metronome defaults (new)
-- [ ] Set the click sound, beats per bar, count-in and click level (Audio settings, or the Click key's right-click menu),
-      then restart AirDAW or make a new project: they start the same. A saved project still opens with its own.
-
-## Undo / redo (new)
-- [ ] A plugin you didn't touch keeps running through an undo (no dropout). Undo after recording takes the new take
-      out of the list (its file stays); redo brings it back. Not while recording.
-- [ ] Opening or starting a project starts a fresh history. Typing in a name box: Ctrl+Z undoes the typing only.
-
 ## Mixer extras
 - [ ] Channel polarity (⌀) on tracks and buses: flips the sound; takes recorded with ⌀ on play back normally.
 - [ ] Tap tempo (deck button and Audio settings) with the click on.
