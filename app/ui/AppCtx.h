@@ -79,6 +79,21 @@ struct AppCtx {
   Levels mixLevels, refLevels;                                      // refLevels.i = the whole file's loudness
   bool refLive = false;                                             // the reference is playing (its M/S/TP are live)
   TapTempo tapper;                                                  // shared by the deck's Tap button and Audio settings
+  // The click sound, beats per bar, count-in and click level you last set (Audio settings or the Click key's menu)
+  // are remembered and start each new project (and a fresh launch); a project keeps its own once saved.
+  void rememberMetronome() {
+    auto* e = engine(); if (!e) return;
+    auto& m = e->metronome();
+    props.setValue("metro.sound", m.sound.load()); props.setValue("metro.beats", m.beatsPerBar.load());
+    props.setValue("metro.countIn", m.countInBars.load()); props.setValue("metro.level", (double)m.levelDb.load());
+  }
+  static void applyMetronomeDefaults(airdaw::Engine& e, juce::PropertiesFile& p) {
+    auto& m = e.metronome();
+    if (p.containsKey("metro.sound")) m.sound = juce::jlimit(0, airdaw::kNumClickSounds - 1, p.getIntValue("metro.sound"));
+    if (p.containsKey("metro.beats")) m.beatsPerBar = juce::jlimit(1, 16, p.getIntValue("metro.beats"));
+    if (p.containsKey("metro.countIn")) m.countInBars = juce::jlimit(0, 4, p.getIntValue("metro.countIn"));
+    if (p.containsKey("metro.level")) m.levelDb = (float)juce::jlimit(-40.0, 0.0, p.getDoubleValue("metro.level"));
+  }
   // One tap: sets the metronome tempo once there are two taps or more.
   void tapTempo() {
     auto* e = engine(); if (!e) return;

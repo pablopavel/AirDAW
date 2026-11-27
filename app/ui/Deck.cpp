@@ -275,6 +275,7 @@ void Deck::showClickMenu() {
                     if (r == 100) { if (onAudio) onAudio(); return; }
                     if (r >= 1) if (auto* e2 = ctx_.engine()) {
                       e2->metronome().sound = r - 1;
+                      ctx_.rememberMetronome();
                       ctx_.note(juce::String("Click sound: ") + airdaw::clickSoundName(r - 1));
                     }
                   });

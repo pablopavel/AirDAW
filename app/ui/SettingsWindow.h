@@ -111,6 +111,7 @@ class SettingsContent : public juce::Component, private juce::Timer {
     m.bpm = (float)bpm_.getValue(); m.levelDb = (float)level_.getValue();
     m.beatsPerBar = juce::jlimit(1, 16, beats_.getSelectedId()); m.countInBars = juce::jlimit(0, 4, countIn_.getSelectedId() - 1);
     if (sound_.getSelectedId() > 0) m.sound = sound_.getSelectedId() - 1;
+    ctx_.rememberMetronome();
   }
   void timerCallback() override { sync(); }
   AppCtx& ctx_;

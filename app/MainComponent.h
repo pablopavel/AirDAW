@@ -148,6 +148,7 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   juce::File sessionFile_;  // empty = unsaved "Untitled"
   std::unique_ptr<airdaw::AutoSaver> autoSaver_;
   airdaw::Engine* autoEngine_ = nullptr;
+  bool metroDefaulted_ = false;  // the remembered click settings went onto the first engine
   std::shared_ptr<juce::FileChooser> chooser_;
   bool recoveryChecked_ = false, audioRunning_ = false;
   bool autoOn_ = false; int autoId_ = 3;

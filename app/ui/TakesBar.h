@@ -34,7 +34,8 @@ class TakesBar : public juce::Component {
       if (e.mods.isPopupMenu()) { if (onMenu) onMenu(index); } else if (onPick) onPick(index);
     }
   };
-  int track() const;                       // viewed track, or the first armed one, or -1
+  int track() const;
+  const airdaw::Take* selected(airdaw::Engine& e, int t) const;  // what Keep stars                       // viewed track, or the first armed one, or -1
   std::vector<int> scope(airdaw::Engine&, int t) const;  // takes in the loop region (or all, without a region)
   void rebuild();
   void deleteUnkept();

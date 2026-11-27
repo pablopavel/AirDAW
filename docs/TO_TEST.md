@@ -5,48 +5,9 @@ When something works, it is removed from this list; when it doesn't, it gets a n
 
 Last updated: 2026-11-27
 
-## New default view (new)
-- [ ] Fresh settings start with the meter dock at 439 px (150 px, its smallest, with the insert panel open), the dark
-      meter view on and 762 px wide, and the reference suite Stereo field, Listening notes, Loudness, Band phase,
-      Reference A/B at their current widths.
-
-## Removing tracks (new)
-- [ ] Right-click a track's name: Rename…, Show inserts, Remove track…. Remove asks first (it says how many takes leave the project).
-- [ ] After removing: the strip is gone, the count on "+ Add track" drops, the track's takes no longer play, its inserts are unloaded.
-- [ ] "+ Add track" brings back a removed slot first (as a fresh track), then new ones.
-- [ ] Save, reopen: removed tracks stay removed; another project has its own set. The recorded files are still in the project folder.
-- [ ] Removing an armed track while recording is refused with a note.
-
-## Rack and icon (new)
-- [ ] Display > Hardware > Inserts: Rack (now the default) or Cards (the original insert cards); switching changes an open insert panel straight away
-      and is remembered after a restart.
-- [ ] Insert rack (Inserts: Rack): modules stand side by side in a chassis with wood cheeks; the faceplate finish follows the plugin's category
-      (Consoles black/gold, Dynamics/Filters aluminium, Tape/Saturation green, Reverb/Ambience blue, VST3 graphite).
-- [ ] IN key bypasses the module (LED goes dark) and still works from a MIDI mapping; the ▾ / ▸ key folds a module to a slim plate and back.
-- [ ] Drag a module by its name plate onto another to reorder the chain.
-- [ ] Preset readout menu: Default, your saved presets, "Save current settings as a preset…", Delete preset ▸. The readout shows the last preset applied.
-- [ ] Rack knobs: drag and mouse wheel; MIDI learn on a rack knob.
-- [ ] A hosted VST3 module: "Open plugin window" still opens it.
-- [ ] App icon (Scope A) on the taskbar, title bar, Alt+Tab and AirDAW.exe in Explorer. A pinned taskbar shortcut may keep the
-      old icon until it is unpinned and pinned again (Windows caches icons).
-- [ ] Song overview: the playhead's glow sits evenly on both sides of the line while it moves.
-- [ ] Backlit transport keys: the symbols are frosted glass lit from below (bright amber when stopped, hotter and slowly breathing
-      while playing, red and pulsing while recording, fading between them); only a faint light shows in the gaps and under the keys;
-      no glow round the transport. Glow 0 in Display gives plain keys with cream symbols.
-- [ ] Loop and Click keys show symbols (loop arrows, metronome) and still toggle loop / click; lit keys show dark symbols.
-
-## Layout and menus
-- [ ] Insert slot > "Choose Airwindows plugin...": the list shows categories (with counts); each opens to its plugins; favourites stay on top.
-- [ ] Dragging the divider between mixer and meters, and between meter / tool columns: follows the mouse smoothly; can be grabbed anywhere along its line (it lights up).
-- [ ] The Hit Record Meter's display catches up to its final size when you let go.
-- [ ] Deck: readouts centred, the word keys the same size (Display and Full narrow icon keys); keys press down, Listen / Meters / Display / MIDI Learn stay lit when on.
-- [ ] Takes bar: the ✕ at either end closes it (loop and takes stay); it comes back for a new loop region or a T button.
-
 ## Comping
-- [ ] Record a full take on a track, then loop a region and record passes: each pass plays only in that region, the rest of the song keeps the full take.
-- [ ] In the takes bar, click a pass to hear it in the region; click the track's own take (listed first, by time) to hand the region back.
-- [ ] Comp two different regions with different passes; both picks play.
-- [ ] Right-click a take: "Play on the whole track" / "Play in this loop region only".
+- [ ] Keep in a loop region stars the pass that is lit (the region's pick), not the track's own take; the key reads
+      "Kept" for that pass. Without a region it stars the track's take as before.
 - [ ] Crossfade slider (0-50 ms): edges sound smooth, no clicks; 0 ms is a hard cut.
 - [ ] "Outside: take" / "Outside: silence".
 - [ ] "Clear comp" brings the full take back everywhere (no take is deleted).
@@ -59,6 +20,10 @@ Last updated: 2026-11-27
 - [ ] Side-by-side MIX / REF levels while both play.
 - [ ] Sync: the reference plays, stops and jumps with the song.
 - [ ] Each project remembers its own reference (Full Test1 picks up the one used before; a new project starts without one).
+
+## Metronome defaults (new)
+- [ ] Set the click sound, beats per bar, count-in and click level (Audio settings, or the Click key's right-click menu),
+      then restart AirDAW or make a new project: they start the same. A saved project still opens with its own.
 
 ## Mixer extras
 - [ ] Channel polarity (⌀) on tracks and buses: flips the sound; takes recorded with ⌀ on play back normally.
@@ -83,6 +48,9 @@ newer (the workflow checks every Monday).
 
 ## Projects
 - [ ] Double-clicking a .airdaw file opens that project; with AirDAW already open, it opens in the running window.
+
+## Deferred (not testing VST3 plugins for now)
+- [ ] A hosted VST3 module: "Open plugin window" still opens it.
 
 ## To review later
 - Hit Record Meter (i) guide: review the wording (app/ui/tools/HitMeterInfo.h).

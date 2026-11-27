@@ -20,8 +20,9 @@ TakesBar::TakesBar(AppCtx& ctx) : ctx_(ctx) {
   keep_.setTooltip("Star the selected take so Delete unkept leaves it alone");
   keep_.onClick = [this] {
     auto* e = ctx_.engine(); const int t = track(); if (!e || t < 0) return;
+    const auto* sel = selected(*e, t);
     for (int i = 0; i < e->numTakes(t); ++i)
-      if (e->takeAt(t, i) == e->track(t).take.load()) { e->setTakeKeep(t, i, !e->takeAt(t, i)->keep); key_.clear(); return; }
+      if (e->takeAt(t, i) == sel) { e->setTakeKeep(t, i, !e->takeAt(t, i)->keep); key_.clear(); return; }
     ctx_.note("Click a take first, then keep it");
   };
   del_.setTooltip("Remove the takes without a star (in this loop region) and move their files to the Recycle Bin");
@@ -41,6 +42,16 @@ TakesBar::TakesBar(AppCtx& ctx) : ctx_(ctx) {
   for (juce::Component* c : std::initializer_list<juce::Component*>{&outside_, &clearComp_, &xfade_}) addChildComponent(c);
   clear_.setTooltip("Remove the loop region");
   clear_.onClick = [this] { if (auto* e = ctx_.engine()) { auto& tr = e->transport(); tr.loopOn = false; tr.loopIn = 0; tr.loopOut = 0; } };
+}
+
+// The take the bar shows as selected: in a loop region the comp's pick for that region, else the track's take.
+const airdaw::Take* TakesBar::selected(airdaw::Engine& e, int t) const {
+  const auto& tr = e.transport();
+  const auto li = tr.loopIn.load(), lo = tr.loopOut.load();
+  if (lo > li)
+    if (const auto* cp = e.comp(t))
+      for (auto& s : cp->sections) if (s.from <= li && s.to >= lo) return s.take;
+  return e.track(t).take.load();
 }
 
 int TakesBar::track() const {
@@ -148,8 +159,9 @@ void TakesBar::rebuild() {
     hint_ = ch.armed.load() ? (region ? "Press " + juce::String(juce::CharPointer_UTF8("\xe2\x97\x8f")) + " Rec with Loop on: every pass adds a take to " + juce::String(ch.name)
                                       : "Press Rec to record a take on " + juce::String(ch.name))
                             : "No takes here yet: arm " + juce::String(ch.name) + " (R) to record some";
-  bool activeKept = false;
-  for (int i = 0; i < e->numTakes(t); ++i) if (e->takeAt(t, i) == active) activeKept = e->takeAt(t, i)->keep;
+  bool activeKept = false;  // the selected take (the chip lit in the bar)
+  const auto* sel = selected(*e, t);
+  for (int i = 0; i < e->numTakes(t); ++i) if (e->takeAt(t, i) == sel) activeKept = e->takeAt(t, i)->keep;
   keep_.setVisible(!shown.empty()); del_.setVisible(!inScope.empty());
   const bool comping = cp != nullptr || (region && active != nullptr);
   outside_.setVisible(comping); xfade_.setVisible(comping); clearComp_.setVisible(cp != nullptr && !cp->sections.empty());

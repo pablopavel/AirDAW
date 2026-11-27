@@ -570,6 +570,7 @@ void MainComponent::newSession() {
         airdaw::Engine blank(e->sampleRate());
         auto tmp = (juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("airdaw_blank.airdaw")).getFullPathName().toStdString();
         airdaw::saveSession(blank, tmp); airdaw::loadSession(*e, tmp);
+        ui::AppCtx::applyMetronomeDefaults(*e, *props_);  // your usual click, not the factory one
         inserts_.close(); ctx_.viewTrack = -1; resetMeters();
         setSessionFile({}); note("New project");
         restoreProjectReference(false);
@@ -853,6 +854,7 @@ void MainComponent::timerCallback() {
     mixLoud_ = std::make_unique<airdaw::LoudnessMeter>(e->sampleRate());
     refLoud_ = std::make_unique<airdaw::LoudnessMeter>(e->sampleRate());
     e->monitor().refSync = props_->getBoolValue("reference.sync", false);
+    if (!metroDefaulted_ && !snapshotMode_) { metroDefaulted_ = true; ui::AppCtx::applyMetronomeDefaults(*e, *props_); }  // fresh launch
     tapBuf_.assign(2 * 16384, 0.f);
     e->setMasterTapEnabled(true);
     // The reference is decoded at the engine's rate, so a new engine (new rate) decodes it again.
