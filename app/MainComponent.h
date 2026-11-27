@@ -63,6 +63,15 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   void updateDeviceStatus();
   bool requireAudio(const char* what);
   void toggleDisplayPanel();
+  // The "menus": the Display and Plugins panels and the Audio, MIDI mappings and About plugin windows. Opening one
+  // closes the others; a click anywhere else in the main window closes them (ClickAway). A plugin's own editor stays.
+  enum Menu { MenuNone, MenuDisplay, MenuPlugins, MenuSettings, MenuMidi, MenuInfo };
+  void closeMenus(Menu keep = MenuNone);
+  struct ClickAway : juce::MouseListener {
+    std::function<void(const juce::MouseEvent&)> onDown;
+    void mouseDown(const juce::MouseEvent& e) override { if (onDown) onDown(e); }
+  } clickAway_;
+  void clickedSomewhere(const juce::MouseEvent& e);
   void showAudioSettings();
   void applyTheme();
   void note(const juce::String& s, bool warn = false);

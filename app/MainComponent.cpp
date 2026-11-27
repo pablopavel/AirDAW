@@ -87,6 +87,7 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   deck_.onListen = [this] { setListen(!listen_); };
   addChildComponent(listenRow_);
   ctx_.showPluginInfo = [this](const juce::String& name) {
+    closeMenus(MenuInfo);
     if (!pluginInfo_) pluginInfo_ = std::make_unique<ui::PluginInfoWindow>();
     pluginInfo_->show(name);
   };
@@ -139,6 +140,8 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
 
   setWantsKeyboardFocus(true);
   addKeyListener(this);
+  clickAway_.onDown = [this](const juce::MouseEvent& e) { clickedSomewhere(e); };
+  if (!snapshotMode_) juce::Desktop::getInstance().addGlobalMouseListener(&clickAway_);
   {  // MIDI Learn
     ui::MidiControl::Host h;
     h.engine = [this] { return bridge_.engine(); };
@@ -167,6 +170,7 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
 }
 
 MainComponent::~MainComponent() {
+  juce::Desktop::getInstance().removeGlobalMouseListener(&clickAway_);
   stopTimer();
   juce::Logger::writeToLog("AirDAW closing");
   T().removeChangeListener(this);
@@ -205,6 +209,7 @@ void MainComponent::applyTheme() {
 }
 
 void MainComponent::togglePluginsPanel() {
+  if (!pluginsPanel_.isVisible()) closeMenus(MenuPlugins);
   pluginsPanel_.setVisible(!pluginsPanel_.isVisible());
   if (pluginsPanel_.isVisible() && display_.isVisible()) toggleDisplayPanel();
   if (pluginsPanel_.isVisible()) pluginsPanel_.toFront(false);
@@ -212,8 +217,28 @@ void MainComponent::togglePluginsPanel() {
   resized();
 }
 
+void MainComponent::closeMenus(Menu keep) {
+  if (keep != MenuDisplay && display_.isVisible()) toggleDisplayPanel();
+  if (keep != MenuPlugins && pluginsPanel_.isVisible()) togglePluginsPanel();
+  if (keep != MenuSettings && settings_ && settings_->isVisible()) settings_->setVisible(false);
+  if (keep != MenuMidi && midiWindow_ && midiWindow_->isVisible()) midiWindow_->setVisible(false);
+  if (keep != MenuInfo && pluginInfo_ && pluginInfo_->isVisible()) pluginInfo_->setVisible(false);
+}
+
+// A mouse press anywhere (all windows): one in the main window, outside an open panel, closes the menus. Presses in
+// other windows (the menus' own windows, pop-up lists, a plugin's editor) are left alone; so are the keys that toggle
+// a panel (they close it themselves).
+void MainComponent::clickedSomewhere(const juce::MouseEvent& e) {
+  auto* c = e.eventComponent;
+  if (c == nullptr || c->getTopLevelComponent() != getTopLevelComponent()) return;
+  auto inside = [c](juce::Component& p) { return c == &p || p.isParentOf(c); };
+  if (display_.isVisible() && !inside(display_) && !inside(deck_.displayBtn)) toggleDisplayPanel();
+  if (pluginsPanel_.isVisible() && !inside(pluginsPanel_) && !inside(deck_.pluginsButton())) togglePluginsPanel();
+  closeMenus(display_.isVisible() ? MenuDisplay : pluginsPanel_.isVisible() ? MenuPlugins : MenuNone);
+}
+
 void MainComponent::toggleDisplayPanel() {
-  if (!display_.isVisible() && pluginsPanel_.isVisible()) pluginsPanel_.setVisible(false);
+  if (!display_.isVisible()) closeMenus(MenuDisplay);
   display_.setVisible(!display_.isVisible());
   deck_.displayBtn.setToggleState(display_.isVisible(), juce::dontSendNotification);
   deck_.setPluginsLit(pluginsPanel_.isVisible());
@@ -222,6 +247,7 @@ void MainComponent::toggleDisplayPanel() {
 }
 
 void MainComponent::showAudioSettings() {
+  closeMenus(MenuSettings);
   if (!settings_) {
     settings_ = std::make_unique<ui::SettingsWindow>(ctx_, [this](ui::SettingsContent& c) {
       c.onAutoSave = [this](bool on, int id) { autoOn_ = on; autoId_ = juce::jlimit(1, 6, id); applyAutoSaveSettings();
@@ -367,10 +393,10 @@ bool MainComponent::keyPressed(const juce::KeyPress& k, juce::Component*) {
     return true;
   }
   if (k == juce::KeyPress::escapeKey) {
+    if (ui::fullscreen::isOn()) { ui::fullscreen::set(false); return true; }  // leaves full screen straight away
     if (display_.isVisible()) { toggleDisplayPanel(); return true; }
     if (pluginsPanel_.isVisible()) { togglePluginsPanel(); return true; }
     if (inserts_.isVisible()) { inserts_.close(); return true; }
-    if (ui::fullscreen::isOn()) { ui::fullscreen::set(false); return true; }  // nothing left to close: leave full screen
   }
   return false;
 }
@@ -507,6 +533,7 @@ void MainComponent::midiChanged() {
 
 void MainComponent::showMidiMappings() {
   if (!midi_) return;
+  closeMenus(MenuMidi);
   if (!midiWindow_) midiWindow_ = std::make_unique<ui::MidiMappingsWindow>(*midi_);
   midiWindow_->rebuild();
   midiWindow_->setVisible(true);

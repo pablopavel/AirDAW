@@ -91,16 +91,15 @@ class Deck : public juce::Component {
   void setPluginsLit(bool on) { plugins_.setToggleState(on, juce::dontSendNotification); }
   void previewAmbient(int state) { ambPreview_ = state; }  // test hook: transport light as if 1 = playing, 2 = recording
   IconKey displayBtn{IconKey::Gear};
-  juce::TextButton metersBtn{juce::String(juce::CharPointer_UTF8("\xe2\x97\x94 Meters"))};
-  juce::TextButton projectBtn{juce::String(juce::CharPointer_UTF8("Project \xe2\x96\xbe"))};
+  juce::TextButton metersBtn{"Meters"};
+  juce::TextButton projectBtn{"Project"};
  private:
   AppCtx& ctx_;
   Lcd pos_{"Position", 40.f}, rate_{"Rate / depth", 15.f}, lat_{"Latency", 15.f}, dsp_{"DSP", 15.f};
   TransportKeys keys_;
   TapButton tap_;
   void showClickMenu();  // right-click on the Click key: the click sound
-  juce::TextButton listen_{juce::String(juce::CharPointer_UTF8("\xe2\x97\x89 Listen"))}, midi_{"MIDI Learn"},
-      plugins_{juce::String(juce::CharPointer_UTF8("\xe2\x9f\xb3 Plugins"))};
+  juce::TextButton listen_{"Listen"}, midi_{"MIDI Learn"}, plugins_{"Plugins"};
   IconKey full_{IconKey::Expand};
   std::vector<juce::TextButton*> buttons_;
   bool pluginsBadge_ = false;

@@ -5,45 +5,12 @@ When something works, it is removed from this list; when it doesn't, it gets a n
 
 Last updated: 2026-11-27
 
-## Controls, inserts and layout (new)
-- [ ] With the insert panel open, the meter dock stays (when the window has room) and its divider resizes it; that height is
-      remembered separately from the height without the insert panel.
-- [ ] Dragging the dividers between reference tools: no tool slides off the right end; the last tool stops at its minimum width.
-
-## Inputs and duplicating (new)
-- [ ] In menu: a mono track lists In 1, In 2... and In 1+2 (both inputs mixed into the one channel, each at half level);
-      a stereo track lists In 1+2 (1 left, 2 right) and single inputs (heard on both sides). The button shows "In 1+2".
-      Record on a mono track with In 1+2: the take has both inputs. Saved with the project.
-- [ ] Right-click a track's name > Duplicate track: a "<name> copy" track appears right after it with the same settings,
-      inserts (and their knob settings / plugin state), chain mix, takes and comp; not armed or soloed. Its takes are
-      copies of the files ("... copy.wav" next to the originals), so deleting takes on one never touches the other.
-      Save, reopen: both tracks are there. With all 24 tracks in use it says so.
-
-## Hit Record Meter (new)
-- [ ] The meter is always the last master insert: add effects to the master and they go before it (the add card sits
-      in front of the meter); drag the meter or another module around and the meter goes back to the end.
-- [ ] A project saved with the meter in an earlier master slot: on opening, the meter moves to the end, the other
-      effects keep their order, and there is only one meter.
-- [ ] "Dark view" in the meter dock header: the Hit Record Meter drawn dark (same layout, scales, dots, beam lines,
-      letter grades, score and advice as the plugin; the scale, rules and labels in the accent). Compare it with the
-      plugin's own display on the same music: the dots and grades should match. Click the view to freeze it,
-      double-click to start over. Below about 370 px tall it shows the compact layout (tone colour and big grade),
-      like the plugin. Remembered after a restart; works without the plugin loaded.
-- [ ] The (i) after "HIT RECORD METER" opens a plain-words guide (what each band measures, how to move each readout,
-      the letters, tone bar and hints, tips); it scrolls and closes when you click elsewhere.
-
-## Insert chain: mix and parallel (new)
-- [ ] Insert panel header: CHAIN MIX knob (100 % = the chain only, 0 % = the signal before the chain, in between a
-      blend). Drag, wheel, double-click = 100 %; MIDI Learn works on it; saved with the project. No clicks while moving it.
-- [ ] The ∥ key on a card / module (both looks): the plugin runs in parallel with the plugin before it (their outputs
-      blended equally); a ∥ mark appears between them. Several in a row form one group. Off again = in series.
-      The first plugin's ∥ is greyed out; a bypassed plugin drops out of its group. Saved with the project.
-- [ ] Hit Record Meter now measures after the master fader (move the master fader: its peaks move with it, like the
-      other meters and the dark view). The master's chain mix does not include the meter.
-
 ## Full screen (new)
-- [ ] AirDAW opens full screen. Esc leaves it (after closing an open Display / Plugins / insert panel first); the Full key
-      toggles it. Leaving it gives the normal window back.
+- [ ] Esc leaves full screen straight away, even with a panel open (windowed, Esc closes an open panel).
+- [ ] Menus close each other and on a click elsewhere: open Display, Plugins, Audio settings, MIDI mappings or About
+      plugin, then open another (the first closes) or click anywhere else in AirDAW (it closes). Clicks inside the open
+      panel / window, and in its drop-down lists, keep it open. A plugin's own editor window is not affected.
+- [ ] Deck keys read just Listen, MIDI Learn, Plugins, Project, Meters (no small symbols).
 - [ ] The Full key is an icon only: corners pointing out when windowed, pointing in when full screen. The Display key is
       a gear icon only (still lit while the Display panel is open). Both keys are narrow; the other keys share the row.
 
@@ -146,6 +113,9 @@ newer (the workflow checks every Monday).
 
 ## Projects
 - [ ] Double-clicking a .airdaw file opens that project; with AirDAW already open, it opens in the running window.
+
+## To review later
+- Hit Record Meter (i) guide: review the wording (app/ui/tools/HitMeterInfo.h).
 
 ## Not built yet (roadmap)
 - Cable round-trip latency test and the lowest crackle-free buffer size (needs a patch cable from an output to an input).
