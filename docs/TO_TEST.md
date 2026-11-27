@@ -13,7 +13,8 @@ Last updated: 2026-11-26
 - [ ] Preset readout menu: Default, your saved presets, "Save current settings as a preset…", Delete preset ▸. The readout shows the last preset applied.
 - [ ] Rack knobs: drag and mouse wheel; MIDI learn on a rack knob.
 - [ ] A hosted VST3 module: "Open plugin window" still opens it.
-- [ ] Reels: red "Darkroom" reels turn while playing; the red light hums faintly when stopped; no extra CPU in the DSP readout.
+- [ ] Reels ("Amber Night"): the aluminium reels turn while playing (the left, full one slower) while their highlights stay put;
+      the lamp flickers now and then; the small REC lamp under the plate pulses red only while recording; no extra CPU in the DSP readout.
 - [ ] App icon (Scope A) on the taskbar, title bar, Alt+Tab and AirDAW.exe in Explorer. A pinned taskbar shortcut may keep the
       old icon until it is unpinned and pinned again (Windows caches icons).
 

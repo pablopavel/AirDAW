@@ -20,16 +20,16 @@ class Lcd : public juce::Component, public juce::SettableTooltipClient {
   juce::String caption_, text_; float h_; juce::Colour col_;
 };
 
-// Pair of tape reels that turn while the transport plays ("Darkroom": black anodized reels on a tilted
-// gloss-black plate, lit only by a red safelight that hums faintly).
+// Pair of tape reels that turn while the transport plays ("Amber Night": aluminium reels on a deck plate
+// leaning back under one warm, slightly flickering lamp; a REC lamp pulses while recording).
 class Reels : public juce::Component, private juce::Timer {
  public:
   Reels() { startTimerHz(30); }
-  std::function<bool()> isPlaying;
+  std::function<bool()> isPlaying, isRecording;
   void paint(juce::Graphics&) override;
  private:
   void timerCallback() override;
-  float a1_ = 0.f, a2_ = 0.f, hum_ = 1.f, humPhase_ = 0.f;
+  float a1_ = 0.f, a2_ = 0.f, lamp_ = 0.95f, rec_ = 0.f;
   int tick_ = 0;
 };
 

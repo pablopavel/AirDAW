@@ -85,6 +85,7 @@ void TransportKeys::mouseUp(const juce::MouseEvent& e) {
 // ---------------- Deck ----------------
 Deck::Deck(AppCtx& ctx) : ctx_(ctx) {
   reels_.isPlaying = [this] { auto* e = ctx_.engine(); return e && e->transport().playing.load() && ctx_.audioRunning; };
+  reels_.isRecording = [this] { auto* e = ctx_.engine(); return e && e->transport().recording.load() && ctx_.audioRunning; };
   for (auto* c : std::initializer_list<juce::Component*>{&reels_, &pos_, &rate_, &lat_, &dsp_, &keys_}) addAndMakeVisible(c);
   keys_.onKey = [this](TransportKeys::Key k) { if (onTransport) onTransport(k); };
   buttons_ = {&tap_, &listen_, &midi_, &plugins_, &projectBtn, &metersBtn, &displayBtn, &full_};
