@@ -113,6 +113,8 @@ struct Channel {
   std::atomic<int> inputL{-1}, inputR{-1};  // hardware input index, -1 none
   Meter meter;
   std::array<InsertProcessor*, kMaxInserts> insert{};  // audio-thread-owned pointers
+  std::atomic<float> chainMix{1.f};  // insert chain wet / dry: 1 = the chain's output only, 0 = the signal before it
+  float smoothMix = 1.f;             // audio thread only
   std::atomic<const Take*> take{nullptr};         // active take for playback
   std::atomic<const Comp*> comp{nullptr};         // optional comp over the active take (see Comp)
   bool recActive = false;                          // audio thread only
@@ -238,7 +240,9 @@ class Engine {
   void processBus(int bi, int n, bool anyBusSolo);
   Channel* resolve(int id);
   void applyCommands();
-  void runChain(Channel& c, float* l, float* r, int n);
+  // The channel's inserts in slot order (series, parallel groups averaged), then the chain wet / dry.
+  // `buf`: the channel's chain buffers (chainBuf_); `skip`: an insert run elsewhere (the meter on the master).
+  void runChain(Channel& c, int buf, float* l, float* r, int n, const InsertProcessor* skip = nullptr);
   void updateMeter(Meter& m, const float* l, const float* r, int n);
   double beatSamples() const;
   void addClick(float* l, float* r, int n, int64_t pos);
@@ -281,6 +285,8 @@ class Engine {
   std::array<std::vector<float>, 2> masterBuf_;
   std::array<std::vector<float>, 2> work_;
   std::array<std::array<std::vector<float>, 2>, kMaxTracks> trackBuf_;
+  // Per channel (tracks, buses, master): dry L/R for the wet / dry, a parallel group's input L/R and its sum L/R.
+  std::array<std::array<std::vector<float>, 6>, kMaxTracks + kNumBuses + 1> chainBuf_;
   std::array<char, kMaxTracks> trackLive_{};
   WorkPool pool_;
 };

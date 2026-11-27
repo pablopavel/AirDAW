@@ -54,7 +54,7 @@ void MonitorButton::paintButton(juce::Graphics& g, bool over, bool down) {
 
 // ---------------- Strip ----------------
 Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
-  plate_.onClick = [this] { ctx_.showInserts(id_, -1); };
+  // a click on the name does nothing by itself: drag it to move the strip, double-click to rename (Inserts opens the chain)
   plate_.onRename = [this](const juce::String& n) { if (auto* e = ctx_.engine()) if (auto* c = channelOf(*e, id_)) c->name = n.toStdString(); };
   plate_.onMenu = [this] {  // right-click the name: rename, inserts, and (tracks) remove
     juce::Component::SafePointer<Strip> sp(this);  // made here: MSVC can't capture `this` into the nested lambda's init
@@ -258,7 +258,6 @@ void Strip::resized() {
 // ---------------- MasterStrip ----------------
 MasterStrip::MasterStrip(AppCtx& ctx) : ctx_(ctx) {
   plate_.setName2("Master"); plate_.setRenamable(false);
-  plate_.onClick = [this] { ctx_.showInserts(kMasterId, -1); };
   addAndMakeVisible(plate_);
   ins_.summary = true; ins_.channelId = kMasterId;
   ins_.onClick = [this] { ctx_.showInserts(kMasterId, -1); };

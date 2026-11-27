@@ -163,7 +163,24 @@ class InsertCard : public juce::Component, public juce::DragAndDropTarget {
   virtual void sync() = 0;
   virtual int prefWidth() const = 0;
   virtual int prefHeight() const = 0;
+  virtual int slot() const = 0;
 };
+
+// The parallel switch on a card / module: the plugin runs side by side with the active one before it.
+static void setupParallel(juce::TextButton& b, InsertPanel& p, int ch, int slot, bool& first) {
+  b.setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x88\xa5")));
+  b.getProperties().set("noUpper", true); b.getProperties().set("fontH", 14.0);
+  auto* e = p.ctxEngine();
+  first = true;
+  if (e) for (int s = 0; s < slot; ++s) if (e->insertAt(ch, s)) first = false;
+  b.setEnabled(!first);
+  b.setTooltip(first ? "Parallel needs a plugin before this one (this is the first in the chain)"
+                     : "Parallel: run side by side with the plugin before it (the outputs are blended equally). Off: in series, after it.");
+  b.onClick = [&p, ch, slot] {
+    if (auto* en = p.ctxEngine()) if (auto* f = en->insertAt(ch, slot)) f->setParallel(!f->parallel());
+    juce::MessageManager::callAsync([sp = juce::Component::SafePointer<InsertPanel>(&p)] { if (sp) sp->refreshChain(); });  // (rebuilds this card)
+  };
+}
 
 static constexpr int kCloseCol = 44;  // the right-hand column holding the second X
 
@@ -187,6 +204,7 @@ class ClassicCard : public InsertCard {
     hosted_ = dynamic_cast<airdaw::FxInstance*>(fx) == nullptr;
     open_ = p_.isOpen(p_.ch_, slot);
     for (auto* b : {&byp_, &tog_, &rm_}) { addAndMakeVisible(*b); b->getProperties().set("noUpper", true); b->getProperties().set("fontH", 12.0); }
+    if (!(p_.ch_ == kMasterId && slot_ == airdaw::kMaxInserts - 1)) { setupParallel(par_, p_, p_.ch_, slot_, first_); addAndMakeVisible(par_); }  // (not on the meter)
     if (!hosted_) {
       for (auto* b : {&fav_, &info_}) { addAndMakeVisible(*b); b->getProperties().set("noUpper", true); b->getProperties().set("fontH", 13.0); }
       fav_.setTooltip("Favourite: show this plugin at the top of the plugin list");
@@ -246,9 +264,11 @@ class ClassicCard : public InsertCard {
 
   airdaw::InsertProcessor* fxNow() const { auto* e = p_.ctx_.engine(); return e ? e->insertAt(p_.ch_, slot_) : nullptr; }
 
+  int slot() const override { return slot_; }
   void sync() override {
     auto* f = fxNow(); if (!f) return;
     byp_.setToggleState(!f->bypassed(), juce::dontSendNotification);
+    par_.setToggleState(f->parallel() && !first_, juce::dontSendNotification);
     active_ = !f->bypassed();
     for (int i = 0; i < (int)knobs_.size() && i < f->numParams(); ++i) {
       auto& k = *knobs_[(size_t)i];
@@ -266,7 +286,7 @@ class ClassicCard : public InsertCard {
 
   int cols() const { return juce::jlimit(1, kcMaxCols, (int)knobs_.size()); }
   int prefWidth() const override {
-    const int head = (hosted_ ? 172 : 240) + juce::roundToInt(juce::GlyphArrangement::getStringWidth(Theme::spaced(Theme::uiFont(14.f, true), 0.05f), name_));
+    const int head = (hosted_ ? 206 : 274) + juce::roundToInt(juce::GlyphArrangement::getStringWidth(Theme::spaced(Theme::uiFont(14.f, true), 0.05f), name_));
     if (!open_) return juce::jmax(170, head);
     if (hosted_) return juce::jmax(head, 260);
     return juce::jmax(head, cols() * kcKnobW + (cols() - 1) * kcKnobGapX + 2 * kcPad);
@@ -307,6 +327,7 @@ class ClassicCard : public InsertCard {
     rm_.setBounds(head.removeFromRight(30)); head.removeFromRight(4);
     tog_.setBounds(head.removeFromRight(30)); head.removeFromRight(4);
     byp_.setBounds(head.removeFromRight(30));
+    if (par_.isVisible()) { head.removeFromRight(4); par_.setBounds(head.removeFromRight(30)); }
     tog_.setButtonText(juce::String(juce::CharPointer_UTF8(open_ ? "\xe2\x96\xbe" : "\xe2\x96\xb8")));
     byp_.setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x8f\xbb")));
     if (!hosted_) {
@@ -377,7 +398,8 @@ class ClassicCard : public InsertCard {
   const int slot_;
   juce::String name_;
   bool hosted_ = false, open_ = false, active_ = true, dropHover_ = false;
-  juce::TextButton byp_, tog_, rm_, fav_, info_, window_, def_{"Default"}, save_{juce::String(juce::CharPointer_UTF8("\xef\xbc\x8b Save"))};
+  juce::TextButton byp_, tog_, rm_, par_, fav_, info_, window_, def_{"Default"}, save_{juce::String(juce::CharPointer_UTF8("\xef\xbc\x8b Save"))};
+  bool first_ = true;
   std::vector<std::unique_ptr<PluginKnob>> knobs_;
   std::vector<std::unique_ptr<juce::TextButton>> presetBtns_;
 };
@@ -394,6 +416,7 @@ class RackCard : public InsertCard {
     finish_ = finishFor(category_, hosted_);
     open_ = p_.isOpen(p_.ch_, slot);
     for (auto* b : {&byp_, &tog_, &rm_}) { addAndMakeVisible(*b); styleSmall(*b); }
+    if (!(p_.ch_ == kMasterId && slot_ == airdaw::kMaxInserts - 1)) { setupParallel(par_, p_, p_.ch_, slot_, first_); addAndMakeVisible(par_); }  // (not on the meter)
     byp_.getProperties().set("fontH", 11.0); tog_.getProperties().set("fontH", 15.0); rm_.getProperties().set("fontH", 13.0);
     byp_.setButtonText("IN");
     tog_.setButtonText(juce::String(juce::CharPointer_UTF8(open_ ? "\xe2\x96\xbe" : "\xe2\x96\xb8")));
@@ -449,9 +472,11 @@ class RackCard : public InsertCard {
 
   airdaw::InsertProcessor* fxNow() const { auto* e = p_.ctx_.engine(); return e ? e->insertAt(p_.ch_, slot_) : nullptr; }
 
+  int slot() const override { return slot_; }
   void sync() override {
     auto* f = fxNow(); if (!f) return;
     byp_.setToggleState(!f->bypassed(), juce::dontSendNotification);
+    par_.setToggleState(f->parallel() && !first_, juce::dontSendNotification);
     if (active_ != !f->bypassed()) { active_ = !f->bypassed(); repaint(); }
     for (int i = 0; i < (int)knobs_.size() && i < f->numParams(); ++i) {
       auto& k = *knobs_[(size_t)i];
@@ -488,7 +513,7 @@ class RackCard : public InsertCard {
     if (!open_) {  // slim plate: name runs up the module
       T().drawScrew(g, {b.getCentreX(), b.getY() + 9.f});
       T().drawScrew(g, {b.getCentreX(), b.getBottom() - 10.f});
-      auto band = juce::Rectangle<float>(b.getX(), b.getY() + 76.f, b.getWidth(), b.getHeight() - 76.f - 66.f);
+      auto band = juce::Rectangle<float>(b.getX(), b.getY() + 100.f, b.getWidth(), b.getHeight() - 100.f - 66.f);
       {
         juce::Graphics::ScopedSaveState ss(g);
         g.addTransform(juce::AffineTransform::rotation(-juce::MathConstants<float>::halfPi, band.getCentreX(), band.getCentreY()));
@@ -522,11 +547,13 @@ class RackCard : public InsertCard {
     if (!open_) {
       auto col = r.reduced(7, 0);
       tog_.setBounds(col.withY(20).withHeight(22)); rm_.setBounds(col.withY(46).withHeight(22));
+      par_.setBounds(col.withY(72).withHeight(22));
       byp_.setBounds(col.withY(r.getBottom() - 50).withHeight(22));
       return;
     }
     auto foot = r.removeFromBottom(kFoot + 2).reduced(kSide - 4, 4);
-    foot.removeFromLeft(14); byp_.setBounds(foot.removeFromLeft(38)); foot.removeFromLeft(6);
+    foot.removeFromLeft(14); byp_.setBounds(foot.removeFromLeft(38)); foot.removeFromLeft(4);
+    if (par_.isVisible()) { par_.setBounds(foot.removeFromLeft(24)); foot.removeFromLeft(6); }
     rm_.setBounds(foot.removeFromRight(24)); foot.removeFromRight(3);
     tog_.setBounds(foot.removeFromRight(24)); foot.removeFromRight(3);
     auto body = r.withTrimmedTop(kTop + 6).reduced(kSide, 0);
@@ -630,7 +657,8 @@ class RackCard : public InsertCard {
   juce::String name_, category_;
   Finish finish_;
   bool hosted_ = false, open_ = false, active_ = true, dropHover_ = false;
-  juce::TextButton byp_, tog_, rm_, fav_, info_, window_, preset_;
+  juce::TextButton byp_, tog_, rm_, par_, fav_, info_, window_, preset_;
+  bool first_ = true;
   std::vector<std::unique_ptr<PluginKnob>> knobs_;
   juce::Image plate_; juce::Point<int> plateSize_; float plateScale_ = 0.f;
 };
@@ -756,6 +784,10 @@ InsertPanel::InsertPanel(AppCtx& ctx, PresetStore& presets) : ctx_(ctx), presets
   view_.setViewedComponent(&row_, false);
   view_.setScrollBarsShown(true, true);  // short windows: the modules scroll instead of being cut off
   addAndMakeVisible(view_);
+  addAndMakeVisible(mix_);
+  mix_.setTooltip("Chain mix: the whole insert chain against the signal before it (100% = the chain only, 0% = dry). "
+                  "Double-click for 100%.");
+  mix_.onChange = [this](float v) { if (auto* e = ctx_.engine()) if (auto* c = channelOf(*e, ch_)) c->chainMix = v / 100.f; };
   for (auto* b : {&close1_, &close2_}) {
     addAndMakeVisible(*b); b->onClick = [this] { close(); };
     b->setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x9c\x95")));
@@ -819,7 +851,7 @@ juce::String InsertPanel::chainKey() const {
   juce::String k; k << ch_ << "|" << target_ << "|" << (int)showOld_ << "|" << ctx_.props.getValue("favoritePlugins") << "|" << T().inserts << "|";
   for (int s = 0; s < airdaw::kMaxInserts; ++s) {
     auto* fx = e->insertAt(ch_, s);
-    k << (fx ? juce::String(fx->name()) : juce::String("-")) << (isOpen(ch_, s) ? "+" : "") << ";";
+    k << (fx ? juce::String(fx->name()) : juce::String("-")) << (isOpen(ch_, s) ? "+" : "") << (fx && fx->parallel() ? "|" : "") << ";";
   }
   return k;
 }
@@ -830,6 +862,7 @@ void InsertPanel::rebuild() {
   key_ = k;
   rack_ = T().inserts == "rack";
   row_.rack = rack_;
+  tagMidi(mix_, "ch." + juce::String(ch_) + ".mix");
   cards_.clear(); addCard_.reset();
   for (int s = 0; s < airdaw::kMaxInserts; ++s)
     if (e->insertAt(ch_, s)) {
@@ -855,12 +888,13 @@ void InsertPanel::sync() {
   if (!isVisible()) return;
   auto* e = ctx_.engine();
   if (!e) return;
+  if (auto* c = channelOf(*e, ch_); c && !mix_.isMouseButtonDown()) mix_.setValue(c->chainMix.load() * 100.f);
   if (chainKey() != key_) { rebuild(); if (ctx_.layoutChanged) ctx_.layoutChanged(); }
   for (auto& c : cards_) c->sync();
 }
 
 int InsertPanel::preferredHeight() const {
-  int h = rack_ ? kMinRowH : 96;
+  int h = rack_ ? kMinRowH : 100;  // (room for the header column: name and close, help, chain mix)
   for (auto& c : cards_) h = juce::jmax(h, c->prefHeight());
   const int scroll = view_.isHorizontalScrollBarShown() ? 10 : 0;
   return rack_ ? h + 2 * kGap + kRail + 20 + scroll : h + 20 + scroll;
@@ -872,10 +906,11 @@ void InsertPanel::paint(juce::Graphics& g) {
   g.setColour(juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), T().rad(6.f), 1.f);
   auto* e = ctx_.engine();
   auto hd = getLocalBounds().reduced(14, 10).removeFromLeft(118);
+  hd.removeFromTop(2);
   if (e && ch_ >= 0) {
     auto* c = channelOf(*e, ch_);
     g.setFont(Theme::spaced(Theme::uiFont(15.f, true), 0.16f));
-    T().drawGlowText(g, juce::String(c ? c->name : "").toUpperCase(), hd.removeFromTop(22).toFloat(), juce::Justification::centredLeft, Theme::cream(), 0.5f);
+    T().drawGlowText(g, juce::String(c ? c->name : "").toUpperCase(), hd.removeFromTop(22).withTrimmedRight(30).toFloat(), juce::Justification::centredLeft, Theme::cream(), 0.5f);
     g.setColour(Theme::dim()); g.setFont(Theme::uiFont(11.5f));
     if (rack_) g.drawFittedText("Insert rack\ndrag a module's name\nto reorder", hd.removeFromTop(46), juce::Justification::topLeft, 3);
     else g.drawFittedText(juce::String(juce::CharPointer_UTF8("Insert chain\ndrag \xe2\xa0\xbf to reorder")), hd.removeFromTop(34), juce::Justification::topLeft, 2);
@@ -897,10 +932,56 @@ void InsertPanel::paint(juce::Graphics& g) {
   g.setColour(juce::Colours::black); g.drawRoundedRectangle(ch.toFloat().reduced(0.5f), 4.f, 1.f);
 }
 
+// A mark between two neighbouring cards whose second one runs in parallel with the first.
+void InsertPanel::placeLinks() {
+  row_.links.clear();
+  auto* e = ctx_.engine(); if (!e) return;
+  for (size_t i = 1; i < cards_.size(); ++i) {
+    auto* fx = e->insertAt(ch_, cards_[i]->slot());
+    if (!fx || !fx->parallel()) continue;
+    const auto a = cards_[i - 1]->getBounds(), b = cards_[i]->getBounds();
+    if (addCard_ && addCard_->getX() > a.getRight() && addCard_->getX() < b.getX()) continue;  // not neighbours
+    const float y = rack_ ? (float)b.getCentreY() : (float)b.getY() + 17.f;
+    row_.links.push_back({((float)a.getRight() + (float)b.getX()) / 2.f, y});
+  }
+  row_.repaint();
+}
+
+void InsertPanel::refreshChain() { key_.clear(); rebuild(); if (ctx_.layoutChanged) ctx_.layoutChanged(); }
+
+void RackWell::paintOverChildren(juce::Graphics& g) {
+  auto& t = T();
+  for (auto c : links) {
+    juce::Rectangle<float> pill(c.x - 7.f, c.y - 16.f, 14.f, 32.f);
+    t.drawGlow(g, pill, t.am(), 6.f, 0.5f, 7.f);
+    g.setColour(juce::Colour(0xff120c04)); g.fillRoundedRectangle(pill, 7.f);
+    g.setColour(t.am()); g.drawRoundedRectangle(pill, 7.f, 1.2f);
+    g.fillRect(c.x - 3.f, c.y - 9.f, 2.f, 18.f); g.fillRect(c.x + 1.f, c.y - 9.f, 2.f, 18.f);
+  }
+}
+
+void MixKnob::paint(juce::Graphics& g) {
+  auto& t = T();
+  auto r = getLocalBounds().toFloat();
+  const float ks = juce::jmin(30.f, r.getHeight() - 6.f);
+  juce::Rectangle<float> k(r.getX() + 2.f, r.getCentreY() - ks / 2.f, ks, ks);
+  t.drawKnobCap(g, k);
+  const float ang = (v_ / 100.f - 0.5f) * 1.5f * juce::MathConstants<float>::pi;
+  juce::Line<float> ptr(0, -ks / 2.f + 3.f, 0, -ks / 2.f + 11.f);
+  ptr.applyTransform(juce::AffineTransform::rotation(ang).translated(k.getCentreX(), k.getCentreY()));
+  g.setColour(t.knobPointer()); g.drawLine(ptr, 2.f);
+  auto txt = r.withTrimmedLeft(ks + 10.f);
+  g.setColour(Theme::dim()); g.setFont(Theme::spaced(Theme::uiFont(9.5f), 0.14f));
+  g.drawText("CHAIN MIX", txt.removeFromTop(txt.getHeight() * 0.48f), juce::Justification::bottomLeft);
+  g.setFont(Theme::monoFont(12.5f));
+  t.drawGlowText(g, juce::String(juce::roundToInt(v_)) + "%", txt, juce::Justification::topLeft, t.readout(), 0.6f);
+}
+
 void InsertPanel::resized() {
   auto r = getLocalBounds().reduced(10);
   auto hd = r.removeFromLeft(122);
-  close1_.setBounds(hd.withTrimmedTop(rack_ ? 80 : 62).removeFromTop(26).removeFromLeft(30));
+  close1_.setBounds(hd.getRight() - 30, hd.getY(), 30, 26);  // beside the channel name: always in view
+  mix_.setBounds(hd.withTrimmedTop(rack_ ? 74 : 58).removeFromTop(40).removeFromLeft(112));
   // the right X: centred in its own column at the panel's right edge, halfway down
   close2_.setBounds(r.removeFromRight(kCloseCol).withSizeKeepingCentre(30, 26));
   if (!rack_) {  // cards look (the original layout)
@@ -916,6 +997,7 @@ void InsertPanel::resized() {
     }
     row_.used = x;
     row_.setSize(juce::jmax(x, 10), h);
+    placeLinks();
     return;
   }
   r.removeFromRight(6);
@@ -932,6 +1014,7 @@ void InsertPanel::resized() {
   }
   row_.used = x;
   row_.setSize(juce::jmax(x, view_.getMaximumVisibleWidth()), juce::jmax(h + 2 * kGap, view_.getMaximumVisibleHeight()));
+  placeLinks();
   row_.repaint();
 }
 

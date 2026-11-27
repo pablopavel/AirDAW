@@ -18,6 +18,7 @@ Engine::Engine(double sampleRate) : sr_(sampleRate) {
   for (auto& c : refBuf_) c.assign(kMaxBlock, 0.f);
   for (auto& c : work_) c.assign(kMaxBlock, 0.f);
   for (auto& t : trackBuf_) for (auto& c : t) c.assign(kMaxBlock, 0.f);
+  for (auto& b : chainBuf_) for (auto& c : b) c.assign(kMaxBlock, 0.f);
   for (int i = 0; i < kMaxTracks; ++i) tracks_[i].name = "TRACK " + std::to_string(i + 1);
   for (int i = 0; i < kNumBuses; ++i) { buses_[i].name = "BUS " + std::to_string(i + 1); buses_[i].stereo = true; }
   master_.name = "MASTER"; master_.stereo = true;
@@ -432,9 +433,37 @@ void Engine::applyCommands() {
   }
 }
 
-void Engine::runChain(Channel& c, float* l, float* r, int n) {
-  for (auto* fx : c.insert)
-    if (fx) fx->process(l, r, n);
+void Engine::runChain(Channel& c, int buf, float* l, float* r, int n, const InsertProcessor* skip) {
+  // the active inserts in order (bypassed ones are left out, so they also leave a parallel group)
+  InsertProcessor* act[kMaxInserts]; int na = 0;
+  for (auto* fx : c.insert) if (fx && fx != skip && !fx->bypassed()) act[na++] = fx;
+  const float mix = std::clamp(c.chainMix.load(std::memory_order_relaxed), 0.f, 1.f);
+  if (na == 0) { c.smoothMix = mix; return; }
+  auto& B = chainBuf_[(size_t)buf];
+  float *dl = B[0].data(), *dr = B[1].data(), *il = B[2].data(), *ir = B[3].data(), *sl = B[4].data(), *sr = B[5].data();
+  const bool blend = mix < 1.f || c.smoothMix < 1.f;
+  if (blend) { std::memcpy(dl, l, n * sizeof(float)); std::memcpy(dr, r, n * sizeof(float)); }
+  for (int i = 0; i < na;) {
+    int j = i + 1;
+    while (j < na && act[j]->parallel()) ++j;  // the group [i, j)
+    if (j - i == 1) { act[i]->process(l, r, n); i = j; continue; }
+    std::memcpy(il, l, n * sizeof(float)); std::memcpy(ir, r, n * sizeof(float));
+    std::memcpy(sl, l, n * sizeof(float)); std::memcpy(sr, r, n * sizeof(float));
+    act[i]->process(sl, sr, n);
+    for (int m = i + 1; m < j; ++m) {
+      std::memcpy(l, il, n * sizeof(float)); std::memcpy(r, ir, n * sizeof(float));
+      act[m]->process(l, r, n);
+      for (int k = 0; k < n; ++k) { sl[k] += l[k]; sr[k] += r[k]; }
+    }
+    const float g = 1.f / (float)(j - i);  // equal blend of the branches (unity gain when they pass the signal)
+    for (int k = 0; k < n; ++k) { l[k] = sl[k] * g; r[k] = sr[k] * g; }
+    i = j;
+  }
+  if (blend) {  // wet / dry, ramped over the block so moving the knob never clicks
+    float m = c.smoothMix; const float step = (mix - m) / (float)n;
+    for (int k = 0; k < n; ++k) { m += step; l[k] = dl[k] + (l[k] - dl[k]) * m; r[k] = dr[k] + (r[k] - dr[k]) * m; }
+  }
+  c.smoothMix = mix;
 }
 
 void Engine::updateMeter(Meter& m, const float* l, const float* r, int n) {
@@ -522,7 +551,7 @@ void Engine::processTrack(int ti, const SegCtx& c) {
   }
 
   applyGain(wl, wr, n, t.smoothTrim, dbToLin(t.trimDb.load(std::memory_order_relaxed)) * (t.polarity.load(std::memory_order_relaxed) ? -1.f : 1.f));
-  runChain(t, wl, wr, n);
+  runChain(t, ti, wl, wr, n);
 
   bool muted = t.mute.load(std::memory_order_relaxed) || (c.anySolo && !t.solo.load(std::memory_order_relaxed));
   float target = muted ? 0.f : dbToLin(t.gainDb.load(std::memory_order_relaxed));
@@ -542,7 +571,7 @@ void Engine::processBus(int bi, int n, bool anyBusSolo) {
   Channel& b = buses_[bi];
   float* bl = busBuf_[bi][0].data(); float* br = busBuf_[bi][1].data();
   applyGain(bl, br, n, b.smoothTrim, dbToLin(b.trimDb.load(std::memory_order_relaxed)) * (b.polarity.load(std::memory_order_relaxed) ? -1.f : 1.f));
-  runChain(b, bl, br, n);
+  runChain(b, kMaxTracks + bi, bl, br, n);
   bool muted = b.mute.load(std::memory_order_relaxed) || (anyBusSolo && !b.solo.load(std::memory_order_relaxed));
   applyGain(bl, br, n, b.smoothGain, muted ? 0.f : dbToLin(b.gainDb.load(std::memory_order_relaxed)));
   updateMeter(b.meter, bl, br, n);
@@ -622,17 +651,18 @@ void Engine::process(const float* const* in, int nIn, float* const* out, int nOu
       for (int i = 0; i < n; ++i) { ml[i] += bl[i]; mr[i] += br[i]; }
     }
 
-    // Phase 3: master. On B the listening slot (the Hit Record Meter) is skipped here and runs on the reference below.
+    // Phase 3: master. The listening slot (the Hit Record Meter) is not part of the chain: it measures after the master
+    // fader, like every other meter and the export (on B it measures the reference instead, below).
     const Reference* ref = ref_.load(std::memory_order_acquire);
     const bool onB = ref && mon_.listenB.load(std::memory_order_relaxed);
     const int ls = mon_.listenSlot.load(std::memory_order_relaxed);
-    InsertProcessor* listenFx = (onB && ls >= 0 && ls < kMaxInserts) ? master_.insert[(size_t)ls] : nullptr;
-    for (auto* fx : master_.insert)
-      if (fx && fx != listenFx) fx->process(ml, mr, n);
+    InsertProcessor* listenFx = (ls >= 0 && ls < kMaxInserts) ? master_.insert[(size_t)ls] : nullptr;
+    runChain(master_, kMaxTracks + kNumBuses, ml, mr, n, listenFx);
     applyGain(ml, mr, n, master_.smoothGain,
               master_.mute.load(std::memory_order_relaxed) ? 0.f
                   : dbToLin(master_.gainDb.load(std::memory_order_relaxed)));
     updateMeter(master_.meter, ml, mr, n);
+    if (listenFx && !onB) listenFx->process(ml, mr, n);  // the meter: after the master fader
 
     // Master tap for analysis: the mix (before the reference, monitor section and click).
     writeTap(tap_, ml, mr, n);

@@ -20,8 +20,8 @@ Last updated: 2026-11-27
       outlined while the insert panel shows that channel, the plugin list in its tooltip; click opens the panel.
 - [ ] More than 8 inserts on one channel (up to 32): load 10 or more, they all process, save and reopen keeps them all.
       Reordering a long chain by drag still works.
-- [ ] Insert panel: a plain X at the left and one at the right (centred in its column, halfway down); no "AIRDAW 500 / SLOTS"
-      text on the rack rail.
+- [ ] Insert panel: a plain X at the top left (beside the name) and one at the right (centred in its column, halfway
+      down); no "AIRDAW 500 / SLOTS" text on the rack rail.
 - [ ] With the insert panel open, the meter dock stays (when the window has room) and its divider resizes it; that height is
       remembered separately from the height without the insert panel.
 - [ ] Dragging the dividers between reference tools: no tool slides off the right end; the last tool stops at its minimum width.
@@ -38,6 +38,16 @@ Last updated: 2026-11-27
       like the plugin. Remembered after a restart; works without the plugin loaded.
 - [ ] The (i) after "HIT RECORD METER" opens a plain-words guide (what each band measures, how to move each readout,
       the letters, tone bar and hints, tips); it scrolls and closes when you click elsewhere.
+
+## Insert chain: mix and parallel (new)
+- [ ] Insert panel header: CHAIN MIX knob (100 % = the chain only, 0 % = the signal before the chain, in between a
+      blend). Drag, wheel, double-click = 100 %; MIDI Learn works on it; saved with the project. No clicks while moving it.
+- [ ] The ∥ key on a card / module (both looks): the plugin runs in parallel with the plugin before it (their outputs
+      blended equally); a ∥ mark appears between them. Several in a row form one group. Off again = in series.
+      The first plugin's ∥ is greyed out; a bypassed plugin drops out of its group. Saved with the project.
+- [ ] Hit Record Meter now measures after the master fader (move the master fader: its peaks move with it, like the
+      other meters and the dark view). The master's chain mix does not include the meter.
+- [ ] The insert panel's left X now sits beside the channel name.
 
 ## Full screen (new)
 - [ ] AirDAW opens full screen. Esc leaves it (after closing an open Display / Plugins / insert panel first); the Full key
@@ -59,8 +69,8 @@ Last updated: 2026-11-27
 
 ## Moving strips (new)
 - [ ] Drag a track by its name plate onto another track: a line shows where it lands (left or right half), it moves
-      there; buses move among buses the same way. A click on the name still opens the inserts, a right-click the menu,
-      a double-click renames.
+      there; buses move among buses the same way. A single click on a name does nothing (only the INSERTS button opens the
+      chain); a right-click gives the menu, a double-click renames.
 - [ ] The order is saved with the project and comes back on reopening; another project has its own order; the sound
       and routing don't change. "+ Add track" puts a re-added track at the end.
 - [ ] No coloured bar under the channel names (the option is gone too).

@@ -282,7 +282,7 @@ void MidiControl::saveProject() {
 
 // ---------------------------------------------------------------- targets
 bool MidiControl::isContinuous(const juce::String& id) {
-  if (id.startsWith("ch.")) return id.endsWith(".fader") || id.endsWith(".pan") || id.endsWith(".trim");
+  if (id.startsWith("ch.")) return id.endsWith(".fader") || id.endsWith(".pan") || id.endsWith(".trim") || id.endsWith(".mix");
   if (id.startsWith("fx.")) return !id.endsWith(".bypass");
   return false;
 }
@@ -295,6 +295,7 @@ float MidiControl::valueOf(const juce::String& id) const {
     if (t[2] == "fader") return vOf(c->gainDb.load()) / 100.f;
     if (t[2] == "pan") return (c->pan.load() + 1.f) / 2.f;
     if (t[2] == "trim") return (c->trimDb.load() + 24.f) / 48.f;
+    if (t[2] == "mix") return c->chainMix.load();
   }
   if (t[0] == "fx" && t.size() == 4 && t[3] != "bypass") {
     auto* fx = e->insertAt(t[1].getIntValue(), t[2].getIntValue());
@@ -313,6 +314,7 @@ void MidiControl::setValue(const juce::String& id, float v) {
     if (t[2] == "fader") c->gainDb = juce::jmax(-200.f, dbOf(v * 100.f));
     else if (t[2] == "pan") c->pan = v * 2.f - 1.f;
     else if (t[2] == "trim") c->trimDb = v * 48.f - 24.f;
+    else if (t[2] == "mix") c->chainMix = v;
   } else if (t[0] == "fx" && t.size() == 4) {
     auto* fx = e->insertAt(t[1].getIntValue(), t[2].getIntValue());
     const int p = t[3].getIntValue();

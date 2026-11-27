@@ -525,7 +525,8 @@ struct Affine : InsertProcessor {
   const std::string& name() const override { return nm; }
   int numParams() const override { return 0; } const std::vector<FxParamInfo>& params() const override { return ps; }
   void setParam(int, float) override {} float getParam(int) const override { return 0; }
-  std::string paramDisplay(int) override { return {}; } void setBypass(bool) override {} bool bypassed() const override { return false; }
+  bool byp = false;
+  std::string paramDisplay(int) override { return {}; } void setBypass(bool b) override { byp = b; } bool bypassed() const override { return byp; }
   void process(float* l, float* r, int n) override { ++calls; for (int i = 0; i < n; ++i) { l[i] = l[i] * a + b; r[i] = r[i] * a + b; } }
 };
 // Channel polarity (tracks and buses), reference tap, reference synced to the song, the meter slot on B.
@@ -585,7 +586,53 @@ static void testPolarityAndReference() {
     CHECK(probe->seen == refL(rp) && L.back() == refL(rp), "on B the meter slot measures the reference (and only it)");
     std::vector<float> mix(2 * 4000); const size_t mg = e.readMasterTap(mix.data(), 4000);
     CHECK(mg == 1280 && std::fabs(mix[2 * (mg - 1)] - 2.f * sigAt(k - 1)) < 1e-6f, "the master tap stays the mix through the rest of the chain on B"); }
+  { struct Probe : Affine { float seen = 0; Probe() : Affine(1.f, 0.f, "probe") {}
+      void process(float* l, float* r, int n) override { seen = l[n - 1]; Affine::process(l, r, n); } };
+    Engine e(SR); e.track(0).inputL = 0; e.track(0).armed = true; e.track(0).pan = -1.f;
+    auto pr = std::make_unique<Probe>(); Probe* probe = pr.get(); e.setInsertProcessor(200, kMaxInserts - 1, std::move(pr));
+    e.setInsertProcessor(200, 0, std::make_unique<Affine>(2.f, 0.f, "x2"));
+    e.monitor().listenSlot = kMaxInserts - 1; e.master().gainDb = -6.0206f; e.master().chainMix = 1.f;
+    long k = 0; std::vector<float> L, R; stream2(e, k, 2000, L, R);
+    CHECK(std::fabs(probe->seen - sigAt(k - 1)) < 1e-4f, "the meter measures after the master fader (%f vs %f)", probe->seen, sigAt(k - 1));
+    e.master().chainMix = 0.f; L.clear(); R.clear(); stream2(e, k, 2000, L, R);
+    CHECK(std::fabs(probe->seen - 0.5f * sigAt(k - 1)) < 1e-4f, "the master chain's wet / dry leaves the meter out of the chain"); }
   std::printf("polarity: tracks and buses flip, takes stay dry, saved; reference tap, song sync, meter slot follows A/B\n");
+}
+
+// Insert chain: wet / dry over the whole chain, parallel groups (averaged), bypassed inserts leave a group, saved.
+static void testChainMixAndParallel() {
+  Engine e(SR); auto& t = e.track(0); t.inputL = 0; t.armed = true; t.pan = -1.f;
+  auto A = std::make_unique<Affine>(2.f, 0.f, "A"), B = std::make_unique<Affine>(0.5f, 0.f, "B"), C = std::make_unique<Affine>(1.f, 0.1f, "C");
+  Affine *pa = A.get(), *pb = B.get(), *pc = C.get();
+  e.setInsertProcessor(0, 0, std::move(A)); e.setInsertProcessor(0, 1, std::move(B)); e.setInsertProcessor(0, 2, std::move(C));
+  std::vector<float> in(N, 0.25f), l(N), r(N); const float* ip[1] = {in.data()}; float* op[2] = {l.data(), r.data()};
+  auto run = [&](int blocks) { for (int i = 0; i < blocks; ++i) e.process(ip, 1, op, 2, N); return l[N - 1]; };
+  const float x = 0.25f;
+  CHECK(std::fabs(run(4) - ((x * 2.f * 0.5f) + 0.1f)) < 1e-6f, "series A, B, C");
+  pb->setParallel(true);
+  CHECK(std::fabs(run(4) - ((x * 2.f + x * 0.5f) / 2.f + 0.1f)) < 1e-6f, "A and B in parallel (averaged), then C");
+  pc->setParallel(true);
+  CHECK(std::fabs(run(4) - (x * 2.f + x * 0.5f + (x + 0.1f)) / 3.f) < 1e-6f, "A, B and C in parallel");
+  pb->byp = true;
+  CHECK(std::fabs(run(4) - (x * 2.f + (x + 0.1f)) / 2.f) < 1e-6f, "a bypassed insert leaves its group");
+  pb->byp = false; pb->setParallel(false); pc->setParallel(false);
+  t.chainMix = 0.25f; run(2);
+  CHECK(std::fabs(run(2) - (x + ((x * 2.f * 0.5f + 0.1f) - x) * 0.25f)) < 1e-6f, "chain wet / dry 25%");
+  t.chainMix = 0.f; run(2);
+  CHECK(std::fabs(run(2) - x) < 1e-6f, "chain fully dry = the signal before the chain");
+  { std::vector<float> L2; t.chainMix = 1.f; float prev = run(1); bool smooth = true;
+    t.chainMix = 0.f; e.process(ip, 1, op, 2, N);
+    for (int i = 1; i < N; ++i) smooth &= std::fabs(l[(size_t)i] - l[(size_t)i - 1]) < 0.01f;
+    CHECK(smooth && std::fabs(l[0] - prev) < 0.01f, "the wet / dry ramps (no click)"); }
+  // saved with the session (real Airwindows inserts)
+  auto dir = tmpDir(); Engine a(SR);
+  a.setInsert(3, 0, "ToTape8"); a.setInsert(3, 1, "Density2"); a.insertAt(3, 1)->setParallel(true); a.track(3).chainMix = 0.4f;
+  CHECK(saveSession(a, dir + "/chain.airdaw").ok, "chain save");
+  Engine b(SR); CHECK(loadSession(b, dir + "/chain.airdaw").ok, "chain load");
+  CHECK(b.insertAt(3, 1) && b.insertAt(3, 1)->parallel() && !b.insertAt(3, 0)->parallel() && std::fabs(b.track(3).chainMix.load() - 0.4f) < 1e-6f,
+        "parallel flags and chain wet / dry round trip");
+  (void)pa;
+  std::printf("insert chain: wet / dry (ramped), parallel groups averaged, bypass leaves a group, saved; meter after the master fader\n");
 }
 
 static void testInsertReorder() {
@@ -772,6 +819,7 @@ int main() {
   testMonitoringAndLayering();
   testRecordingPaths();
   testInsertReorder();
+  testChainMixAndParallel();
   testKeepAndRemoveTakes();
   testRenderMix();
   testLoudness();

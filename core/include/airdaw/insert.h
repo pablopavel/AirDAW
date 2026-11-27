@@ -1,5 +1,6 @@
 // Anything that can sit in an insert slot: a built-in Airwindows effect, or a hosted VST3 plugin.
 #pragma once
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -35,6 +36,15 @@ class InsertProcessor {
   // Audio thread: in place on L/R. No allocation, no locks.
   virtual void process(float* l, float* r, int n) = 0;
   virtual int latencySamples() const { return 0; }
+
+  // Parallel: this insert runs side by side with the active insert before it (it and any following ones marked
+  // parallel form a group; the group's outputs are averaged). Off: in series. It travels with the insert when the
+  // chain is reordered and is saved with the session.
+  void setParallel(bool p) { parallel_.store(p, std::memory_order_relaxed); }
+  bool parallel() const { return parallel_.load(std::memory_order_relaxed); }
+
+ private:
+  std::atomic<bool> parallel_{false};
 };
 
 // Creates non-Airwindows inserts when a session is loaded (e.g. "vst3:/path/Meter.vst3").

@@ -20,7 +20,7 @@ class Lcd : public juce::Component, public juce::SettableTooltipClient {
   juce::String caption_, text_; float h_; juce::Colour col_;
 };
 
-// Cream name plate (click = inserts, double-click = rename, right-click = menu, drag = move the strip).
+// Cream name plate (double-click = rename, right-click = menu, drag = move the strip).
 class NamePlate : public juce::Component {
  public:
   void setName2(const juce::String& n) { if (n != name_) { name_ = n; repaint(); } }

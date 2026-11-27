@@ -1209,6 +1209,11 @@ void MainComponent::runScenario(const juce::String& nameIn) {
     T().inserts = "rack"; inserts_.show(0, -1);
   }
   if (name == "strip-order") { mixer_.moveStrip(0, 3, true); mixer_.moveStrip(102, 100, false); }  // test hook: Kick after OH R, Bus 3 first
+  if (name == "parallel") {  // test hook: ToTape8 in parallel with Density3 on Bass DI, the chain at 60 % wet
+    if (auto* fx = e->insertAt(4, 2)) fx->setParallel(true);
+    e->track(4).chainMix = 0.6f;
+    inserts_.show(4, -1);
+  }
   if (name == "fullscreen") juce::Desktop::getInstance().setKioskModeComponent(getTopLevelComponent(), false);  // test hook
   if (name == "tempo-map") {  // test hook: tempo / time-signature changes on the bar ruler, the list as a child
     e->metronome().bpm = 120.f; e->metronome().beatsPerBar = 4;

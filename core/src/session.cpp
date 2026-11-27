@@ -60,11 +60,12 @@ std::string sessionToJson(Engine& e, const std::string& baseDir) {
     j.set("id", JVal::num(id)).set("name", JVal::str(c.name)).set("gainDb", JVal::num(c.gainDb)).set("trimDb", JVal::num(c.trimDb))
      .set("pan", JVal::num(c.pan)).set("mute", JVal::boolean(c.mute)).set("solo", JVal::boolean(c.solo)).set("route", JVal::num(c.route))
      .set("stereo", JVal::boolean(c.stereo)).set("armed", JVal::boolean(c.armed)).set("monitor", JVal::boolean(c.monitor))
-     .set("polarity", JVal::boolean(c.polarity)).set("inputL", JVal::num(c.inputL)).set("inputR", JVal::num(c.inputR));
+     .set("polarity", JVal::boolean(c.polarity)).set("inputL", JVal::num(c.inputL)).set("inputR", JVal::num(c.inputR))
+     .set("chainMix", JVal::num(c.chainMix));
     JVal ins = JVal::arr();
     for (int s = 0; s < kMaxInserts; ++s)
       if (auto* fx = e.insertAt(id, s)) {
-        JVal f = JVal::obj(); f.set("slot", JVal::num(s)).set("effect", JVal::str(fx->sessionId())).set("bypass", JVal::boolean(fx->bypassed()));
+        JVal f = JVal::obj(); f.set("slot", JVal::num(s)).set("effect", JVal::str(fx->sessionId())).set("bypass", JVal::boolean(fx->bypassed())).set("parallel", JVal::boolean(fx->parallel()));
         JVal ps = JVal::arr(); for (int p = 0; p < fx->numParams(); ++p) ps.push(JVal::num(fx->getParam(p)));
         f.set("params", ps);
         std::string st = fx->saveState(); if (!st.empty()) f.set("state", JVal::str(st));
@@ -154,7 +155,7 @@ SessionResult loadSession(Engine& e, const std::string& path) {
     c.name = j.text("name", c.name); c.gainDb = (float)j.num("gainDb", 0); c.trimDb = (float)j.num("trimDb", 0);
     c.pan = (float)j.num("pan", 0); c.mute = j.flag("mute", false); c.solo = j.flag("solo", false);
     c.route = (int)j.num("route", 0); c.stereo = j.flag("stereo", c.stereo.load()); c.armed = j.flag("armed", false);
-    c.monitor = j.flag("monitor", true); c.polarity = j.flag("polarity", false);
+    c.monitor = j.flag("monitor", true); c.polarity = j.flag("polarity", false); c.chainMix = std::clamp((float)j.num("chainMix", 1.0), 0.f, 1.f);
     c.inputL = (int)j.num("inputL", -1); c.inputR = (int)j.num("inputR", -1);
     if (auto* ins = j.get("inserts")) for (auto& f : ins->a) {
       int slot = (int)f.num("slot", -1); std::string name = f.text("effect");
@@ -166,6 +167,7 @@ SessionResult loadSession(Engine& e, const std::string& path) {
       if (!made) { r.warnings.push_back("plugin '" + name + "' on " + c.name + " could not be loaded"); continue; }
       if (auto* fx = e.insertAt(id, slot)) {
         fx->setBypass(f.flag("bypass", false));
+        fx->setParallel(f.flag("parallel", false));
         std::string st = f.text("state");
         if (!st.empty()) fx->loadState(st);
         else if (auto* ps = f.get("params")) for (size_t p = 0; p < ps->a.size() && (int)p < fx->numParams(); ++p) fx->setParam((int)p, (float)ps->a[p].n);

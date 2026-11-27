@@ -32,10 +32,20 @@ class ClassicCard;
 class RackCard;
 
 // The row behind the cards. Rack look: the chassis well, with blank vented plates in the slots past `used` pixels.
+// Over the cards: a link mark between plugins that run in parallel.
 class RackWell : public juce::Component {
  public:
   int used = 0;
   bool rack = false;
+  std::vector<juce::Point<float>> links;  // centres of the parallel marks
+  void paint(juce::Graphics&) override;
+  void paintOverChildren(juce::Graphics&) override;
+};
+
+// The chain's wet / dry knob (0..100 %), in the panel's header column.
+class MixKnob : public DragControl, public juce::SettableTooltipClient {
+ public:
+  MixKnob() { setRange(0.f, 100.f, 100.f); pixelsForRange = 160.f; wheelStep = 5.f; }
   void paint(juce::Graphics&) override;
 };
 
@@ -51,6 +61,8 @@ class InsertPanel : public juce::Component {
   int channel() const { return ch_; }
   bool isOpen(int channelId, int slot) const;
   void sync();  // ~15x/s: knob values, rebuild if the chain changed
+  void refreshChain();  // the chain's layout changed (e.g. a plugin switched to parallel)
+  airdaw::Engine* ctxEngine() const { return ctx_.engine(); }
   int preferredHeight() const;
   void paint(juce::Graphics&) override;
   void resized() override;
@@ -60,6 +72,7 @@ class InsertPanel : public juce::Component {
   friend class ClassicCard;
   friend class RackCard;
   void rebuild();
+  void placeLinks();
   void setOpen(int slot, bool open);
   juce::String chainKey() const;
   AppCtx& ctx_;
@@ -76,6 +89,7 @@ class InsertPanel : public juce::Component {
   juce::TextButton close1_, close2_;  // a plain X at each end (like the takes bar)
   bool showOld_ = false;
   bool rack_ = false;  // Display > Hardware > Inserts: Cards (default) or Rack
+  MixKnob mix_;
   int addAt_ = 0;      // the add card's place among the cards (by slot)
 };
 
