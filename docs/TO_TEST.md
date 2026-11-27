@@ -9,9 +9,9 @@ Last updated: 2026-11-27
 - [ ] Menu keys in the deck are grey console buttons that light in the accent while pressed; Listen / Meters / Display /
       MIDI Learn stay lit when on. No square glow round a lit key.
 - [ ] Bigger AIRDAW logo; no tape reels in the deck any more (the position readout takes their place).
-- [ ] Display > Hardware > Buttons: Console (default: coloured caps, M amber, S blue, monitor green, T violet, R red, dim when
+- [ ] Display > Hardware > Buttons: Console (coloured caps, M amber, S blue, monitor green, T violet, R red, dim when
       off), Toggles (strip M / S / monitor / T / R as bat-handle switches with a label and LED; Settings tick boxes as switches),
-      Classic (the old keys). Each switch still toggles and still answers MIDI Learn.
+      Classic (the old keys, now the default). Each switch still toggles and still answers MIDI Learn.
 - [ ] Knobs: Chrome, Knurled, Skirted, Bakelite, Soft touch, Ivory, Gold (gain knobs and insert-card knobs). Faders: Chrome,
       Black, Console grey, Cream, Red, Wood (grooved caps with a soft shadow).
 - [ ] Typefaces: Modern, Industrial, Condensed, Grotesque, Humanist, Engraved, Typewriter, Tape label all look different;
@@ -36,7 +36,6 @@ Last updated: 2026-11-27
       plugin's own display on the same music: the dots and grades should match. Click the view to freeze it,
       double-click to start over. Below about 370 px tall it shows the compact layout (tone colour and big grade),
       like the plugin. Remembered after a restart; works without the plugin loaded.
-
 - [ ] The (i) after "HIT RECORD METER" opens a plain-words guide (what each band measures, how to move each readout,
       the letters, tone bar and hints, tips); it scrolls and closes when you click elsewhere.
 
@@ -55,7 +54,7 @@ Last updated: 2026-11-27
 - [ ] Removing an armed track while recording is refused with a note.
 
 ## Rack and icon (new)
-- [ ] Display > Hardware > Inserts: Cards (the default, the original insert cards) or Rack; switching changes an open insert panel straight away
+- [ ] Display > Hardware > Inserts: Rack (now the default) or Cards (the original insert cards); switching changes an open insert panel straight away
       and is remembered after a restart.
 - [ ] Insert rack (Inserts: Rack): modules stand side by side in a chassis with wood cheeks; the faceplate finish follows the plugin's category
       (Consoles black/gold, Dynamics/Filters aluminium, Tape/Saturation green, Reverb/Ambience blue, VST3 graphite).
@@ -78,7 +77,6 @@ Last updated: 2026-11-27
 - [ ] The Hit Record Meter's display catches up to its final size when you let go.
 - [ ] Deck: readouts centred, the eight menu keys the same size; keys press down, Listen / Meters / Display / MIDI Learn stay lit when on.
 - [ ] Takes bar: the ✕ at either end closes it (loop and takes stay); it comes back for a new loop region or a T button.
-- [ ] Insert panel: the right ✕ Close sits in the middle of the panel's right edge.
 
 ## Comping
 - [ ] Record a full take on a track, then loop a region and record passes: each pass plays only in that region, the rest of the song keeps the full take.
