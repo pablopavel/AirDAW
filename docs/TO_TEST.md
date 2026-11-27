@@ -39,12 +39,20 @@ Last updated: 2026-11-27
 - [ ] The (i) after "HIT RECORD METER" opens a plain-words guide (what each band measures, how to move each readout,
       the letters, tone bar and hints, tips); it scrolls and closes when you click elsewhere.
 
+## Moving strips (new)
+- [ ] Drag a track by its name plate onto another track: a line shows where it lands (left or right half), it moves
+      there; buses move among buses the same way. A click on the name still opens the inserts, a right-click the menu,
+      a double-click renames.
+- [ ] The order is saved with the project and comes back on reopening; another project has its own order; the sound
+      and routing don't change. "+ Add track" puts a re-added track at the end.
+- [ ] No coloured bar under the channel names; Display > Surfaces > Track colours: On brings them back.
+
 ## New default view (new)
-- [ ] On a fresh install (or after Display > Reset) the look is today's: amber, strong glow, matte faceplate, sharp
+- [ ] On a fresh install (or after Display > Reset) the look is today's: amber, normal glow, matte faceplate, sharp
       corners, ivory knobs, cream faders, Industrial type, screws, rack inserts, classic buttons. The eras and the
-      other classic looks are unchanged.
-- [ ] Fresh settings also start with the meter dock at 504 px (469 px with the insert panel open), the dark meter view
-      on and 1341 px wide, and the reference suite Stereo field, Listening notes, Loudness, Band phase, Reference A/B.
+      other classic looks are unchanged. No track colours.
+- [ ] Fresh settings also start with the meter dock at 377 px (469 px with the insert panel open), the dark meter view
+      on and 1339 px wide, and the reference suite Stereo field, Listening notes, Loudness, Band phase, Reference A/B.
 
 ## Removing tracks (new)
 - [ ] Right-click a track's name: Rename…, Show inserts, Remove track…. Remove asks first (it says how many takes leave the project).

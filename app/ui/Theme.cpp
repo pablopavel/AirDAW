@@ -14,10 +14,10 @@ const Opt kOpts[] = {
     {"mat", &Theme::trimMat, nullptr}, {"ws", &Theme::species, nullptr}, {"gr", &Theme::grain, nullptr},
     {"ww", &Theme::trimWidth, nullptr}, {"scr", nullptr, &Theme::screws},
     {"wood", nullptr, &Theme::trim}, {"shift", nullptr, &Theme::pixelShift}, {"ins", &Theme::inserts, nullptr},
-    {"btn", &Theme::buttons, nullptr},
+    {"btn", &Theme::buttons, nullptr}, {"chc", nullptr, &Theme::trackColours},
 };
 // The Studio look: the default (and Reset). The eras and the other classics are built on kBase, the mockup's LD.
-const char* kStudioLook = "hue=37 glow=1.6 ws=walnut gr=fine fp=matte rd=sharp ww=normal panel=oled wood=1 tint=charcoal mat=wood "
+const char* kStudioLook = "hue=37 glow=1 ws=walnut gr=fine fp=matte rd=sharp ww=normal panel=oled wood=1 tint=charcoal mat=wood "
                           "knob=ivory fd=cream vu=cream lcd=accent font=industrial scr=1";
 const char* kBase = "hue=37 glow=1 ws=walnut gr=fine fp=brushed rd=normal ww=normal panel=oled wood=1 tint=charcoal mat=wood "
                       "knob=chrome fd=chrome vu=cream lcd=accent font=modern scr=0";
@@ -78,11 +78,11 @@ bool Theme::presetActive(const juce::String& id) const {
   return true;
 }
 
-void Theme::resetLook() { applyPreset("amber"); scalePct = 100; pixelShift = true; inserts = "rack"; buttons = "classic"; }
+void Theme::resetLook() { applyPreset("amber"); scalePct = 100; pixelShift = true; inserts = "rack"; buttons = "classic"; trackColours = false; }
 
 void Theme::load(juce::PropertiesFile& p) {
   hue = (float)p.getDoubleValue("look.hue", 37.0);
-  glow = juce::jlimit(0.f, 2.4f, (float)p.getDoubleValue("look.glow", 1.6));
+  glow = juce::jlimit(0.f, 2.4f, (float)p.getDoubleValue("look.glow", 1.0));
   scalePct = juce::jlimit(100, 200, p.getIntValue("look.scale", 100));
   for (auto& o : kOpts) {
     const juce::String k = juce::String("look.") + o.key;

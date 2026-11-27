@@ -12,7 +12,7 @@ class Theme : public juce::ChangeBroadcaster {
 
   // --- user settings (persisted) ---
   float hue = 37.f;   // accent hue in degrees; 37 = the mockup's amber
-  float glow = 1.6f;  // 0 Off, 0.5 Soft, 1 Normal, 1.6 Strong (default), 2.4 Max
+  float glow = 1.f;   // 0 Off, 0.5 Soft, 1 Normal (default), 1.6 Strong, 2.4 Max
   int scalePct = 100; // 100..200 in steps of 25
   // Display-panel options. Values are the mockup's option ids (see Theme.cpp).
   juce::String panel = "oled", faceplate = "matte", tint = "charcoal", corners = "sharp", knobs = "ivory",
@@ -23,14 +23,15 @@ class Theme : public juce::ChangeBroadcaster {
   // (the original flat keys).
   juce::String buttons = "classic";
   bool screws = true, trim = true, pixelShift = true;
+  bool trackColours = false;  // the coloured bar under each channel's name
 
   void load(juce::PropertiesFile& p);
   void save(juce::PropertiesFile& p) const;
-  void resetLook();  // the Studio look (the default), 100% scale, pixel shift on, rack inserts, classic buttons
+  void resetLook();  // the Studio look (the default), 100% scale, pixel shift on, rack inserts, classic buttons, no track colours
   void changed() { tile_ = {}; sendChangeMessage(); }
 
   // Generic option access for the Display panel. Keys: hue, glow, panel, fp, tint, rd, knob, fd, vu, lcd, font,
-  // mat, ws, gr, ww, scr, wood, shift, ins, btn (booleans as "1" / "0").
+  // mat, ws, gr, ww, scr, wood, shift, ins, btn, chc (booleans as "1" / "0").
   juce::String option(const juce::String& key) const;
   void setOption(const juce::String& key, const juce::String& value);
   // Eras (e50 e60 e70 e80 e90 e00) and classics (amber neon ice lounge vintage): set a whole look at once.

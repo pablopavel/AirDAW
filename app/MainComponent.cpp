@@ -71,6 +71,7 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   };
   ctx_.removeTrack = [this](int t) { removeTrack(t); };
   mixer_.onRemovedChanged = [this] { setProjectValue("removedTracks", mixer_.removedTracks()); };
+  mixer_.onOrderChanged = [this] { setProjectValue("stripOrder", mixer_.stripOrder()); };
   ctx_.isCardOpen = [this](int ch, int slot) { return inserts_.isOpen(ch, slot); };
   ctx_.insertPanelChannel = [this] { return inserts_.isVisible() ? inserts_.channel() : -1; };
   ctx_.layoutChanged = [this] { resized(); };
@@ -128,7 +129,7 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   pluginsPanel_.layoutChanged = [this] { resized(); };
   inserts_.setVisible(false);
 
-  dockHeight_ = props_->getIntValue("dockHeight", 504);
+  dockHeight_ = props_->getIntValue("dockHeight", 377);
   dockHeightIns_ = props_->getIntValue("dockHeightIns", 469);
   dockShown_ = props_->getBoolValue("dockShown", true);
   autoOn_ = props_->getBoolValue("autosaveOn", false);
@@ -1036,6 +1037,7 @@ void MainComponent::clearAndHideTrack(int t) {
 void MainComponent::restoreProjectReference(bool adoptGlobal) {
   auto* e = bridge_.engine(); if (!e) return;
   mixer_.setRemovedTracks(projectData()["removedTracks"]);  // each project remembers which tracks were removed
+  mixer_.setStripOrder(projectData()["stripOrder"]);  // the strips' order (a project from before: the plain order)
   const bool legacy = e->appData.empty();
   juce::String path = projectData()["reference"].toString();
   if (path.isEmpty() && legacy && adoptGlobal) {
@@ -1204,6 +1206,7 @@ void MainComponent::runScenario(const juce::String& nameIn) {
     for (int s = 0; s < 12; ++s) e->setInsert(0, s, fx[s]);
     T().inserts = "rack"; inserts_.show(0, -1);
   }
+  if (name == "strip-order") { mixer_.moveStrip(0, 3, true); mixer_.moveStrip(102, 100, false); }  // test hook: Kick after OH R, Bus 3 first
   if (name == "meter-info") {  // test hook: the meter's (i) panel, as a child so the picture shows it
     testOverlay_ = std::make_unique<ui::HitMeterInfo>();
     addAndMakeVisible(*testOverlay_);

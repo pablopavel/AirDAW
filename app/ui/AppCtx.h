@@ -69,6 +69,7 @@ struct AppCtx {
   std::function<int()> insertPanelChannel;                    // the channel the insert panel shows (-1: closed)
   std::function<void(int channelId, int slot)> openPluginWindow;  // a hosted VST3's own editor window
   std::function<void(int channelId, int from, int to)> moveInsert;  // reorder a chain (drag and drop)
+  std::function<void(int moving, int onto, bool after)> moveStrip;  // reorder the mixer's strips (drag and drop)
   std::function<void(const juce::String& effect)> showPluginInfo;   // Airwindows write-up window
   std::function<void()> resetPeaks;                                 // headroom tool: peak hold / overs only
   std::function<void()> loadReference;                              // Reference A/B tool: choose and decode a file

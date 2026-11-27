@@ -132,7 +132,7 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   void midiChanged();
   void showMidiMappings();
 
-  int dockHeight_ = 504;
+  int dockHeight_ = 377;
   int dockHeightIns_ = 469;  // the meter dock's height while the insert panel is open (0: what the panel leaves)
   bool dockShown_ = true;
   juce::File sessionFile_;  // empty = unsaved "Untitled"

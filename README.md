@@ -29,8 +29,8 @@ Runs on Windows 11 with ASIO (tested with a Black Lion Revolution 2x2 at 96 kHz 
   outside the regions the track's take or silence).
 - **Projects:** JSON `.airdaw` sessions, one folder per project (audio, autosave), timed auto-save with recovery, Save As
   moves takes into the project, double-click a project file to open it. Mix export (WAV 24/32-bit, song or loop range).
-- **Mixing UI:** the approved mockup ported to JUCE: deck, song overview, mixer strips (add and remove tracks, one Inserts
-  button each), insert panel as cards or, as a Display option, a 500-series rack (faceplate finish by plugin category), with every plugin
+- **Mixing UI:** the approved mockup ported to JUCE: deck, song overview, mixer strips (add, remove and drag to reorder,
+  one Inserts button each), insert panel as cards or, as a Display option, a 500-series rack (faceplate finish by plugin category), with every plugin
   parameter, presets, favourites and Airwindows write-ups. backlit transport keys and console-style menu keys in the
   deck; "Scope A" application icon (`AirDAW.exe --render-icon resources/icon`).
 - **Listening:** Hit Record Meter (VST3) in the meter dock, always the last master insert, with a dark view (a port of

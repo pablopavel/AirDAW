@@ -25,9 +25,17 @@ class Mixer : public juce::Component {
   void setRemovedTracks(const juce::var& list);
   juce::var removedTracks() const;
   std::function<void()> onRemovedChanged;
+  // The order strips are shown in (tracks among tracks, buses among buses); the engine's channels don't move.
+  // Saved per project (onOrderChanged / setStripOrder).
+  void moveStrip(int moving, int onto, bool after);
+  void setStripOrder(const juce::var& list);
+  juce::var stripOrder() const;
+  std::function<void()> onOrderChanged;
  private:
   void relayout();
   std::array<bool, airdaw::kMaxTracks> removed_{};
+  std::vector<int> order_, busOrder_;  // track ids / bus ids, left to right
+  void resetOrder();
   AppCtx& ctx_;
   juce::Viewport view_;
   juce::Component content_;

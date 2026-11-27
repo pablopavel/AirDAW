@@ -144,7 +144,7 @@ class MeterDock : public juce::Component {
     // The meter may be dragged all the way across; the suite tools fold away as it grows.
     meterSplit_.onDragState = [this](bool on) { setLiveResize(on); };
     meterSplit_.onDrag = [this](int w) { meterW_ = juce::jlimit(260, juce::jmax(260, bodyWidth() - 14), w); ctx_.props.setValue("dock.meterWidth", meterW_); resized(); };
-    meterW_ = ctx_.props.getIntValue("dock.meterWidth", 1341);
+    meterW_ = ctx_.props.getIntValue("dock.meterWidth", 1339);
     for (juce::Component* c : std::initializer_list<juce::Component*>{&load_, &toolsBtn_, &meterSplit_, &suite_, &viewBtn_}) addAndMakeVisible(c);
     addChildComponent(dark_);
     addAndMakeVisible(info_);
@@ -316,7 +316,7 @@ class MeterDock : public juce::Component {
   std::array<juce::TextButton, 7> mon_;
   ColumnSplitter meterSplit_;
   SuiteArea suite_;
-  int meterW_ = 1341;
+  int meterW_ = 1339;
 };
 
 }  // namespace ui

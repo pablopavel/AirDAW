@@ -28,15 +28,20 @@ class NamePlate : public juce::Component {
   void setRenamable(bool r) { renamable_ = r; }
   std::function<void()> onClick;
   std::function<void()> onMenu;  // right-click
+  std::function<void()> onDragOut;  // dragged (more than a few pixels): the strip starts moving
   std::function<void(const juce::String&)> onRename;
   void startRename();  // the inline name editor (also on double-click)
   void paint(juce::Graphics&) override;
   void mouseUp(const juce::MouseEvent&) override;
+  void mouseDown(const juce::MouseEvent&) override { dragged_ = false; }
+  void mouseDrag(const juce::MouseEvent& e) override {
+    if (!dragged_ && !ed_ && onDragOut && e.getDistanceFromDragStart() > 6) { dragged_ = true; onDragOut(); }
+  }
   void mouseDoubleClick(const juce::MouseEvent&) override;
   void resized() override { if (ed_) ed_->setBounds(getLocalBounds()); }
  private:
   void finishEdit(bool ok);
-  juce::String name_; juce::uint32 bar_ = 0xff999999; bool renamable_ = true;
+  juce::String name_; juce::uint32 bar_ = 0xff999999; bool renamable_ = true, dragged_ = false;
   std::unique_ptr<juce::TextEditor> ed_;
 };
 

@@ -77,6 +77,11 @@ Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
       else if (r == 3 && sp->ctx_.removeTrack) sp->ctx_.removeTrack(sp->id_);
     });
   };
+  plate_.onDragOut = [this] {
+    if (auto* dc = juce::DragAndDropContainer::findParentDragContainerFor(this))
+      if (!dc->isDragAndDropActive()) dc->startDragging("strip:" + juce::String(id_), this);  // the strip's picture follows the mouse
+  };
+  plate_.setMouseCursor(juce::MouseCursor::DraggingHandCursor);
   addAndMakeVisible(plate_);
   for (auto* b : {&chn_, &in_, &route_, &m_, &s_, &t_, &r_}) { addAndMakeVisible(*b); b->getProperties().set("fontH", 11.0); }
   m_.getProperties().set("kind", "m"); s_.getProperties().set("kind", "s");
@@ -216,6 +221,27 @@ void Strip::paint(juce::Graphics& g) {
   T().drawBrush(g, getLocalBounds().toFloat(), isBus(id_));
   g.setColour(juce::Colours::black); g.fillRect(getWidth() - 1, 0, 1, getHeight());
   g.setColour(juce::Colour(0x14ffffff)); g.fillRect(getWidth() - 2, 0, 1, getHeight());
+}
+
+bool Strip::isInterestedInDragSource(const SourceDetails& d) {
+  const auto s = d.description.toString();
+  if (!s.startsWith("strip:")) return false;
+  const int from = s.fromFirstOccurrenceOf("strip:", false, false).getIntValue();
+  return from != id_ && isBus(from) == isBus(id_);
+}
+
+void Strip::itemDropped(const SourceDetails& d) {
+  const int from = d.description.toString().fromFirstOccurrenceOf("strip:", false, false).getIntValue();
+  const bool after = dropSide_ > 0;
+  dropSide_ = 0; repaint();
+  if (ctx_.moveStrip) ctx_.moveStrip(from, id_, after);
+}
+
+void Strip::paintOverChildren(juce::Graphics& g) {  // where a dragged strip will land
+  if (dropSide_ == 0) return;
+  const float x = dropSide_ < 0 ? 1.5f : (float)getWidth() - 1.5f;
+  T().drawGlow(g, {x - 1.5f, 0.f, 3.f, (float)getHeight()}, T().am(), 6.f, 0.8f, 1.5f);
+  g.setColour(T().am()); g.fillRect(x - 1.5f, 0.f, 3.f, (float)getHeight());
 }
 
 void Strip::resized() {

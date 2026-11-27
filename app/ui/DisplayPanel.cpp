@@ -40,7 +40,8 @@ DisplayPanel::DisplayPanel() {
                                                 {"ribbed", "Ribbed"}, {"crinkle", "Crinkle"}, {"leather", "Leather"}, {"perf", "Perforated"}}},
                            {"Tint", "tint", O{{"charcoal", "Charcoal"}, {"slate", "Slate"}, {"hammer", "Green"}, {"olive", "Olive"}, {"oxblood", "Oxblood"}, {"navy", "Navy"}, {"bronze", "Bronze"}}},
                            {"Corners", "rd", O{{"sharp", "Sharp"}, {"normal", "Normal"}, {"round", "Round"}}},
-                           {"Screws", "scr", onOff}}},
+                           {"Screws", "scr", onOff},
+                           {"Track colours", "chc", onOff}}},
       {"Hardware", false, {{"Buttons", "btn", O{{"console", "Console"}, {"toggle", "Toggles"}, {"classic", "Classic"}}},
                            {"Knobs", "knob", O{{"chrome", "Chrome"}, {"knurl", "Knurled"}, {"skirt", "Skirted"}, {"bake", "Bakelite"},
                                                {"soft", "Soft touch"}, {"ivory", "Ivory"}, {"gold", "Gold"}}},
@@ -63,7 +64,7 @@ DisplayPanel::DisplayPanel() {
   view_.setScrollBarsShown(true, false);
   view_.setScrollBarThickness(8);
   addAndMakeVisible(reset_);
-  reset_.setTooltip("Back to the Studio look (the default: amber, strong glow, matte, Industrial type, 100%)");
+  reset_.setTooltip("Back to the Studio look (the default: amber, normal glow, matte, Industrial type, 100%)");
   reset_.onClick = [] { auto& t = T(); t.resetLook(); t.changed(); };
   for (int i = 0; i < 12; ++i) {
     auto& s = swatches_[(size_t)i]; s.idx = i; s.setTooltip(Theme::kAccentNames[i]);

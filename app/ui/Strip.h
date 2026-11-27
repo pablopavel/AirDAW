@@ -26,14 +26,19 @@ class MonitorButton : public juce::TextButton {
   void paintButton(juce::Graphics&, bool over, bool down) override;
 };
 
-// Track or bus strip.
-class Strip : public juce::Component {
+// Track or bus strip. Drag it by its name plate onto another strip (tracks among tracks, buses among buses) to move it.
+class Strip : public juce::Component, public juce::DragAndDropTarget {
  public:
   Strip(AppCtx& ctx, int channelId);
   int id() const { return id_; }
   void sync();  // pull state + meters from the engine (~30x/s)
   void paint(juce::Graphics&) override;
+  void paintOverChildren(juce::Graphics&) override;
   void resized() override;
+  bool isInterestedInDragSource(const SourceDetails&) override;
+  void itemDragMove(const SourceDetails& d) override { const int s = d.localPosition.x < getWidth() / 2 ? -1 : 1; if (s != dropSide_) { dropSide_ = s; repaint(); } }
+  void itemDragExit(const SourceDetails&) override { dropSide_ = 0; repaint(); }
+  void itemDropped(const SourceDetails&) override;
   static constexpr int kWidth = 128;
  private:
   void chooseInput();
@@ -48,6 +53,7 @@ class Strip : public juce::Component {
   InsertSlot ins_;  // the one Inserts button: opens the channel's insert panel
   PanSlider pan_;
   FaderBlock fader_;
+  int dropSide_ = 0;  // a strip dragged over this one: -1 goes before it, 1 after
 };
 
 // Correlation bar (mockup .hb under "Corr  -1 . 0 . +1").
