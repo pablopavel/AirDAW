@@ -60,6 +60,19 @@ Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
   plate_.setColourBar(channelColour(id));
   plate_.onClick = [this] { ctx_.showInserts(id_, -1); };
   plate_.onRename = [this](const juce::String& n) { if (auto* e = ctx_.engine()) if (auto* c = channelOf(*e, id_)) c->name = n.toStdString(); };
+  plate_.onMenu = [this] {  // right-click the name: rename, inserts, and (tracks) remove
+    juce::Component::SafePointer<Strip> sp(this);  // made here: MSVC can't capture `this` into the nested lambda's init
+    juce::PopupMenu m;
+    m.addItem(1, juce::String(juce::CharPointer_UTF8("Rename\xe2\x80\xa6")));
+    m.addItem(2, "Show inserts");
+    if (id_ < airdaw::kMaxTracks) { m.addSeparator(); m.addItem(3, juce::String(juce::CharPointer_UTF8("Remove track\xe2\x80\xa6"))); }
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&plate_), [sp](int r) {
+      if (!sp) return;
+      if (r == 1) sp->plate_.startRename();
+      else if (r == 2) sp->ctx_.showInserts(sp->id_, -1);
+      else if (r == 3 && sp->ctx_.removeTrack) sp->ctx_.removeTrack(sp->id_);
+    });
+  };
   addAndMakeVisible(plate_);
   for (auto* b : {&chn_, &in_, &route_, &m_, &s_, &t_, &r_}) { addAndMakeVisible(*b); b->getProperties().set("fontH", 11.0); }
   m_.getProperties().set("kind", "m"); s_.getProperties().set("kind", "s");

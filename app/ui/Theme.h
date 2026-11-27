@@ -18,6 +18,7 @@ class Theme : public juce::ChangeBroadcaster {
   juce::String panel = "oled", faceplate = "brushed", tint = "charcoal", corners = "normal", knobs = "chrome",
                faders = "chrome", vuFace = "cream", readouts = "accent", typeface = "modern", trimMat = "wood",
                species = "walnut", grain = "fine", trimWidth = "normal";
+  juce::String inserts = "cards";  // insert panel look: "cards" (the original) or "rack" (500-series modules)
   bool screws = false, reels = true, trim = true, pixelShift = true;
 
   void load(juce::PropertiesFile& p);
@@ -26,7 +27,7 @@ class Theme : public juce::ChangeBroadcaster {
   void changed() { tile_ = {}; sendChangeMessage(); }
 
   // Generic option access for the Display panel. Keys: hue, glow, panel, fp, tint, rd, knob, fd, vu, lcd, font,
-  // mat, ws, gr, ww, scr, reels, wood, shift (booleans as "1" / "0").
+  // mat, ws, gr, ww, scr, reels, wood, shift, ins (booleans as "1" / "0").
   juce::String option(const juce::String& key) const;
   void setOption(const juce::String& key, const juce::String& value);
   // Eras (e50 e60 e70 e80 e90 e00) and classics (amber neon ice lounge vintage): set a whole look at once.

@@ -68,6 +68,8 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
     if (inserts_.isVisible() && inserts_.channel() == ch && slot < 0) { inserts_.close(); return; }
     inserts_.show(ch, slot);
   };
+  ctx_.removeTrack = [this](int t) { removeTrack(t); };
+  mixer_.onRemovedChanged = [this] { setProjectValue("removedTracks", mixer_.removedTracks()); };
   ctx_.isCardOpen = [this](int ch, int slot) { return inserts_.isOpen(ch, slot); };
   ctx_.layoutChanged = [this] { resized(); };
   ctx_.openPluginWindow = [this](int ch, int slot) { openPluginWindow(ch, slot); };
@@ -960,8 +962,45 @@ void MainComponent::setProjectValue(const juce::String& key, const juce::var& va
   e->appData = juce::JSON::toString(d, true).toStdString();
 }
 
+// Removing a track: asks first, then clears the slot back to a fresh track (takes leave the project, inserts are
+// unloaded, settings reset) and hides its strip. Recorded files stay in the project folder. No engine change:
+// the engine keeps its fixed track slots; "Add track" brings a removed slot back.
+void MainComponent::removeTrack(int t) {
+  auto* e = bridge_.engine(); if (!e || t < 0 || t >= airdaw::kMaxTracks) return;
+  if (e->transport().recording.load() && e->track(t).armed.load()) { note("Stop recording before removing an armed track"); return; }
+  const juce::String name(e->track(t).name);
+  const int takes = e->numTakes(t);
+  juce::String msg = "Remove " + name + "?";
+  if (takes > 0) msg << "\n\nIts " << takes << (takes == 1 ? " take is" : " takes are") << " taken out of the project. The recorded files stay in the project folder.";
+  msg << "\n\nInserts and settings on this track are cleared.";
+  juce::AlertWindow::showAsync(juce::MessageBoxOptions().withTitle("Remove track").withMessage(msg).withButton("Remove", 1).withButton("Cancel", 0),
+                               [t, sp = juce::Component::SafePointer<MainComponent>(this)](int r) {
+    if (sp && r == 1) sp->clearAndHideTrack(t);
+  });
+}
+
+void MainComponent::clearAndHideTrack(int t) {
+  auto* e = bridge_.engine(); if (!e) return;
+  if (e->transport().recording.load() && e->track(t).armed.load()) { note("Stop recording before removing an armed track"); return; }
+  const juce::String name(e->track(t).name);
+  if (inserts_.isVisible() && inserts_.channel() == t) inserts_.close();
+  if (ctx_.viewTrack == t) ctx_.viewTrack = -1;
+  auto& c = e->track(t);
+  c.armed = false; c.audition = false; c.monitor = true; c.mute = false; c.solo = false; c.polarity = false;
+  c.inputL = -1; c.inputR = -1; c.stereo = false; c.route = (int)airdaw::Route::Master;
+  c.gainDb = 0.f; c.trimDb = 0.f; c.pan = 0.f;
+  for (int s = 0; s < airdaw::kMaxInserts; ++s) e->setInsert(t, s, "");
+  e->clearComp(t);
+  e->clearTakeList(t);
+  c.name = "TRACK " + std::to_string(t + 1);
+  mixer_.removeTrack(t);
+  note("Removed " + name);
+  resized();
+}
+
 void MainComponent::restoreProjectReference(bool adoptGlobal) {
   auto* e = bridge_.engine(); if (!e) return;
+  mixer_.setRemovedTracks(projectData()["removedTracks"]);  // each project remembers which tracks were removed
   const bool legacy = e->appData.empty();
   juce::String path = projectData()["reference"].toString();
   if (path.isEmpty() && legacy && adoptGlobal) {
@@ -1088,6 +1127,8 @@ void MainComponent::runScenario(const juce::String& name) {
     juce::Timer::callAfterDelay(2500, [sp] { if (sp) sp->pluginsPanel_.installForTest(); });
   }
   if (name == "display-all") { display_.setAllOpen(true); toggleDisplayPanel(); }
+  if (name == "inserts-rack") { T().inserts = "rack"; inserts_.show(0, 0); inserts_.show(0, 1); }  // test hook: rack look
+  if (name == "remove-track") clearAndHideTrack(1);  // test hook: Snare removed (what "Remove" in the dialog does)
   if (name.startsWith("look-")) {  // test hook: a preset (eras / classics), panel open on the Look section
     T().applyPreset(name.fromFirstOccurrenceOf("look-", false, false)); T().changed();
     toggleDisplayPanel();

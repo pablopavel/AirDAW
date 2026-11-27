@@ -64,6 +64,7 @@ struct AppCtx {
   ListeningNotes notes;                                       // for the current project (MainComponent loads/saves)
   std::function<void(const juce::String&)> note;              // short message in the footer
   std::function<void(int channelId, int slot)> showInserts;   // open the insert panel (slot -1: just the chain)
+  std::function<void(int track)> removeTrack;                 // asks, then clears the track and hides its strip
   std::function<bool(int channelId, int slot)> isCardOpen;    // insert card expanded in the panel
   std::function<void(int channelId, int slot)> openPluginWindow;  // a hosted VST3's own editor window
   std::function<void(int channelId, int from, int to)> moveInsert;  // reorder a chain (drag and drop)

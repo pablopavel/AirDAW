@@ -5,8 +5,17 @@ When something works, it is removed from this list; when it doesn't, it gets a n
 
 Last updated: 2026-11-26
 
+## Removing tracks (new)
+- [ ] Right-click a track's name: Rename…, Show inserts, Remove track…. Remove asks first (it says how many takes leave the project).
+- [ ] After removing: the strip is gone, the count on "+ Add track" drops, the track's takes no longer play, its inserts are unloaded.
+- [ ] "+ Add track" brings back a removed slot first (as a fresh track), then new ones.
+- [ ] Save, reopen: removed tracks stay removed; another project has its own set. The recorded files are still in the project folder.
+- [ ] Removing an armed track while recording is refused with a note.
+
 ## Rack, reels and icon (new)
-- [ ] Insert rack: modules stand side by side in a chassis with wood cheeks; the faceplate finish follows the plugin's category
+- [ ] Display > Hardware > Inserts: Cards (the default, the original insert cards) or Rack; switching changes an open insert panel straight away
+      and is remembered after a restart.
+- [ ] Insert rack (Inserts: Rack): modules stand side by side in a chassis with wood cheeks; the faceplate finish follows the plugin's category
       (Consoles black/gold, Dynamics/Filters aluminium, Tape/Saturation green, Reverb/Ambience blue, VST3 graphite).
 - [ ] IN key bypasses the module (LED goes dark) and still works from a MIDI mapping; the ▾ / ▸ key folds a module to a slim plate and back.
 - [ ] Drag a module by its name plate onto another to reorder the chain.

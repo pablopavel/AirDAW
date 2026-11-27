@@ -1,8 +1,8 @@
-// Insert panel, styled as a 500-series "lunchbox" rack: the selected channel's insert chain as modules side by
-// side in a chassis (wood cheeks from the trim setting, a top rail, blank plates in the unused slots).
-// Each module's faceplate finish follows the plugin's category. An open Airwindows module shows every
-// parameter as a knob; a closed one is a slim plate. Presets: Default + the user's own saved ones.
-// Drag a module by its name plate to reorder the chain.
+// Insert panel: the selected channel's insert chain, side by side. Two looks (Display > Hardware > Inserts):
+// - Cards (default, the original mockup #dr drawer): cards that open to every parameter as a knob, presets as buttons.
+// - Rack: a 500-series "lunchbox" with modules in a chassis (wood cheeks from the trim setting, a top rail, blank
+//   plates in unused slots), faceplate finish by plugin category, folded modules as slim plates, a preset menu.
+// Either way, drag a card / module by its header or name plate to reorder the chain.
 #pragma once
 #include <map>
 #include <memory>
@@ -28,11 +28,14 @@ class PresetStore {
 };
 
 class InsertCard;
+class ClassicCard;
+class RackCard;
 
-// The chassis well behind the modules; blank vented plates fill the slots past `used` pixels.
+// The row behind the cards. Rack look: the chassis well, with blank vented plates in the slots past `used` pixels.
 class RackWell : public juce::Component {
  public:
   int used = 0;
+  bool rack = false;
   void paint(juce::Graphics&) override;
 };
 
@@ -54,6 +57,8 @@ class InsertPanel : public juce::Component {
   std::function<void()> onClosed;
  private:
   friend class InsertCard;
+  friend class ClassicCard;
+  friend class RackCard;
   void rebuild();
   void setOpen(int slot, bool open);
   juce::String chainKey() const;
@@ -70,6 +75,7 @@ class InsertPanel : public juce::Component {
   std::unique_ptr<juce::Component> addCard_;
   juce::TextButton close1_{juce::String(juce::CharPointer_UTF8("\xe2\x9c\x95 Close"))}, close2_{juce::String(juce::CharPointer_UTF8("\xe2\x9c\x95 Close"))};
   bool showOld_ = false;
+  bool rack_ = false;  // Display > Hardware > Inserts: Cards (default) or Rack
 };
 
 }  // namespace ui

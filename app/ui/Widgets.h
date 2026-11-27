@@ -40,7 +40,9 @@ class NamePlate : public juce::Component {
   void setColourBar(juce::uint32 c) { bar_ = c; repaint(); }
   void setRenamable(bool r) { renamable_ = r; }
   std::function<void()> onClick;
+  std::function<void()> onMenu;  // right-click
   std::function<void(const juce::String&)> onRename;
+  void startRename();  // the inline name editor (also on double-click)
   void paint(juce::Graphics&) override;
   void mouseUp(const juce::MouseEvent&) override;
   void mouseDoubleClick(const juce::MouseEvent&) override;

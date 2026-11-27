@@ -181,9 +181,12 @@ void NamePlate::paint(juce::Graphics& g) {
   g.drawFittedText(name_.toUpperCase(), getLocalBounds().reduced(4, 0).withTrimmedBottom(2), juce::Justification::centred, 1, 0.8f);
 }
 void NamePlate::mouseUp(const juce::MouseEvent& e) {
-  if (e.mouseWasClicked() && e.getNumberOfClicks() == 1 && onClick) onClick();
+  if (!e.mouseWasClicked()) return;
+  if (e.mods.isPopupMenu()) { if (onMenu) onMenu(); return; }
+  if (e.getNumberOfClicks() == 1 && onClick) onClick();
 }
-void NamePlate::mouseDoubleClick(const juce::MouseEvent&) {
+void NamePlate::mouseDoubleClick(const juce::MouseEvent& e) { if (!e.mods.isPopupMenu()) startRename(); }
+void NamePlate::startRename() {
   if (!renamable_ || ed_) return;
   ed_ = std::make_unique<juce::TextEditor>();
   ed_->setText(name_, false); ed_->setInputRestrictions(16);

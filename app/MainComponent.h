@@ -119,7 +119,9 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   void setProjectValue(const juce::String& key, const juce::var& v);
   // Loads the project's own reference (or none). `adoptGlobal`: a project saved before references were per
   // project takes the last reference used app-wide.
-  void restoreProjectReference(bool adoptGlobal);
+  void restoreProjectReference(bool adoptGlobal);  // also restores which tracks were removed
+  void removeTrack(int track);        // asks, then clearAndHideTrack
+  void clearAndHideTrack(int track);
   void pumpAnalysis(airdaw::Engine& e);
   std::unique_ptr<juce::TooltipWindow> tooltips_;
   // MIDI Learn

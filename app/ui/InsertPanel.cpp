@@ -156,10 +156,235 @@ static std::vector<airdaw::FxInfo> pickerList(bool showOld) {
   return out;
 }
 
-// ---------------- InsertCard: one rack module ----------------
+// ---------------- the two looks share one card interface ----------------
+// Cards (the original view) or Rack (500-series modules), chosen in Display > Hardware > Inserts.
 class InsertCard : public juce::Component, public juce::DragAndDropTarget {
  public:
-  InsertCard(InsertPanel& p, int slot) : p_(p), slot_(slot) {
+  virtual void sync() = 0;
+  virtual int prefWidth() const = 0;
+  virtual int prefHeight() const = 0;
+};
+
+// ---------------- Cards look (the original insert panel) ----------------
+static constexpr int kHeaderH = 34, kcKnobW = 70, kcKnobH = 92, kcKnobGapX = 14, kcKnobGapY = 12, kcMaxCols = 8, kcPad = 12;
+
+static void cardFrame(juce::Graphics& g, juce::Rectangle<float> r, bool active) {
+  auto& t = T();
+  if (active) t.drawGlow(g, r, t.am(), 26.f, 0.2f);
+  g.setGradientFill(juce::ColourGradient(juce::Colour(0xff1b1a19), 0, r.getY(), juce::Colour(0xff0f0e0d), 0, r.getBottom(), false));
+  g.fillRoundedRectangle(r, T().rad(6.f));
+  if (active) { g.setColour(t.am().withAlpha(t.glowAlpha(0.06f))); g.fillRoundedRectangle(r.reduced(1.f), T().rad(6.f)); }
+  g.setColour(active ? t.c(0xff3d2c12) : juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), T().rad(6.f), 1.f);
+}
+
+class ClassicCard : public InsertCard {
+ public:
+  ClassicCard(InsertPanel& p, int slot) : p_(p), slot_(slot) {
+    auto* e = p_.ctx_.engine(); auto* fx = e ? e->insertAt(p_.ch_, slot) : nullptr;
+    if (!fx) return;
+    name_ = fx->name();
+    hosted_ = dynamic_cast<airdaw::FxInstance*>(fx) == nullptr;
+    open_ = p_.isOpen(p_.ch_, slot);
+    for (auto* b : {&byp_, &tog_, &rm_}) { addAndMakeVisible(*b); b->getProperties().set("noUpper", true); b->getProperties().set("fontH", 12.0); }
+    if (!hosted_) {
+      for (auto* b : {&fav_, &info_}) { addAndMakeVisible(*b); b->getProperties().set("noUpper", true); b->getProperties().set("fontH", 13.0); }
+      fav_.setTooltip("Favourite: show this plugin at the top of the plugin list");
+      fav_.onClick = [this] { const bool on = !isFavourite(p_.ctx_, name_); setFavourite(p_.ctx_, name_, on);
+                              p_.ctx_.note(name_ + (on ? " added to favourites" : " removed from favourites")); p_.key_.clear(); };
+      info_.setTooltip("About this plugin (Chris's description from Airwindows)");
+      info_.onClick = [this] { if (p_.ctx_.showPluginInfo) p_.ctx_.showPluginInfo(name_); };
+    }
+    byp_.setTooltip("Bypass on/off"); tog_.setTooltip("Show / hide the controls"); rm_.setTooltip("Remove from the chain");
+    tagMidi(byp_, "fx." + juce::String(p_.ch_) + "." + juce::String(slot_) + ".bypass");
+    byp_.onClick = [this] { if (auto* f = fxNow()) f->setBypass(!f->bypassed()); sync(); };
+    tog_.onClick = [this] { p_.setOpen(slot_, !open_); };
+    rm_.onClick = [this] {
+      const int ch = p_.ch_, s = slot_;
+      // Deferred: removing rebuilds the panel, which deletes this card.
+      juce::MessageManager::callAsync([ch, s, sp = juce::Component::SafePointer<InsertPanel>(&p_)] {
+        if (!sp) return;
+        if (auto* en = sp->ctx_.engine()) en->setInsert(ch, s, "");
+        sp->setOpen(s, false);
+      });
+    };
+    if (!open_) return;
+    if (hosted_) {
+      window_.setButtonText("Open plugin window"); addAndMakeVisible(window_);
+      window_.onClick = [this] { if (p_.ctx_.openPluginWindow) p_.ctx_.openPluginWindow(p_.ch_, slot_); };
+      return;
+    }
+    for (int i = 0; i < fx->numParams(); ++i) {
+      auto k = std::make_unique<PluginKnob>();
+      k->label = fx->params()[(size_t)i].name;
+      k->setRange(0.f, 1.f, fx->params()[(size_t)i].defaultValue);
+      k->onChange = [this, i](float v) { if (auto* f = fxNow()) f->setParam(i, v); };
+      tagMidi(*k, "fx." + juce::String(p_.ch_) + "." + juce::String(slot_) + "." + juce::String(i));
+      addAndMakeVisible(*k); knobs_.push_back(std::move(k));
+    }
+    def_.setTooltip("Reset every knob to the plugin's default");
+    def_.onClick = [this] { if (auto* f = fxNow()) for (int i = 0; i < f->numParams(); ++i) f->setParam(i, f->params()[(size_t)i].defaultValue); };
+    save_.setTooltip("Save the current knob settings as a preset");
+    save_.onClick = [this] { savePreset(); };
+    addAndMakeVisible(def_); addAndMakeVisible(save_);
+    for (auto& n : p_.presets_.names(name_)) {
+      auto b = std::make_unique<juce::TextButton>(n);
+      b->setTooltip("Apply preset \"" + n + "\" (right-click or Ctrl+click to delete)");
+      b->getProperties().set("noUpper", true);
+      b->onClick = [this, n] {
+        const auto mods = juce::ModifierKeys::currentModifiers;
+        if (mods.isPopupMenu() || mods.isCommandDown()) { deletePreset(n); return; }
+        auto v = p_.presets_.values(name_, n);
+        if (auto* f = fxNow()) for (int i = 0; i < (int)v.size() && i < f->numParams(); ++i) f->setParam(i, v[(size_t)i]);
+      };
+      addAndMakeVisible(*b); presetBtns_.push_back(std::move(b));
+    }
+    for (auto* b : std::initializer_list<juce::TextButton*>{&def_, &save_}) b->getProperties().set("fontH", 10.0);
+    for (auto& b : presetBtns_) b->getProperties().set("fontH", 10.0);
+    sync();
+  }
+
+  airdaw::InsertProcessor* fxNow() const { auto* e = p_.ctx_.engine(); return e ? e->insertAt(p_.ch_, slot_) : nullptr; }
+
+  void sync() override {
+    auto* f = fxNow(); if (!f) return;
+    byp_.setToggleState(!f->bypassed(), juce::dontSendNotification);
+    active_ = !f->bypassed();
+    for (int i = 0; i < (int)knobs_.size() && i < f->numParams(); ++i) {
+      auto& k = *knobs_[(size_t)i];
+      if (!k.isMouseButtonDown()) k.setValue(f->getParam(i));
+      auto txt = juce::String(f->paramDisplay(i)).trim();
+      const auto lab = juce::String(f->params()[(size_t)i].label).trim();
+      // Many Airwindows parameters only report their raw 0..1 value: show it as 0-100 like the mockup.
+      if (lab.isEmpty() && txt.containsOnly("0123456789.-") && std::abs(txt.getFloatValue() - f->getParam(i)) < 0.0006f)
+        txt = juce::String(juce::roundToInt(f->getParam(i) * 100.f));
+      else if (lab.isNotEmpty()) txt << " " << lab;
+      if (txt != k.valueText) { k.valueText = txt; k.repaint(); }
+    }
+    repaint();
+  }
+
+  int cols() const { return juce::jlimit(1, kcMaxCols, (int)knobs_.size()); }
+  int prefWidth() const override {
+    const int head = (hosted_ ? 172 : 240) + juce::roundToInt(juce::GlyphArrangement::getStringWidth(Theme::spaced(Theme::uiFont(14.f, true), 0.05f), name_));
+    if (!open_) return juce::jmax(170, head);
+    if (hosted_) return juce::jmax(head, 260);
+    return juce::jmax(head, cols() * kcKnobW + (cols() - 1) * kcKnobGapX + 2 * kcPad);
+  }
+  int prefHeight() const override {
+    if (!open_) return kHeaderH;
+    if (hosted_) return kHeaderH + 70;
+    const int rows = ((int)knobs_.size() + kcMaxCols - 1) / kcMaxCols;
+    return kHeaderH + kcPad + 24 + 10 + rows * kcKnobH + juce::jmax(0, rows - 1) * kcKnobGapY + kcPad;
+  }
+
+  void paint(juce::Graphics& g) override {
+    auto r = getLocalBounds().toFloat();
+    cardFrame(g, r, active_);
+    auto head = r.removeFromTop((float)kHeaderH);
+    g.saveState(); g.reduceClipRegion(head.toNearestInt());
+    juce::Path clip; clip.addRoundedRectangle(head.getX(), head.getY(), head.getWidth(), head.getHeight(), T().rad(6.f), T().rad(6.f), true, true, false, false);
+    g.reduceClipRegion(clip);
+    T().drawBrush(g, head); g.restoreState();
+    g.setColour(juce::Colours::black); g.fillRect(head.getX(), head.getBottom() - 1.f, head.getWidth(), 1.f);
+    auto hr = head.reduced(8.f, 0.f);
+    g.setColour(Theme::dim()); g.setFont(Theme::uiFont(16.f));
+    g.drawText(juce::String(juce::CharPointer_UTF8("\xe2\xa0\xbf")), hr.removeFromLeft(14.f), juce::Justification::centredLeft);  // drag grip
+    g.setColour(T().amd()); g.setFont(Theme::monoFont(12.f, false));
+    g.drawText(juce::String(slot_ + 1), hr.removeFromLeft(16.f), juce::Justification::centredLeft);
+    g.setColour(Theme::cream()); g.setFont(Theme::spaced(Theme::uiFont(14.f, true), 0.05f));
+    g.drawText(name_, hr, juce::Justification::centredLeft, true);
+    if (open_ && hosted_) {
+      g.setColour(Theme::dim()); g.setFont(Theme::uiFont(12.f));
+      g.drawFittedText(name_.containsIgnoreCase("meter") ? "Hosted VST3. Its display is in the meter dock below." : "Hosted VST3 plugin.",
+                       getLocalBounds().withTrimmedTop(kHeaderH + 44).reduced(12, 0), juce::Justification::topLeft, 2);
+    }
+  }
+
+  void resized() override {
+    auto r = getLocalBounds();
+    auto head = r.removeFromTop(kHeaderH).reduced(6, 5);
+    rm_.setBounds(head.removeFromRight(30)); head.removeFromRight(4);
+    tog_.setBounds(head.removeFromRight(30)); head.removeFromRight(4);
+    byp_.setBounds(head.removeFromRight(30));
+    tog_.setButtonText(juce::String(juce::CharPointer_UTF8(open_ ? "\xe2\x96\xbe" : "\xe2\x96\xb8")));
+    byp_.setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x8f\xbb")));
+    if (!hosted_) {
+      info_.setBounds(head.removeFromRight(30)); head.removeFromRight(4);
+      fav_.setBounds(head.removeFromRight(30)); head.removeFromRight(4);
+      const bool fav = isFavourite(p_.ctx_, name_);
+      fav_.setButtonText(juce::String(juce::CharPointer_UTF8(fav ? "\xe2\x98\x85" : "\xe2\x98\x86")));
+      fav_.setToggleState(fav, juce::dontSendNotification);
+      info_.setButtonText("i");
+    }
+    rm_.setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x9c\x95")));
+    if (!open_) return;
+    auto body = r.reduced(kcPad);
+    if (hosted_) { window_.setBounds(body.removeFromTop(30).removeFromLeft(180)); return; }
+    auto pre = body.removeFromTop(24); body.removeFromTop(10);
+    auto place = [&](juce::TextButton& b) { const int w = b.getBestWidthForHeight(24) + 14; b.setBounds(pre.removeFromLeft(w)); pre.removeFromLeft(4); };
+    place(def_); for (auto& b : presetBtns_) place(*b); place(save_);
+    for (int i = 0; i < (int)knobs_.size(); ++i) {
+      const int c = i % kcMaxCols, row = i / kcMaxCols;
+      knobs_[(size_t)i]->setBounds(body.getX() + c * (kcKnobW + kcKnobGapX), body.getY() + row * (kcKnobH + kcKnobGapY), kcKnobW, kcKnobH);
+    }
+  }
+
+  void mouseUp(const juce::MouseEvent& e) override {  // clicking the header toggles the card
+    if (e.mouseWasClicked() && e.y < kHeaderH) p_.setOpen(slot_, !open_);
+  }
+  void mouseDrag(const juce::MouseEvent& e) override {  // dragging the header moves the plugin in the chain
+    if (e.mouseDownPosition.y >= kHeaderH || e.getDistanceFromDragStart() < 6) return;
+    if (auto* dc = juce::DragAndDropContainer::findParentDragContainerFor(this))
+      if (!dc->isDragAndDropActive()) dc->startDragging(insertDragId(p_.ch_, slot_), this);
+  }
+  void paintOverChildren(juce::Graphics& g) override { if (dropHover_) drawDropOutline(g, getLocalBounds().toFloat(), 6.f); }
+  bool isInterestedInDragSource(const SourceDetails& d) override {
+    int ch, s; return parseInsertDrag(d.description, ch, s) && ch == p_.ch_ && s != slot_;
+  }
+  void itemDragEnter(const SourceDetails&) override { dropHover_ = true; repaint(); }
+  void itemDragExit(const SourceDetails&) override { dropHover_ = false; repaint(); }
+  void itemDropped(const SourceDetails& d) override {
+    dropHover_ = false; repaint();
+    int ch, s; if (parseInsertDrag(d.description, ch, s) && p_.ctx_.moveInsert) p_.ctx_.moveInsert(ch, s, slot_);
+  }
+
+ private:
+  void savePreset() {
+    auto* w = new juce::AlertWindow("Save preset", "Name for this " + name_ + " preset:", juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor("name", "My " + name_, {});
+    w->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey)); w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    w->enterModalState(true, juce::ModalCallbackFunction::create([this, w, sp = juce::Component::SafePointer<InsertPanel>(&p_)](int r) {
+      const auto n = w->getTextEditorContents("name").trim();
+      if (!sp || r != 1 || n.isEmpty()) return;
+      auto* f = fxNow(); if (!f) return;
+      std::vector<float> v; for (int i = 0; i < f->numParams(); ++i) v.push_back(f->getParam(i));
+      sp->presets_.save(name_, n, v);
+      sp->key_.clear(); sp->rebuild();
+      sp->ctx_.note("Saved preset \"" + n + "\" for " + name_);
+    }), true);
+  }
+  void deletePreset(const juce::String& n) {
+    juce::AlertWindow::showAsync(juce::MessageBoxOptions().withTitle("Delete preset").withMessage("Delete the " + name_ + " preset \"" + n + "\"?")
+                                     .withButton("Delete", 1).withButton("Cancel", 0),
+                                 [this, n, sp = juce::Component::SafePointer<InsertPanel>(&p_)](int r) {
+                                   if (!sp || r != 1) return;
+                                   sp->presets_.remove(name_, n); sp->key_.clear(); sp->rebuild();
+                                 });
+  }
+
+  InsertPanel& p_;
+  const int slot_;
+  juce::String name_;
+  bool hosted_ = false, open_ = false, active_ = true, dropHover_ = false;
+  juce::TextButton byp_, tog_, rm_, fav_, info_, window_, def_{"Default"}, save_{juce::String(juce::CharPointer_UTF8("\xef\xbc\x8b Save"))};
+  std::vector<std::unique_ptr<PluginKnob>> knobs_;
+  std::vector<std::unique_ptr<juce::TextButton>> presetBtns_;
+};
+
+// ---------------- Rack look: one 500-series module ----------------
+class RackCard : public InsertCard {
+ public:
+  RackCard(InsertPanel& p, int slot) : p_(p), slot_(slot) {
     auto* e = p_.ctx_.engine(); auto* fx = e ? e->insertAt(p_.ch_, slot) : nullptr;
     if (!fx) return;
     name_ = fx->name();
@@ -223,7 +448,7 @@ class InsertCard : public juce::Component, public juce::DragAndDropTarget {
 
   airdaw::InsertProcessor* fxNow() const { auto* e = p_.ctx_.engine(); return e ? e->insertAt(p_.ch_, slot_) : nullptr; }
 
-  void sync() {
+  void sync() override {
     auto* f = fxNow(); if (!f) return;
     byp_.setToggleState(!f->bypassed(), juce::dontSendNotification);
     if (active_ != !f->bypassed()) { active_ = !f->bypassed(); repaint(); }
@@ -243,13 +468,13 @@ class InsertCard : public juce::Component, public juce::DragAndDropTarget {
   // Knobs wrap into a second row only past six, so the rack stays about as tall as the old card row.
   int rows() const { const int n = (int)knobs_.size(); return n == 0 ? 0 : (n + kMaxCols - 1) / kMaxCols; }
   int cols() const { const int n = (int)knobs_.size(); return n == 0 ? 0 : (n + rows() - 1) / rows(); }
-  int prefWidth() const {
+  int prefWidth() const override {
     if (!open_) return kClosedW;
     if (hosted_) return 250;
     const int c = juce::jmax(1, cols());
     return juce::jmax(268, c * kKnobW + (c - 1) * kKnobGapX + 2 * kSide);
   }
-  int prefHeight() const {
+  int prefHeight() const override {
     if (!open_ || hosted_) return kMinRowH;
     const int rr = juce::jmax(1, rows());
     return juce::jmax(kMinRowH, kTop + 6 + rr * kKnobH + (rr - 1) * kKnobGapY + 6 + kFoot + 6);
@@ -354,7 +579,7 @@ class InsertCard : public juce::Component, public juce::DragAndDropTarget {
       m.addSubMenu("Delete preset", del);
     }
     m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&preset_),
-                    [this, names, sp = juce::Component::SafePointer<InsertCard>(this)](int id) {
+                    [this, names, sp = juce::Component::SafePointer<RackCard>(this)](int id) {
       if (!sp || id <= 0) return;
       if (id == 1) {
         if (auto* f = fxNow()) for (int i = 0; i < f->numParams(); ++i) f->setParam(i, f->params()[(size_t)i].defaultValue);
@@ -409,11 +634,11 @@ class InsertCard : public juce::Component, public juce::DragAndDropTarget {
   juce::Image plate_; juce::Point<int> plateSize_; float plateScale_ = 0.f;
 };
 
-// "+ Load into slot N": a blank module with the plugin picker.
+// "+ Load into slot N" with the plugin picker: a card, or a blank module in the rack look.
 class AddCard : public juce::Component {
  public:
-  AddCard(InsertPanel& p, AppCtx& ctx, int ch, int slot, bool& showOld, std::function<void(int)> refresh)
-      : ctx_(ctx), ch_(ch), slot_(slot), showOld_(showOld), refresh_(std::move(refresh)) {
+  AddCard(InsertPanel& p, AppCtx& ctx, int ch, int slot, bool& showOld, bool rack, std::function<void(int)> refresh)
+      : ctx_(ctx), ch_(ch), slot_(slot), showOld_(showOld), rack_(rack), refresh_(std::move(refresh)) {
     juce::ignoreUnused(p);
     showOld = ctx.props.getBoolValue("plugins.showOld", showOld);  // shared with the Plugins panel
     auto list = pickerList(showOld);
@@ -459,6 +684,18 @@ class AddCard : public juce::Component {
     addAndMakeVisible(box_); addAndMakeVisible(old_);
   }
   void paint(juce::Graphics& g) override {
+    if (!rack_) {
+      auto r = getLocalBounds().toFloat();
+      cardFrame(g, r, false);
+      T().drawBrush(g, r.reduced(1.f));
+      g.setColour(Theme::cream()); g.setFont(Theme::uiFont(14.f, true));
+      g.drawText(juce::String(juce::CharPointer_UTF8("\xef\xbc\x8b Load into slot ")) + juce::String(slot_ + 1), getLocalBounds().reduced(12, 8).removeFromTop(22),
+                 juce::Justification::centredLeft);
+      g.setColour(Theme::dim()); g.setFont(Theme::uiFont(12.f));
+      g.drawText(juce::String(count_) + " plugins" + (showOld_ ? "" : juce::String(juce::CharPointer_UTF8(" \xc2\xb7 latest versions"))),
+                 getLocalBounds().reduced(12, 8).withTrimmedTop(64).removeFromTop(18), juce::Justification::centredLeft);
+      return;
+    }
     const auto f = blankFinish();
     cachedPlate(g, *this, plate_, plateSize_, plateScale_, f);
     auto b = getLocalBounds().withTrimmedBottom(3).toFloat();
@@ -476,18 +713,25 @@ class AddCard : public juce::Component {
     }
   }
   void resized() override {
+    if (!rack_) {
+      auto r = getLocalBounds().reduced(12, 8);
+      r.removeFromTop(26); box_.setBounds(r.removeFromTop(30)); r.removeFromTop(28);
+      old_.setBounds(r.removeFromTop(24).removeFromLeft(170));
+      return;
+    }
     auto r = getLocalBounds().reduced(12, 0);
     box_.setBounds(r.withY(32).withHeight(30));
     old_.setBounds(r.withY(92).withHeight(24).withWidth(170));
   }
  private:
-  AppCtx& ctx_; int ch_, slot_; bool& showOld_; std::function<void(int)> refresh_;
+  AppCtx& ctx_; int ch_, slot_; bool& showOld_; bool rack_; std::function<void(int)> refresh_;
   juce::ComboBox box_; juce::TextButton old_; juce::StringArray names_; int count_ = 0;
   juce::Image plate_; juce::Point<int> plateSize_; float plateScale_ = 0.f;
 };
 
 // ---------------- RackWell: the chassis behind the modules ----------------
 void RackWell::paint(juce::Graphics& g) {
+  if (!rack) return;  // cards look: nothing behind the cards
   auto r = getLocalBounds().toFloat();
   g.setColour(juce::Colour(0xff060606)); g.fillRect(r);
   g.setGradientFill(juce::ColourGradient(juce::Colours::black.withAlpha(0.8f), 0.f, r.getY(), juce::Colours::transparentBlack, 0.f, r.getY() + 14.f, false));
@@ -566,7 +810,7 @@ void InsertPanel::setOpen(int slot, bool open) {
 
 juce::String InsertPanel::chainKey() const {
   auto* e = ctx_.engine(); if (!e || ch_ < 0) return {};
-  juce::String k; k << ch_ << "|" << target_ << "|" << (int)showOld_ << "|" << ctx_.props.getValue("favoritePlugins") << "|";
+  juce::String k; k << ch_ << "|" << target_ << "|" << (int)showOld_ << "|" << ctx_.props.getValue("favoritePlugins") << "|" << T().inserts << "|";
   for (int s = 0; s < airdaw::kMaxInserts; ++s) {
     auto* fx = e->insertAt(ch_, s);
     k << (fx ? juce::String(fx->name()) : juce::String("-")) << (isOpen(ch_, s) ? "+" : "") << ";";
@@ -578,13 +822,19 @@ void InsertPanel::rebuild() {
   auto* e = ctx_.engine(); if (!e || ch_ < 0) return;
   const auto k = chainKey(); if (k == key_) return;
   key_ = k;
+  rack_ = T().inserts == "rack";
+  row_.rack = rack_;
   cards_.clear(); addCard_.reset();
   for (int s = 0; s < airdaw::kMaxInserts; ++s)
-    if (e->insertAt(ch_, s)) { cards_.push_back(std::make_unique<InsertCard>(*this, s)); row_.addAndMakeVisible(*cards_.back()); }
+    if (e->insertAt(ch_, s)) {
+      if (rack_) cards_.push_back(std::make_unique<RackCard>(*this, s));
+      else cards_.push_back(std::make_unique<ClassicCard>(*this, s));
+      row_.addAndMakeVisible(*cards_.back());
+    }
   int free = target_;
   if (free < 0 || e->insertAt(ch_, free)) { free = -1; for (int s = 0; s < airdaw::kMaxInserts; ++s) if (!e->insertAt(ch_, s)) { free = s; break; } }
   if (free >= 0) {
-    addCard_ = std::make_unique<AddCard>(*this, ctx_, ch_, free, showOld_, [this](int loaded) {
+    addCard_ = std::make_unique<AddCard>(*this, ctx_, ch_, free, showOld_, rack_, [this](int loaded) {
       target_ = -1; if (loaded >= 0) { open_[ch_][loaded] = true; preset_[ch_].erase(loaded); }
       key_.clear(); rebuild(); if (ctx_.layoutChanged) ctx_.layoutChanged(); });
     row_.addAndMakeVisible(*addCard_);
@@ -601,9 +851,10 @@ void InsertPanel::sync() {
 }
 
 int InsertPanel::preferredHeight() const {
-  int h = kMinRowH;
+  int h = rack_ ? kMinRowH : 96;
   for (auto& c : cards_) h = juce::jmax(h, c->prefHeight());
-  return h + 2 * kGap + kRail + 20 + (view_.isHorizontalScrollBarShown() ? 10 : 0);
+  const int scroll = view_.isHorizontalScrollBarShown() ? 10 : 0;
+  return rack_ ? h + 2 * kGap + kRail + 20 + scroll : h + 20 + scroll;
 }
 
 void InsertPanel::paint(juce::Graphics& g) {
@@ -617,9 +868,10 @@ void InsertPanel::paint(juce::Graphics& g) {
     g.setFont(Theme::spaced(Theme::uiFont(15.f, true), 0.16f));
     T().drawGlowText(g, juce::String(c ? c->name : "").toUpperCase(), hd.removeFromTop(22).toFloat(), juce::Justification::centredLeft, Theme::cream(), 0.5f);
     g.setColour(Theme::dim()); g.setFont(Theme::uiFont(11.5f));
-    g.drawFittedText("Insert rack\ndrag a module's name\nto reorder", hd.removeFromTop(46), juce::Justification::topLeft, 3);
+    if (rack_) g.drawFittedText("Insert rack\ndrag a module's name\nto reorder", hd.removeFromTop(46), juce::Justification::topLeft, 3);
+    else g.drawFittedText(juce::String(juce::CharPointer_UTF8("Insert chain\ndrag \xe2\xa0\xbf to reorder")), hd.removeFromTop(34), juce::Justification::topLeft, 2);
   }
-  if (chassis_.isEmpty()) return;
+  if (!rack_ || chassis_.isEmpty()) return;
   // chassis: wood cheeks (the trim setting's material), a top rail with the power lamp, a dark lip round the well
   auto ch = chassis_;
   g.setColour(juce::Colours::black.withAlpha(0.6f)); g.fillRoundedRectangle(ch.toFloat().translated(0.f, 4.f), 6.f);
@@ -641,8 +893,19 @@ void InsertPanel::paint(juce::Graphics& g) {
 void InsertPanel::resized() {
   auto r = getLocalBounds().reduced(10);
   auto hd = r.removeFromLeft(122);
-  close1_.setBounds(hd.withTrimmedTop(80).removeFromTop(30).removeFromLeft(100));
+  close1_.setBounds(hd.withTrimmedTop(rack_ ? 80 : 62).removeFromTop(30).removeFromLeft(100));
   close2_.setBounds(r.removeFromRight(96).withSizeKeepingCentre(96, 30));  // vertically centred on the panel
+  if (!rack_) {  // cards look (the original layout)
+    r.removeFromRight(8);
+    chassis_ = {};
+    view_.setBounds(r);
+    int x = 0, h = 120;
+    for (auto& c : cards_) { const int w = c->prefWidth(); c->setBounds(x, 0, w, c->prefHeight()); x += w + 10; h = juce::jmax(h, c->prefHeight()); }
+    if (addCard_) { addCard_->setBounds(x, 0, 230, 120); x += 240; }
+    row_.used = x;
+    row_.setSize(juce::jmax(x, 10), h);
+    return;
+  }
   r.removeFromRight(10);
   chassis_ = r;
   view_.setBounds(r.withTrimmedTop(kRail).reduced(kCheek, 0));

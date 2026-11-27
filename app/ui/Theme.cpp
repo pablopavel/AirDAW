@@ -13,7 +13,7 @@ const Opt kOpts[] = {
     {"vu", &Theme::vuFace, nullptr}, {"lcd", &Theme::readouts, nullptr}, {"font", &Theme::typeface, nullptr},
     {"mat", &Theme::trimMat, nullptr}, {"ws", &Theme::species, nullptr}, {"gr", &Theme::grain, nullptr},
     {"ww", &Theme::trimWidth, nullptr}, {"scr", nullptr, &Theme::screws}, {"reels", nullptr, &Theme::reels},
-    {"wood", nullptr, &Theme::trim}, {"shift", nullptr, &Theme::pixelShift},
+    {"wood", nullptr, &Theme::trim}, {"shift", nullptr, &Theme::pixelShift}, {"ins", &Theme::inserts, nullptr},
 };
 // Mockup LD (the Studio look) and LOOKS: eras and classics.
 const char* kStudio = "hue=37 glow=1 ws=walnut gr=fine fp=brushed rd=normal ww=normal panel=oled wood=1 tint=charcoal mat=wood "

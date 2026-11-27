@@ -1,5 +1,6 @@
 // Mixer area (mockup #mixw): scrolling tracks + "add track" + buses, master fixed on the right.
 #pragma once
+#include <array>
 #include <memory>
 #include <vector>
 #include "Strip.h"
@@ -17,8 +18,15 @@ class Mixer : public juce::Component {
   // Listen mode: only the master strip, larger readouts (mockup body.listen).
   void setListenMode(bool on) { listen_ = on; view_.setVisible(!on); master_.setListenLayout(on); resized(); }
   MasterStrip& master() { return master_; }
+  // Removed tracks: their strips are hidden (the track itself is cleared by the caller). "Add track" brings back the
+  // lowest removed slot first. The list is saved per project (onRemovedChanged / setRemovedTracks).
+  void removeTrack(int t);
+  void setRemovedTracks(const juce::var& list);
+  juce::var removedTracks() const;
+  std::function<void()> onRemovedChanged;
  private:
   void relayout();
+  std::array<bool, airdaw::kMaxTracks> removed_{};
   AppCtx& ctx_;
   juce::Viewport view_;
   juce::Component content_;
