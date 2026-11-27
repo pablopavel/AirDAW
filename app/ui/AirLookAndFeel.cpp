@@ -64,6 +64,12 @@ void AirLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, co
     g.setColour(Theme::dim().withAlpha(over ? 0.9f : 0.5f)); g.fillPath(p);
     return;
   }
+  if (kind == "lcd") {  // a small amber readout that opens a menu (rack module presets)
+    g.setColour(juce::Colour(0xff100a03)); g.fillRoundedRectangle(r, 3.f);
+    g.setColour(juce::Colours::black.withAlpha(0.8f)); g.drawHorizontalLine((int)r.getY() + 1, r.getX() + 2, r.getRight() - 2);
+    g.setColour(over ? T().amd() : juce::Colours::black); g.drawRoundedRectangle(r, 3.f, 1.f);
+    return;
+  }
   if (kind == "key") {  // deck menu keys: the transport keys' look at button size
     auto& t = T();
     const bool on = b.getToggleState(), pressed = on || down;
@@ -123,6 +129,14 @@ void AirLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& b, bool
   auto text = b.getButtonText();
   if (!b.getProperties()["noUpper"]) text = text.toUpperCase();
   auto r = b.getLocalBounds().reduced(4, 1);
+  if (b.getProperties()["kind"].toString() == "lcd") {
+    g.setFont(Theme::monoFont((float)b.getProperties().getWithDefault("fontH", 11.0), false));
+    auto arrow = r.removeFromRight(10);
+    T().drawGlowText(g, text, r.toFloat().withTrimmedLeft(3.f), juce::Justification::centredLeft, T().am(), 0.5f);
+    g.setColour(T().amd()); g.setFont(Theme::uiFont(10.f));
+    g.drawText(juce::String(juce::CharPointer_UTF8("\xe2\x96\xbe")), arrow, juce::Justification::centred);
+    return;
+  }
   if (b.getProperties()["kind"].toString() == "key") {  // follows the key face (see drawButtonBackground)
     r = r.withTrimmedBottom(4);
     if (down || b.getToggleState()) r = r.translated(0, 3);

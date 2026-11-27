@@ -1,9 +1,11 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "MainComponent.h"
+#include "ui/AppIcon.h"
 
 // Command line:
 //   AirDAW.exe <project.airdaw>   open that project (what Explorer passes on double-click / "Open with").
 //   --snapshot <file.png> [--scenario <name>] [--size <W>x<H>]   test hook: set up a UI state, save a picture, quit.
+//   --render-icon <folder>   write the application icon PNGs (resources/icon) and quit.
 
 // The first argument that names an existing .airdaw file (Explorer quotes paths with spaces).
 static juce::File projectArg(const juce::String& commandLine) {
@@ -22,7 +24,9 @@ class AirDawApp : public juce::JUCEApplication {
   const juce::String getApplicationVersion() override { return "0.1.0"; }
   // One AirDAW at a time (two would fight over the ASIO driver): opening another project from Explorer hands it to the
   // running window. Snapshot test runs are separate instances.
-  bool moreThanOneInstanceAllowed() override { return getCommandLineParameters().contains("--snapshot"); }
+  bool moreThanOneInstanceAllowed() override {
+    return getCommandLineParameters().contains("--snapshot") || getCommandLineParameters().contains("--render-icon");
+  }
   void anotherInstanceStarted(const juce::String& commandLine) override {
     if (!window_) return;
     window_->toFront(true);
@@ -33,6 +37,10 @@ class AirDawApp : public juce::JUCEApplication {
     const auto args = getCommandLineParameterArray();
     auto arg = [&](const char* key) { const int i = args.indexOf(key); return i >= 0 && i + 1 < args.size() ? args[i + 1] : juce::String(); };
     const juce::String snap = arg("--snapshot"), size = arg("--size");
+    if (const auto iconDir = arg("--render-icon"); iconDir.isNotEmpty()) {
+      setApplicationReturnValue(ui::renderAppIcons(juce::File::getCurrentWorkingDirectory().getChildFile(iconDir)) ? 0 : 1);
+      quit(); return;
+    }
     window_ = std::make_unique<Window>(snap.isNotEmpty());
     if (size.containsChar('x')) window_->setSize(size.upToFirstOccurrenceOf("x", false, false).getIntValue(),
                                                  size.fromFirstOccurrenceOf("x", false, false).getIntValue());

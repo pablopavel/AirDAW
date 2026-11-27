@@ -51,10 +51,16 @@ option(AIRDAW_BUILD_APP "Build the AirDAW application" ON)
 set(AIRDAW_ASIO_SDK "" CACHE PATH "Path to the Steinberg ASIO SDK (GPLv3 option); enables ASIO on Windows")
 if(AIRDAW_BUILD_APP)
   add_subdirectory(third_party/JUCE EXCLUDE_FROM_ALL)
-  juce_add_gui_app(AirDAW PRODUCT_NAME "AirDAW" COMPANY_NAME "trashmannightcrawler")
+  # Application icon (Windows .exe / taskbar / title bar). The PNGs are rendered by the app itself:
+  #   AirDAW.exe --render-icon resources/icon      (drawing code: app/ui/AppIcon.cpp)
+  set(AIRDAW_ICON_ARGS "")
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/AirDAW-512.png" AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/AirDAW-32.png")
+    set(AIRDAW_ICON_ARGS ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/AirDAW-512.png" ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/AirDAW-32.png")
+  endif()
+  juce_add_gui_app(AirDAW PRODUCT_NAME "AirDAW" COMPANY_NAME "trashmannightcrawler" ${AIRDAW_ICON_ARGS})
   target_sources(AirDAW PRIVATE app/Main.cpp app/MainComponent.cpp app/MainComponent.h app/AudioBridge.h app/Platform.cpp app/Vst3Insert.h app/PluginWindow.h
     app/ui/Theme.cpp app/ui/AirLookAndFeel.cpp app/ui/Widgets.cpp app/ui/Strip.cpp app/ui/Mixer.cpp app/ui/Deck.cpp
-    app/ui/Overview.cpp app/ui/InsertPanel.cpp app/ui/DisplayPanel.cpp app/ui/TakesBar.cpp
+    app/ui/Overview.cpp app/ui/InsertPanel.cpp app/ui/DisplayPanel.cpp app/ui/TakesBar.cpp app/ui/AppIcon.cpp
     app/ui/tools/ToolSet.cpp app/ui/tools/Tools.cpp app/midi/MidiControl.cpp app/ui/PluginsPanel.cpp)
   target_include_directories(AirDAW PRIVATE app)
   target_compile_definitions(AirDAW PRIVATE

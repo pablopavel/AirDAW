@@ -22,50 +22,112 @@ void Lcd::paint(juce::Graphics& g) {
 }
 
 // ---------------- Reels ----------------
-static void drawReel(juce::Graphics& g, juce::Point<float> c, float R, float angle) {
-  auto& t = T();
-  const float k = R / 50.f;
-  auto circle = [&](float r, juce::Colour col) { g.setColour(col); g.fillEllipse(c.x - r * k, c.y - r * k, 2 * r * k, 2 * r * k); };
-  circle(48.f, juce::Colour(0xff161617));
-  g.setColour(juce::Colours::black); g.drawEllipse(c.x - 48 * k, c.y - 48 * k, 96 * k, 96 * k, 2.f * k);
-  circle(40.f, t.c(0xff3a2d1d));
-  circle(30.f, juce::Colour(0xff111111));
-  auto xf = juce::AffineTransform::rotation(angle).translated(c.x, c.y);
-  for (int i = 0; i < 3; ++i) {
-    const float a = juce::MathConstants<float>::pi * 2.f / 3.f * (float)i;
-    juce::Path cut;  // window between the spokes
-    cut.startNewSubPath(-9 * k, -30 * k); cut.quadraticTo(0, -33 * k, 9 * k, -30 * k);
-    cut.lineTo(5 * k, -12 * k); cut.lineTo(-5 * k, -12 * k); cut.closeSubPath();
-    cut.applyTransform(juce::AffineTransform::rotation(a + juce::MathConstants<float>::pi / 3.f).followedBy(xf));
-    g.setColour(juce::Colour(0xff0b0b0b)); g.fillPath(cut);
-    g.setColour(juce::Colour(0xff444444)); g.strokePath(cut, juce::PathStrokeType(0.8f));
-    juce::Line<float> tick(0, -48 * k, 0, -40 * k);
-    tick.applyTransform(juce::AffineTransform::rotation(a).followedBy(xf));
-    g.setColour(t.am()); g.drawLine(tick, 2.f * k);
+// Darkroom palette: everything is lit by one red safelight.
+static const juce::Colour kSafe(0xffff3b2a), kSafeEdge(0xffff4a35);
+static constexpr float kTilt = 0.78f;  // the plate leans back: circles are drawn squashed vertically
+
+// One reel: tape pack, six-window anodized flange and hub turn with `angle`; the red rim light stays put.
+static void drawReel(juce::Graphics& g, juce::Point<float> c, float R, float angle, float pack, float hum) {
+  const auto tilt = juce::AffineTransform::scale(1.f, kTilt).translated(c.x, c.y);
+  const auto spin = juce::AffineTransform::rotation(angle).followedBy(tilt);
+  // soft shadow on the plate, offset away from the light (top right)
+  {
+    juce::ColourGradient sg(juce::Colours::black.withAlpha(0.75f), c.x - 2.f, c.y + 4.f, juce::Colours::transparentBlack,
+                            c.x - 2.f + R * 1.15f, c.y + 4.f, true);
+    g.setGradientFill(sg);
+    g.fillEllipse(c.x - 2.f - R * 1.15f, c.y + 4.f - R * 1.15f * kTilt, R * 2.3f, R * 2.3f * kTilt);
   }
-  circle(11.f, juce::Colour(0xff9b9b9b));
-  g.setColour(juce::Colours::black); g.drawEllipse(c.x - 11 * k, c.y - 11 * k, 22 * k, 22 * k, 1.f);
-  circle(4.f, juce::Colour(0xff222222));
+  juce::Path packP; packP.addEllipse(-pack, -pack, 2 * pack, 2 * pack); packP.applyTransform(tilt);
+  g.setColour(juce::Colour(0xff0a0505)); g.fillPath(packP);
+  g.setColour(kSafe.withAlpha(0.25f)); g.strokePath(packP, juce::PathStrokeType(0.8f));
+
+  juce::Path fl; fl.setUsingNonZeroWinding(false);  // even-odd: the windows and hub hole are holes
+  fl.addEllipse(-R, -R, 2 * R, 2 * R);
+  const float r1 = R * 0.88f, r0 = R * 0.31f, half = juce::degreesToRadians(20.f);
+  for (int i = 0; i < 6; ++i) {
+    const float a = juce::MathConstants<float>::twoPi * (float)i / 6.f;
+    fl.addPieSegment(-r1, -r1, 2 * r1, 2 * r1, a - half, a + half, r0 / r1);
+  }
+  fl.addEllipse(-R * 0.2f, -R * 0.2f, R * 0.4f, R * 0.4f);
+  fl.applyTransform(spin);
+  g.setColour(juce::Colour(0xff1c1414)); g.fillPath(fl);
+  g.setColour(kSafeEdge.withAlpha(0.55f)); g.strokePath(fl, juce::PathStrokeType(0.9f));
+
+  juce::Path hub; hub.addEllipse(-R * 0.18f, -R * 0.18f, R * 0.36f, R * 0.36f); hub.applyTransform(tilt);
+  g.setColour(juce::Colour(0xff2a1a1a)); g.fillPath(hub);
+  g.setColour(juce::Colour(0xffff6a55).withAlpha(0.8f)); g.strokePath(hub, juce::PathStrokeType(1.f));
+  juce::Path key; key.addRectangle(-R * 0.035f, -R * 0.16f, R * 0.07f, R * 0.1f); key.applyTransform(spin);
+  g.setColour(juce::Colour(0xffff6a55).withAlpha(0.6f)); g.fillPath(key);
+
+  // fixed red rim light from the safelight (upper right)
+  juce::Path outer; outer.addEllipse(-R, -R, 2 * R, 2 * R); outer.applyTransform(tilt);
+  {
+    juce::Graphics::ScopedSaveState ss(g);
+    g.reduceClipRegion(outer);
+    const juce::Point<float> hot(c.x + R * 0.62f, c.y - R * 0.78f * kTilt);
+    g.setGradientFill(juce::ColourGradient(kSafe.withAlpha(0.55f * hum), hot.x, hot.y, kSafe.withAlpha(0.f), hot.x + R * 0.8f, hot.y, true));
+    g.fillPath(outer);
+  }
+  juce::Path rim; rim.addCentredArc(0.f, 0.f, R - 0.5f, R - 0.5f, 0.f, juce::MathConstants<float>::pi * 0.04f, juce::MathConstants<float>::pi * 0.48f, true);
+  rim.applyTransform(tilt);
+  g.setColour(kSafe.withAlpha(0.75f * hum)); g.strokePath(rim, juce::PathStrokeType(1.3f));
 }
 
 void Reels::paint(juce::Graphics& g) {
   auto r = getLocalBounds().toFloat();
   auto& t = T();
-  t.drawGlow(g, r, t.am(), 16.f, 0.09f);
-  g.setColour(juce::Colour(0xff050505)); g.fillRoundedRectangle(r, r.getHeight() / 2.f);
-  t.drawWell(g, r, juce::Colour(0xff050505), r.getHeight() / 2.f);
-  const float R = (r.getHeight() - 12.f) / 2.f;
-  const float cx1 = r.getX() + 14.f + R, cx2 = r.getRight() - 14.f - R;
-  g.setColour(juce::Colour(0xff5a4630)); g.fillRect(cx1 + R + 4.f, r.getCentreY() - 1.f, cx2 - cx1 - 2 * R - 8.f, 2.f);
-  drawReel(g, {cx1, r.getCentreY()}, R, a1_);
-  drawReel(g, {cx2, r.getCentreY()}, R, a2_);
+  const float corner = r.getHeight() / 2.f;
+  t.drawGlow(g, r, kSafe, 16.f, 0.09f * hum_);
+  juce::Path pill; pill.addRoundedRectangle(r, corner);
+  {
+  juce::Graphics::ScopedSaveState ss(g);
+  g.reduceClipRegion(pill);
+  g.setColour(juce::Colour(0xff040101)); g.fillRect(r);
+  // the safelight, out of frame at the top right
+  g.setGradientFill(juce::ColourGradient(kSafe.withAlpha(0.42f * hum_), r.getRight() - r.getWidth() * 0.12f, r.getY() - 6.f,
+                                         kSafe.withAlpha(0.f), r.getRight() - r.getWidth() * 0.12f - r.getWidth() * 0.62f, r.getY() - 6.f, true));
+  g.fillRect(r);
+  {  // a glossy streak across the plate
+    juce::ColourGradient st(kSafe.withAlpha(0.f), r.getX() + r.getWidth() * 0.32f, r.getY(), kSafe.withAlpha(0.f), r.getX() + r.getWidth() * 0.62f, r.getBottom(), false);
+    st.addColour(0.5, kSafe.withAlpha(0.1f * hum_));
+    g.setGradientFill(st); g.fillRect(r);
+  }
+  const float cy = r.getCentreY() - 1.f;
+  const float R = juce::jmin((r.getHeight() - 12.f) / 2.f / kTilt, r.getWidth() * 0.215f);
+  const float cx1 = r.getX() + corner, cx2 = r.getRight() - corner;
+  const float p1 = R * 0.77f, p2 = R * 0.52f;
+  // tape from the bottom of each pack past the head
+  const float base = cy + R * kTilt * 0.96f;
+  juce::Path tape;
+  tape.startNewSubPath(cx1, cy + p1 * kTilt); tape.lineTo(r.getCentreX() - 9.f, base); tape.lineTo(r.getCentreX() + 9.f, base); tape.lineTo(cx2, cy + p2 * kTilt);
+  g.setColour(juce::Colour(0xff100505)); g.strokePath(tape, juce::PathStrokeType(2.f));
+  g.setColour(kSafe.withAlpha(0.35f)); g.strokePath(tape, juce::PathStrokeType(0.7f));
+  drawReel(g, {cx1, cy}, R, a1_, p1, hum_);
+  drawReel(g, {cx2, cy}, R, a2_, p2, hum_);
+  juce::Rectangle<float> head(r.getCentreX() - 6.f, base - 4.f, 12.f, 7.f);
+  g.setColour(juce::Colour(0xff1a1010)); g.fillRoundedRectangle(head, 1.5f);
+  g.setColour(kSafe.withAlpha(0.45f)); g.drawRoundedRectangle(head, 1.5f, 0.8f);
+  // low red haze, then the vignette
+  g.setGradientFill(juce::ColourGradient(kSafe.withAlpha(0.f), 0.f, r.getY() + r.getHeight() * 0.55f, kSafe.withAlpha(0.12f * hum_), 0.f, r.getBottom(), false));
+  g.fillRect(r);
+  juce::ColourGradient vg(juce::Colours::transparentBlack, r.getCentreX() + r.getWidth() * 0.08f, r.getCentreY() - 4.f,
+                          juce::Colours::black.withAlpha(0.8f), r.getRight() + 6.f, r.getCentreY(), true);
+  vg.addColour(0.55, juce::Colours::transparentBlack);
+  g.setGradientFill(vg); g.fillRect(r);
+  }
+  g.setColour(juce::Colours::black); g.drawRoundedRectangle(r.reduced(0.5f), corner, 1.f);
 }
 void Reels::timerCallback() {
-  if (!isPlaying || !isPlaying()) return;
-  const float tau = juce::MathConstants<float>::twoPi;
-  a1_ = std::fmod(a1_ + tau / (2.2f * 30.f), tau);
-  a2_ = std::fmod(a2_ + tau / (1.6f * 30.f), tau);
-  repaint();
+  ++tick_;
+  // The safelight hums: a slow breath plus a brief dip now and then.
+  humPhase_ = std::fmod(humPhase_ + 0.105f, juce::MathConstants<float>::twoPi);
+  hum_ = 0.93f + 0.05f * std::sin(humPhase_) - ((tick_ % 97) < 2 ? 0.12f : 0.f);
+  if (isPlaying && isPlaying()) {
+    const float tau = juce::MathConstants<float>::twoPi;
+    a1_ = std::fmod(a1_ + tau / (3.1f * 30.f), tau);  // the full supply reel turns slower than the take-up reel
+    a2_ = std::fmod(a2_ + tau / (2.2f * 30.f), tau);
+    repaint();
+  } else if (tick_ % 3 == 0) repaint();  // stopped: only the light moves, 10 frames a second
 }
 
 // ---------------- NamePlate ----------------
@@ -280,6 +342,41 @@ void PluginKnob::paint(juce::Graphics& g) {
   juce::Rectangle<float> k(r.getCentreX() - D / 2.f, r.getY() + 2.f, D, D);
   const auto c = k.getCentre();
   const float v = (v_ - min_) / (max_ - min_);
+  if (rackCap >= 0) {  // printed scale + hardware cap
+    const float a0 = -0.75f * juce::MathConstants<float>::pi, span = 1.5f * juce::MathConstants<float>::pi;
+    g.setColour(inkDim);
+    for (int i = 0; i <= 10; ++i) {
+      const float a = a0 + span * (float)i / 10.f;
+      const bool major = i % 5 == 0;
+      g.drawLine(juce::Line<float>(c.getPointOnCircumference(24.5f, a), c.getPointOnCircumference(major ? 29.5f : 28.f, a)), major ? 1.6f : 1.1f);
+    }
+    auto cap = juce::Rectangle<float>(44.f, 44.f).withCentre(c);
+    g.setColour(juce::Colours::black.withAlpha(0.7f)); g.fillEllipse(cap.translated(2.5f, 4.5f));
+    static const juce::uint32 kCaps[3][3] = {{0xff6a6a6e, 0xff26262a, 0xff0d0d0e}, {0xfffffaf0, 0xffe3d9bf, 0xffa99d82}, {0xfffff1c4, 0xffd9b46a, 0xff7a5a22}};
+    const auto& cc = kCaps[juce::jlimit(0, 2, rackCap)];
+    juce::ColourGradient cg(juce::Colour(cc[0]), cap.getX() + cap.getWidth() * 0.38f, cap.getY() + cap.getHeight() * 0.3f,
+                            juce::Colour(cc[2]), cap.getRight(), cap.getBottom(), true);
+    cg.addColour(0.5, juce::Colour(cc[1]));
+    g.setGradientFill(cg); g.fillEllipse(cap);
+    g.setColour(juce::Colours::white.withAlpha(rackCap == 0 ? 0.22f : 0.45f)); g.drawEllipse(cap.reduced(1.f), 0.8f);
+    g.setColour(juce::Colours::black.withAlpha(0.45f)); g.drawEllipse(cap, 0.8f);
+    juce::Path p; p.addRoundedRectangle(-1.5f, -19.f, 3.f, 11.f, 1.5f);
+    p.applyTransform(juce::AffineTransform::rotation(a0 + span * v).translated(c.x, c.y));
+    if (rackCap == 0) { g.setColour(t.am().withAlpha(t.glowAlpha(0.35f))); g.strokePath(p, juce::PathStrokeType(2.5f)); g.setColour(t.am()); }
+    else g.setColour(juce::Colour(0xff1b1b1b));
+    g.fillPath(p);
+    auto tr = r.withTop(k.getBottom() + 2.f);
+    g.setColour(ink); g.setFont(Theme::spaced(Theme::uiFont(10.f, true), 0.08f));
+    g.drawFittedText(label.toUpperCase(), tr.removeFromTop(13.f).toNearestInt(), juce::Justification::centred, 1, 0.7f);
+    auto font = Theme::monoFont(11.f, false);
+    const float w = juce::jlimit(26.f, r.getWidth() - 2.f, juce::GlyphArrangement::getStringWidth(font, valueText) + 10.f);
+    auto lcd = juce::Rectangle<float>(w, 14.f).withCentre({r.getCentreX(), tr.getY() + 8.5f});
+    g.setColour(juce::Colour(0xff100a03)); g.fillRoundedRectangle(lcd, 3.f);
+    g.setColour(juce::Colours::black); g.drawRoundedRectangle(lcd, 3.f, 0.8f);
+    g.setFont(font);
+    t.drawGlowText(g, valueText, lcd, juce::Justification::centred, t.am(), 0.5f);
+    return;
+  }
   // glow grows with the value (mockup: drop-shadow v*11px)
   if (t.glow > 0.f && v > 0.02f) {
     g.setGradientFill(juce::ColourGradient(t.am().withAlpha(t.glowAlpha(0.42f * v)), c.x, c.y, t.am().withAlpha(0.f),

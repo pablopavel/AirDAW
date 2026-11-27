@@ -5,7 +5,19 @@ When something works, it is removed from this list; when it doesn't, it gets a n
 
 Last updated: 2026-11-26
 
-## Layout and menus (new)
+## Rack, reels and icon (new)
+- [ ] Insert rack: modules stand side by side in a chassis with wood cheeks; the faceplate finish follows the plugin's category
+      (Consoles black/gold, Dynamics/Filters aluminium, Tape/Saturation green, Reverb/Ambience blue, VST3 graphite).
+- [ ] IN key bypasses the module (LED goes dark) and still works from a MIDI mapping; the ▾ / ▸ key folds a module to a slim plate and back.
+- [ ] Drag a module by its name plate onto another to reorder the chain.
+- [ ] Preset readout menu: Default, your saved presets, "Save current settings as a preset…", Delete preset ▸. The readout shows the last preset applied.
+- [ ] Rack knobs: drag and mouse wheel; MIDI learn on a rack knob.
+- [ ] A hosted VST3 module: "Open plugin window" still opens it.
+- [ ] Reels: red "Darkroom" reels turn while playing; the red light hums faintly when stopped; no extra CPU in the DSP readout.
+- [ ] App icon (Scope A) on the taskbar, title bar, Alt+Tab and AirDAW.exe in Explorer. A pinned taskbar shortcut may keep the
+      old icon until it is unpinned and pinned again (Windows caches icons).
+
+## Layout and menus
 - [ ] Insert slot > "Choose Airwindows plugin...": the list shows categories (with counts); each opens to its plugins; favourites stay on top.
 - [ ] Dragging the divider between mixer and meters, and between meter / tool columns: follows the mouse smoothly; can be grabbed anywhere along its line (it lights up).
 - [ ] The Hit Record Meter's display catches up to its final size when you let go.

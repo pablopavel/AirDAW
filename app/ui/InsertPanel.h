@@ -1,6 +1,8 @@
-// Insert panel (mockup #dr drawer): the selected channel's insert chain as cards. Several cards can be open;
-// an open Airwindows card shows every parameter as a knob. Presets: Default + the user's own saved ones.
-// (Drag-to-reorder needs an engine change and comes in a later phase.)
+// Insert panel, styled as a 500-series "lunchbox" rack: the selected channel's insert chain as modules side by
+// side in a chassis (wood cheeks from the trim setting, a top rail, blank plates in the unused slots).
+// Each module's faceplate finish follows the plugin's category. An open Airwindows module shows every
+// parameter as a knob; a closed one is a slim plate. Presets: Default + the user's own saved ones.
+// Drag a module by its name plate to reorder the chain.
 #pragma once
 #include <map>
 #include <memory>
@@ -27,6 +29,13 @@ class PresetStore {
 
 class InsertCard;
 
+// The chassis well behind the modules; blank vented plates fill the slots past `used` pixels.
+class RackWell : public juce::Component {
+ public:
+  int used = 0;
+  void paint(juce::Graphics&) override;
+};
+
 class InsertPanel : public juce::Component {
  public:
   InsertPanel(AppCtx& ctx, PresetStore& presets);
@@ -52,9 +61,11 @@ class InsertPanel : public juce::Component {
   PresetStore& presets_;
   int ch_ = -1, target_ = -1;
   std::map<int, std::map<int, bool>> open_;  // channel -> slot -> open
+  std::map<int, std::map<int, juce::String>> preset_;  // channel -> slot -> last preset applied (shown on the module)
   juce::String key_;
   juce::Viewport view_;
-  juce::Component row_;
+  RackWell row_;
+  juce::Rectangle<int> chassis_;  // wood cheeks + rail around the viewport
   std::vector<std::unique_ptr<InsertCard>> cards_;
   std::unique_ptr<juce::Component> addCard_;
   juce::TextButton close1_{juce::String(juce::CharPointer_UTF8("\xe2\x9c\x95 Close"))}, close2_{juce::String(juce::CharPointer_UTF8("\xe2\x9c\x95 Close"))};

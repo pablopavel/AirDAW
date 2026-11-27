@@ -20,7 +20,8 @@ class Lcd : public juce::Component, public juce::SettableTooltipClient {
   juce::String caption_, text_; float h_; juce::Colour col_;
 };
 
-// Pair of tape reels that turn while the transport plays.
+// Pair of tape reels that turn while the transport plays ("Darkroom": black anodized reels on a tilted
+// gloss-black plate, lit only by a red safelight that hums faintly).
 class Reels : public juce::Component, private juce::Timer {
  public:
   Reels() { startTimerHz(30); }
@@ -28,7 +29,8 @@ class Reels : public juce::Component, private juce::Timer {
   void paint(juce::Graphics&) override;
  private:
   void timerCallback() override;
-  float a1_ = 0.f, a2_ = 0.f;
+  float a1_ = 0.f, a2_ = 0.f, hum_ = 1.f, humPhase_ = 0.f;
+  int tick_ = 0;
 };
 
 // Cream name plate with a coloured bar (click = select, double-click = rename).
@@ -127,6 +129,10 @@ class PluginKnob : public DragControl {
  public:
   PluginKnob() { setRange(0.f, 1.f, 0.5f); pixelsForRange = 150.f; wheelStep = 0.02f; }
   juce::String label, valueText;
+  // Rack faceplate style (insert rack modules): -1 = the glowing amber ring; 0 = black cap, 1 = cream, 2 = gold,
+  // with a printed tick scale and labels in `ink` and the value in a small LCD.
+  int rackCap = -1;
+  juce::Colour ink, inkDim;
   void paint(juce::Graphics&) override;
 };
 
