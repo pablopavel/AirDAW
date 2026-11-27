@@ -143,7 +143,10 @@ class MeterDock : public juce::Component {
     meterSplit_.current = [this] { return meterW_; };
     // The meter may be dragged all the way across; the suite tools fold away as it grows.
     meterSplit_.onDragState = [this](bool on) { setLiveResize(on); };
-    meterSplit_.onDrag = [this](int w) { meterW_ = juce::jlimit(260, juce::jmax(260, bodyWidth() - 14), w); ctx_.props.setValue("dock.meterWidth", meterW_); resized(); };
+    meterSplit_.onDrag = [this](int w) {
+      meterW_ = juce::jlimit(260, juce::jmax(260, bodyWidth() - 14), w);
+      ctx_.props.setValue(listenView_ ? "dock.meterWidthListen" : "dock.meterWidth", meterW_); resized();
+    };
     meterW_ = ctx_.props.getIntValue("dock.meterWidth", 762);
     for (juce::Component* c : std::initializer_list<juce::Component*>{&load_, &toolsBtn_, &meterSplit_, &suite_, &viewBtn_}) addAndMakeVisible(c);
     addChildComponent(dark_);
@@ -205,6 +208,13 @@ class MeterDock : public juce::Component {
     juce::CallOutBox::launchAsynchronously(std::make_unique<HitMeterInfo>(), at, parent);
   }
   void rebuildSuite() { suite_.rebuild(); }
+  // The main view and Listen mode each keep their own meter width (Listen starts from the main view's).
+  void setListenView(bool on) {
+    listenView_ = on;
+    const int main = ctx_.props.getIntValue("dock.meterWidth", 762);
+    meterW_ = on ? ctx_.props.getIntValue("dock.meterWidthListen", main) : main;
+    resized();
+  }
   void setMeterWidth(int w) { meterW_ = juce::jmax(260, w); resized(); }  // (test hook; users drag the divider)
 
   // Shows this plugin's editor (or the "load" prompt when null). Keeps the plugin alive while its editor exists.
@@ -317,6 +327,7 @@ class MeterDock : public juce::Component {
   ColumnSplitter meterSplit_;
   SuiteArea suite_;
   int meterW_ = 762;
+  bool listenView_ = false;
 };
 
 }  // namespace ui

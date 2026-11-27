@@ -60,8 +60,11 @@ class ToolSet {
   void removeFromSuite(const juce::String& id, int listenIndex = -1);
   void moveInListen(const juce::String& id, int index);
   void toggleMinimised(const juce::String& id);
+  // Widths are kept apart for the main view and Listen mode (each view keeps its own sizes); Listen mode starts
+  // from the main view's widths until a tool is resized there.
   int width(const juce::String& id) const;
   void setWidth(const juce::String& id, int w);
+  void setListenView(bool on) { listenView_ = on; }
   void updateAll(const AnalysisHub& hub);           // only cards that are showing
   std::function<void()> onLayoutChanged;
  private:
@@ -69,7 +72,8 @@ class ToolSet {
   AppCtx& ctx_;
   std::map<juce::String, std::unique_ptr<ToolCard>> cards_;
   std::vector<juce::String> suite_, listen_;
-  std::map<juce::String, int> widths_;
+  std::map<juce::String, int> widths_, widthsListen_;
+  bool listenView_ = false;
   juce::StringArray minimised_;
 };
 

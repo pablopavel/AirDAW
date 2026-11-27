@@ -102,6 +102,7 @@ ToolSet::ToolSet(AppCtx& ctx) : ctx_(ctx) {
   for (auto& [id, w] : std::initializer_list<std::pair<const char*, int>>{{"stereo", 332}, {"notes", 166}, {"loudness", 198}, {"bandphase", 161}, {"reference", 166}})
     widths_[id] = w;
   for (auto& i : registry()) { const int w = ctx_.props.getIntValue(juce::String("tools.w.") + i.id, 0); if (w > 0) widths_[i.id] = w; }
+  for (auto& i : registry()) { const int w = ctx_.props.getIntValue(juce::String("tools.wl.") + i.id, 0); if (w > 0) widthsListen_[i.id] = w; }
   minimised_ = juce::StringArray::fromTokens(ctx_.props.getValue("tools.min"), ",", "");
 }
 
@@ -159,12 +160,16 @@ void ToolSet::toggleMinimised(const juce::String& id) {
 }
 
 int ToolSet::width(const juce::String& id) const {
+  if (listenView_) if (auto l = widthsListen_.find(id); l != widthsListen_.end()) return l->second;
   auto it = widths_.find(id);
   if (it != widths_.end()) return it->second;
   auto c = cards_.find(id);
   return c != cards_.end() ? c->second->tool().defaultWidth() : 300;
 }
-void ToolSet::setWidth(const juce::String& id, int w) { widths_[id] = w; ctx_.props.setValue("tools.w." + id, w); }
+void ToolSet::setWidth(const juce::String& id, int w) {
+  (listenView_ ? widthsListen_ : widths_)[id] = w;
+  ctx_.props.setValue((listenView_ ? "tools.wl." : "tools.w.") + id, w);
+}
 
 void ToolSet::updateAll(const AnalysisHub& hub) {
   for (auto& [id, c] : cards_)

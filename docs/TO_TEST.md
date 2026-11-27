@@ -5,33 +5,19 @@ When something works, it is removed from this list; when it doesn't, it gets a n
 
 Last updated: 2026-11-27
 
-## Comping
-- [ ] Keep in a loop region stars the pass that is lit (the region's pick), not the track's own take; the key reads
-      "Kept" for that pass. Without a region it stars the track's take as before.
-- [ ] Takes bar: double-click a take: the loop region comes back (the region the comp plays it in, else the take's own
-      span), loop on, and with it Outside / crossfade / Clear comp. A single click still picks the take (a moment later,
-      so a double-click doesn't pick first). Also on the take's right-click menu.
-- [ ] Crossfade slider (0-50 ms): edges sound smooth, no clicks; 0 ms is a hard cut.
-- [ ] "Outside: take" / "Outside: silence".
-- [ ] "Clear comp" brings the full take back everywhere (no take is deleted).
-- [ ] "Delete unkept" leaves takes used in the comp alone.
-- [ ] Punch-in recording over a longer take also plays only in its range.
-- [ ] Save, reopen: the comp, outside setting and crossfade come back. Export plays the comp.
-
 ## Reference A/B (from step 2 notes)
-- [ ] On B, the Hit Record Meter and the listening tools measure the reference; the master strip stays on the mix.
-- [ ] Side-by-side MIX / REF levels while both play.
 - [ ] Sync: the reference plays, stops and jumps with the song.
 - [ ] Each project remembers its own reference (Full Test1 picks up the one used before; a new project starts without one).
+
+## Tool sizes per view (new)
+- [ ] Resize the reference suite tools (and the meter column) in the main view, switch to Listen mode and resize them
+      there: each view keeps its own sizes, also after a restart. Listen mode starts from the main view's sizes.
 
 ## Metronome defaults (new)
 - [ ] Set the click sound, beats per bar, count-in and click level (Audio settings, or the Click key's right-click menu),
       then restart AirDAW or make a new project: they start the same. A saved project still opens with its own.
 
 ## Undo / redo (new)
-- [ ] Ctrl+Z undoes, Ctrl+Y (or Ctrl+Shift+Z) redoes; also at the top of the Project menu. The footer says what changed.
-      Try: fader / pan / gain moves, mute / solo, routing, input, rename, insert add / remove / reorder / bypass / knobs,
-      chain mix, duplicate / remove / reorder tracks, comp picks, Keep, tempo changes, click settings, loop region.
 - [ ] A plugin you didn't touch keeps running through an undo (no dropout). Undo after recording takes the new take
       out of the list (its file stays); redo brings it back. Not while recording.
 - [ ] Opening or starting a project starts a fresh history. Typing in a name box: Ctrl+Z undoes the typing only.

@@ -549,6 +549,7 @@ void MainComponent::showMidiMappings() {
 
 void MainComponent::setListen(bool on) {
   listen_ = on;
+  tools_.setListenView(on); dock_.setListenView(on);  // each view keeps its own tool and meter widths
   mixer_.setListenMode(on);
   deck_.setListenLit(on);
   listenRow_.rebuild();
