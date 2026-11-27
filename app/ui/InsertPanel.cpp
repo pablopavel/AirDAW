@@ -790,7 +790,7 @@ void InsertPanel::close() {
   if (ctx_.layoutChanged) ctx_.layoutChanged();
 }
 
-void InsertPanel::moveInsert(int channelId, int from, int to) {
+void InsertPanel::moveInsert(int channelId, int from, int to, bool quiet) {
   auto* e = ctx_.engine(); if (!e) return;
   if (!e->moveInsert(channelId, from, to)) { ctx_.note("Could not move the insert"); return; }
   // Same reorder for the open/closed state and the preset names, so each module stays as it was.
@@ -803,7 +803,7 @@ void InsertPanel::moveInsert(int channelId, int from, int to) {
   std::map<int, juce::String> nextP;
   for (int s = 0; s < airdaw::kMaxInserts; ++s) { auto it = pm.find(order[(size_t)s]); if (it != pm.end()) nextP[s] = it->second; }
   pm = nextP;
-  if (auto* c = channelOf(*e, channelId)) ctx_.note("Moved " + juce::String(e->insertAt(channelId, to)->name()) + " to slot " + juce::String(to + 1) +
+  if (auto* c = channelOf(*e, channelId); c && !quiet) ctx_.note("Moved " + juce::String(e->insertAt(channelId, to)->name()) + " to slot " + juce::String(to + 1) +
                                                     " on " + juce::String(c->name));
   key_.clear(); rebuild();
   if (ctx_.layoutChanged) ctx_.layoutChanged();
@@ -839,7 +839,10 @@ void InsertPanel::rebuild() {
     }
   int free = target_;
   if (free < 0 || e->insertAt(ch_, free)) { free = -1; for (int s = 0; s < airdaw::kMaxInserts; ++s) if (!e->insertAt(ch_, s)) { free = s; break; } }
+  addAt_ = (int)cards_.size();
   if (free >= 0) {
+    // the add card stands where the new plugin will go in the chain (before a Hit Record Meter at the end)
+    addAt_ = 0; for (int s = 0; s < free; ++s) addAt_ += e->insertAt(ch_, s) != nullptr;
     addCard_ = std::make_unique<AddCard>(*this, ctx_, ch_, free, showOld_, rack_, [this](int loaded) {
       target_ = -1; if (loaded >= 0) { open_[ch_][loaded] = true; preset_[ch_].erase(loaded); }
       key_.clear(); rebuild(); if (ctx_.layoutChanged) ctx_.layoutChanged(); });
@@ -905,8 +908,12 @@ void InsertPanel::resized() {
     chassis_ = {};
     view_.setBounds(r);
     int x = 0, h = 120;
-    for (auto& c : cards_) { const int w = c->prefWidth(); c->setBounds(x, 0, w, c->prefHeight()); x += w + 10; h = juce::jmax(h, c->prefHeight()); }
-    if (addCard_) { addCard_->setBounds(x, 0, 230, 120); x += 240; }
+    for (int i = 0; i <= (int)cards_.size(); ++i) {
+      if (i == addAt_ && addCard_) { addCard_->setBounds(x, 0, 230, 120); x += 240; }
+      if (i == (int)cards_.size()) break;
+      auto& c = cards_[(size_t)i];
+      const int w = c->prefWidth(); c->setBounds(x, 0, w, c->prefHeight()); x += w + 10; h = juce::jmax(h, c->prefHeight());
+    }
     row_.used = x;
     row_.setSize(juce::jmax(x, 10), h);
     return;
@@ -917,8 +924,12 @@ void InsertPanel::resized() {
   int h = kMinRowH;
   for (auto& c : cards_) h = juce::jmax(h, c->prefHeight());
   int x = kGap;
-  for (auto& c : cards_) { const int w = c->prefWidth(); c->setBounds(x, kGap, w, h); x += w + kGap; }
-  if (addCard_) { addCard_->setBounds(x, kGap, 230, h); x += 230 + kGap; }
+  for (int i = 0; i <= (int)cards_.size(); ++i) {
+    if (i == addAt_ && addCard_) { addCard_->setBounds(x, kGap, 230, h); x += 230 + kGap; }
+    if (i == (int)cards_.size()) break;
+    auto& c = cards_[(size_t)i];
+    const int w = c->prefWidth(); c->setBounds(x, kGap, w, h); x += w + kGap;
+  }
   row_.used = x;
   row_.setSize(juce::jmax(x, view_.getMaximumVisibleWidth()), juce::jmax(h + 2 * kGap, view_.getMaximumVisibleHeight()));
   row_.repaint();

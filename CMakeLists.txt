@@ -61,7 +61,7 @@ if(AIRDAW_BUILD_APP)
   target_sources(AirDAW PRIVATE app/Main.cpp app/MainComponent.cpp app/MainComponent.h app/AudioBridge.h app/Platform.cpp app/Vst3Insert.h app/PluginWindow.h
     app/ui/Theme.cpp app/ui/AirLookAndFeel.cpp app/ui/Widgets.cpp app/ui/Strip.cpp app/ui/Mixer.cpp app/ui/Deck.cpp
     app/ui/Overview.cpp app/ui/InsertPanel.cpp app/ui/DisplayPanel.cpp app/ui/TakesBar.cpp app/ui/AppIcon.cpp
-    app/ui/tools/ToolSet.cpp app/ui/tools/Tools.cpp app/midi/MidiControl.cpp app/ui/PluginsPanel.cpp)
+    app/ui/tools/ToolSet.cpp app/ui/tools/Tools.cpp app/ui/tools/HitMeter.cpp app/midi/MidiControl.cpp app/ui/PluginsPanel.cpp)
   target_include_directories(AirDAW PRIVATE app)
   target_compile_definitions(AirDAW PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_USE_MP3AUDIOFORMAT=1 JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_VST=0 JUCE_PLUGINHOST_LADSPA=0 JUCE_PLUGINHOST_LV2=0 JUCE_PLUGINHOST_AU=0 JUCE_APPLICATION_NAME_STRING="AirDAW" JUCE_APPLICATION_VERSION_STRING="0.1.0")

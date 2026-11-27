@@ -5,7 +5,8 @@
 #include <thread>
 
 using ui::T;
-static constexpr int kMeterSlot = 7;  // last master insert slot: the meter listens to the final mix
+// The Hit Record Meter is always the last master insert: it measures the master after every other effect.
+static constexpr int kMeterSlot = airdaw::kMaxInserts - 1;
 static constexpr int kFooterH = 26, kOverviewH = 100, kMixerMin = 380, kInsertsMin = 150, kDockMin = 150;
 
 // Recreates hosted plugins from session ids ("vst3:<path>"); Airwindows effects are built in.
@@ -102,6 +103,7 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
     d.setKioskModeComponent(d.getKioskModeComponent() ? nullptr : getTopLevelComponent(), false);
   };
   dock_.onLoadMeter = [this] { chooseMeterPlugin(); };
+  dock_.setMeterSource([this]() -> ui::HitMeterAnalyzer* { return hub_ ? hub_->hitMeter() : nullptr; });
   inserts_.setVisible(false);
   // The divider drags from the height the dock has on screen. With the insert panel open the dock keeps a height of
   // its own, so it can be resized there too without changing its usual height.
@@ -126,8 +128,8 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
   pluginsPanel_.layoutChanged = [this] { resized(); };
   inserts_.setVisible(false);
 
-  dockHeight_ = props_->getIntValue("dockHeight", 330);
-  dockHeightIns_ = props_->getIntValue("dockHeightIns", 0);
+  dockHeight_ = props_->getIntValue("dockHeight", 504);
+  dockHeightIns_ = props_->getIntValue("dockHeightIns", 469);
   dockShown_ = props_->getBoolValue("dockShown", true);
   autoOn_ = props_->getBoolValue("autosaveOn", false);
   const int secs[] = {0, 60, 120, 300, 600, 900, 1800};
@@ -765,14 +767,26 @@ void MainComponent::chooseMeterPlugin() {
       [this](const juce::FileChooser& c) { auto f = c.getResult(); if (f != juce::File()) loadMeter(f); });
 }
 
+// The meter: the hosted VST3 loaded from the meter file (an older project may have it in another master slot), or
+// whatever VST3 sits in the meter's slot.
+int MainComponent::findMeter(airdaw::Engine& e) const {
+  const juce::String mp = props_->getValue("meterPath");
+  if (mp.isNotEmpty())
+    for (int s = 0; s < airdaw::kMaxInserts; ++s)
+      if (auto* v = dynamic_cast<Vst3Insert*>(e.insertAt(ui::kMasterId, s)))
+        if (juce::File(juce::String(v->path())) == juce::File(mp)) return s;
+  return dynamic_cast<Vst3Insert*>(e.insertAt(ui::kMasterId, kMeterSlot)) ? kMeterSlot : -1;
+}
+
 void MainComponent::loadMeter(const juce::File& vst3, bool quiet) {
   auto* e = bridge_.engine(); if (!e) return;
+  if (const int old = findMeter(*e); old >= 0 && old != kMeterSlot) e->setInsert(ui::kMasterId, old, "");  // never two meters
   juce::String err;
   auto ins = Vst3Insert::load(vst3, e->sampleRate(), err);
   if (!ins) { if (!quiet) note("Meter load failed: " + err, true); return; }
   if (!snapshotMode_) { props_->setValue("meterPath", vst3.getFullPathName()); props_->saveIfNeeded(); }
   if (!e->setInsertProcessor(ui::kMasterId, kMeterSlot, std::move(ins))) { note("Could not install the meter", true); return; }
-  if (!quiet) note("Hit Record Meter loaded on master insert " + juce::String(kMeterSlot + 1));
+  if (!quiet) note("Hit Record Meter loaded at the end of the master chain");
   if (!dockShown_) { dockShown_ = true; resized(); }
 }
 
@@ -822,7 +836,7 @@ void MainComponent::timerCallback() {
     }
     // Bring the Hit Record Meter back if it was set up before and the session has none.
     const juce::File mp(props_->getValue("meterPath"));
-    if (!e->insertAt(ui::kMasterId, kMeterSlot) && mp.exists()) loadMeter(mp, true);
+    if (findMeter(*e) < 0 && mp.exists()) loadMeter(mp, true);
   }
   updateDeviceStatus();
   if (e) pumpAnalysis(*e);
@@ -835,6 +849,9 @@ void MainComponent::timerCallback() {
   if (e && tick_ % 3 == 0) {
     collectTakes();
     e->collectGarbage();
+    // Keep the meter at the end of the master chain (a project from before, or a drag, may have put it elsewhere);
+    // the effects after it move up one, in the same order.
+    if (const int ms = findMeter(*e); ms >= 0 && ms != kMeterSlot) inserts_.moveInsert(ui::kMasterId, ms, kMeterSlot, true);
     auto* v = dynamic_cast<Vst3Insert*>(e->insertAt(ui::kMasterId, kMeterSlot));
     dock_.setPlugin(v ? v->plugin() : nullptr);
     e->monitor().listenSlot = v ? kMeterSlot : -1;  // the Hit Record Meter measures what is heard (the reference on B)
@@ -1106,7 +1123,17 @@ void MainComponent::runScenario(const juce::String& nameIn) {
     inserts_.show(4, 2);
   }
   if (name == "info") ctx_.showPluginInfo("ToTape8");
-  if (name == "signal" || name == "listen-signal") {  // synthetic stereo mix fed straight into the meters (never to the speakers)
+  if (name == "meter-order") {  // test hook: the meter dragged into the middle of the master chain; it goes back to the end
+    if (props_->getValue("meterPath").isEmpty())  // the snapshot settings start empty: the meter's usual install place
+      props_->setValue("meterPath", R"(C:\Program Files\Common Files\VST3\Meter.vst3\Contents\x86_64-win\Meter.vst3)");
+    loadMeter(juce::File(props_->getValue("meterPath")), true);
+    e->setInsert(ui::kMasterId, 2, "Density2");
+    if (const int ms = findMeter(*e); ms >= 0) e->moveInsert(ui::kMasterId, ms, 1);
+    inserts_.show(ui::kMasterId, -1);
+  }
+  if (name == "dark-meter" || name == "dark-meter-tall") { dock_.setDark(true); dock_.setMeterWidth(900); }
+  if (name == "dark-meter-tall") { dockHeight_ = 660; resized(); }  // tall enough for the meter's full layout  // test hook: the meter's dark view (with the synthetic signal below)
+  if (name == "signal" || name == "listen-signal" || name.startsWith("dark-meter")) {  // synthetic stereo mix fed straight into the meters (never to the speakers)
     if (name == "listen-signal") { ctx_.notes.items = {{2.0, "vocal too loud in chorus"}, {5.5, "check bass at the drop"}}; setListen(true); }
     e->track(1).polarity = true;  // a lit polarity button on track 2
     if (!hub_) hub_ = std::make_unique<ui::AnalysisHub>(e->sampleRate());
@@ -1120,6 +1147,7 @@ void MainComponent::runScenario(const juce::String& nameIn) {
         buf[(size_t)(2 * i)] = (float)(mid + side); buf[(size_t)(2 * i + 1)] = (float)(mid - side);
       }
       hub_->feed(buf.data(), 4096, true);
+      if (name.startsWith("dark-meter")) dock_.darkMeter().feedForTest(buf.data(), 4096, sr);  // window by window, as if live
       if (blk % 4 == 0) { hub_->refresh(); tools_.updateAll(*hub_); }  // let scrolling tools (spectrogram) move
     }
     hub_->refresh(); mixer_.master().setLoudness(hub_->loud()); tools_.updateAll(*hub_);
@@ -1175,6 +1203,11 @@ void MainComponent::runScenario(const juce::String& nameIn) {
                         "ToTape8", "Console7Buss", "Density3", "ADClip8"};
     for (int s = 0; s < 12; ++s) e->setInsert(0, s, fx[s]);
     T().inserts = "rack"; inserts_.show(0, -1);
+  }
+  if (name == "meter-info") {  // test hook: the meter's (i) panel, as a child so the picture shows it
+    testOverlay_ = std::make_unique<ui::HitMeterInfo>();
+    addAndMakeVisible(*testOverlay_);
+    testOverlay_->setBounds(testOverlay_->getBounds().withPosition(dock_.getX() + 360, dock_.getY() - 300));
   }
   if (name == "widetools") { for (auto& id : tools_.suite()) tools_.setWidth(id, 1500); dock_.rebuildSuite(); }  // every tool dragged too wide
   if (name == "widemeter") dock_.setMeterWidth(1300);  // meter dragged most of the way across

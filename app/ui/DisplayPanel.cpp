@@ -63,7 +63,7 @@ DisplayPanel::DisplayPanel() {
   view_.setScrollBarsShown(true, false);
   view_.setScrollBarThickness(8);
   addAndMakeVisible(reset_);
-  reset_.setTooltip("Back to the Studio look (amber, normal glow, 100%)");
+  reset_.setTooltip("Back to the Studio look (the default: amber, strong glow, matte, Industrial type, 100%)");
   reset_.onClick = [] { auto& t = T(); t.resetLook(); t.changed(); };
   for (int i = 0; i < 12; ++i) {
     auto& s = swatches_[(size_t)i]; s.idx = i; s.setTooltip(Theme::kAccentNames[i]);

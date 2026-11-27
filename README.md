@@ -33,7 +33,8 @@ Runs on Windows 11 with ASIO (tested with a Black Lion Revolution 2x2 at 96 kHz 
   button each), insert panel as cards or, as a Display option, a 500-series rack (faceplate finish by plugin category), with every plugin
   parameter, presets, favourites and Airwindows write-ups. backlit transport keys and console-style menu keys in the
   deck; "Scope A" application icon (`AirDAW.exe --render-icon resources/icon`).
-- **Listening:** Hit Record Meter (VST3) in the meter dock, reference suite and Listen mode sharing 12 tools (stereo field,
+- **Listening:** Hit Record Meter (VST3) in the meter dock, always the last master insert, with a dark view (a port of
+  its display, same measurements) and a plain-words guide (i), reference suite and Listen mode sharing 12 tools (stereo field,
   31-band RTA, loudness with EBU R128 / true peak, target loudness, tonal balance, spectrogram, loudness history, band
   phase/width, headroom, listening notes, ear-break timer, reference A/B). Monitor section (Mono, Dim, Pol, L/R/Mid/Side).
   Reference A/B with level matching, own transport or song sync, side-by-side levels; each project remembers its reference.

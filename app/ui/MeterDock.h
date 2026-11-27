@@ -4,6 +4,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "AppCtx.h"
 #include "Theme.h"
+#include "tools/AnalysisHub.h"
+#include "tools/HitMeterInfo.h"
 #include "tools/ToolSet.h"
 
 namespace ui {
@@ -142,8 +144,18 @@ class MeterDock : public juce::Component {
     // The meter may be dragged all the way across; the suite tools fold away as it grows.
     meterSplit_.onDragState = [this](bool on) { setLiveResize(on); };
     meterSplit_.onDrag = [this](int w) { meterW_ = juce::jlimit(260, juce::jmax(260, bodyWidth() - 14), w); ctx_.props.setValue("dock.meterWidth", meterW_); resized(); };
-    meterW_ = ctx_.props.getIntValue("dock.meterWidth", 440);
-    for (juce::Component* c : std::initializer_list<juce::Component*>{&load_, &toolsBtn_, &meterSplit_, &suite_}) addAndMakeVisible(c);
+    meterW_ = ctx_.props.getIntValue("dock.meterWidth", 1341);
+    for (juce::Component* c : std::initializer_list<juce::Component*>{&load_, &toolsBtn_, &meterSplit_, &suite_, &viewBtn_}) addAndMakeVisible(c);
+    addChildComponent(dark_);
+    addAndMakeVisible(info_);
+    info_.setTooltip("What the Hit Record Meter measures, and how to use it");
+    info_.onClick = [this] { showInfo(nullptr); };
+    viewBtn_.setButtonText("Dark view");
+    viewBtn_.setTooltip("The Hit Record Meter in a dark view: the same measurements, layout and scores, drawn dark with the "
+                        "scale in the accent colour (click it to freeze, double-click to start over). Click again for the plugin's own display.");
+    viewBtn_.onClick = [this] { setDark(!darkOn_); };
+    darkOn_ = ctx_.props.getBoolValue("dock.darkMeter", true);
+    setDark(darkOn_);
     // Monitor section (mockup .mon): Mono / Dim / Pol are switches; L / R / Mid / Side choose one, click again for stereo.
     const char* labels[7] = {"Mono", "Dim", "Pol \xe2\x8c\x80", "L", "R", "Mid", "Side"};
     const char* tips[7] = {"Hear the mix in mono (speakers only; recordings and exports are unaffected)", "Turn the speakers down 20 dB",
@@ -177,6 +189,21 @@ class MeterDock : public juce::Component {
   ~MeterDock() override { setPlugin(nullptr); }
 
   std::function<void()> onLoadMeter;
+  // Dark view on / off (remembered). The view takes its measurements from the master analysis (`source`).
+  void setDark(bool on) {
+    darkOn_ = on; ctx_.props.setValue("dock.darkMeter", on);
+    viewBtn_.setToggleState(on, juce::dontSendNotification);
+    dark_.setVisible(on); dark_.setActive(on);
+    if (editor_) editor_->setVisible(!on);
+    resized(); repaint();
+  }
+  void setMeterSource(std::function<HitMeterAnalyzer*()> s) { dark_.source = std::move(s); }
+  HitMeterView& darkMeter() { return dark_; }  // (test hook)
+  // The (i) panel. `parent` null: its own window on the desktop; a component: inside it (test hook).
+  void showInfo(juce::Component* parent) {
+    const auto at = parent ? parent->getLocalArea(this, info_.getBounds()) : info_.getScreenBounds();
+    juce::CallOutBox::launchAsynchronously(std::make_unique<HitMeterInfo>(), at, parent);
+  }
   void rebuildSuite() { suite_.rebuild(); }
   void setMeterWidth(int w) { meterW_ = juce::jmax(260, w); resized(); }  // (test hook; users drag the divider)
 
@@ -188,7 +215,7 @@ class MeterDock : public juce::Component {
     editor_.reset();      // the editor must go before the plugin reference is released
     plugin_ = std::move(p);
     if (plugin_) {
-      if (auto* ed = plugin_->createEditorIfNeeded()) { editor_.reset(ed); addAndMakeVisible(*editor_); }
+      if (auto* ed = plugin_->createEditorIfNeeded()) { editor_.reset(ed); addChildComponent(*editor_); editor_->setVisible(!darkOn_); }
     }
     load_.setButtonText(plugin_ ? "Change meter..." : "Load Hit Record Meter...");
     resized(); repaint();
@@ -211,9 +238,10 @@ class MeterDock : public juce::Component {
       tr.removeFromLeft(juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), s) + 4.f);
     };
     draw("AIR", Theme::cream(), false); draw("WINDOWS", t.am(), true); tr.removeFromLeft(8.f); draw("HIT RECORD METER", Theme::cream(), false);
+    tr.removeFromLeft((float)kInfoW);  // the (i)
     g.setFont(Theme::spaced(Theme::uiFont(10.f), 0.1f)); tr.removeFromLeft(4.f);
     draw("+ REFERENCE SUITE", Theme::dim(), false);
-    if (!plugin_) {
+    if (!plugin_ && !darkOn_) {
       g.setColour(Theme::dim()); g.setFont(Theme::uiFont(13.f));
       g.drawFittedText("The Airwindows Hit Record Meter is a free VST3 (github.com/airwindows/Meter/releases). "
                        "Load it once; it sits on the last master insert and its display shows here.",
@@ -225,8 +253,16 @@ class MeterDock : public juce::Component {
   void resized() override {
     auto r = getLocalBounds();
     auto head = r.removeFromTop(kHead);
+    {  // the (i) right after the title (same fonts as paint)
+      const auto f = Theme::spaced(Theme::uiFont(14.f, true), 0.28f);
+      float x = 12.f;
+      for (auto* s : {"AIR", "WINDOWS", "HIT RECORD METER"}) x += juce::GlyphArrangement::getStringWidth(f, s) + 4.f;
+      x += 8.f;
+      info_.setBounds(juce::Rectangle<int>((int)x, head.getY(), kInfoW, kHead).withSizeKeepingCentre(kInfoW - 2, 22));
+    }
     toolsBtn_.setBounds(head.removeFromRight(96).reduced(4, 5));
-    if (plugin_) load_.setBounds(head.removeFromRight(140).reduced(4, 5));
+    viewBtn_.setBounds(head.removeFromRight(110).reduced(4, 5));
+    if (plugin_ || darkOn_) load_.setBounds(head.removeFromRight(plugin_ ? 140 : 200).reduced(4, 5));
     else load_.setBounds(meterArea().withSizeKeepingCentre(220, 32).translated(0, 40));
     head.removeFromRight(10);
     for (int i = 6; i >= 0; --i) {  // right to left: Side Mid R L | Pol Dim Mono
@@ -238,6 +274,7 @@ class MeterDock : public juce::Component {
     auto m = body.removeFromLeft(juce::jmin(meterW_, body.getWidth() - 14));
     meterSplit_.setBounds(body.removeFromLeft(14));
     suite_.setBounds(body);
+    dark_.setBounds(m);
     // While a divider is dragged, the plugin's own window (slow to resize) follows only every ~120 ms; the final size is
     // applied when the drag ends (setLiveResize(false)).
     const double now = juce::Time::getMillisecondCounterHiRes();
@@ -248,7 +285,7 @@ class MeterDock : public juce::Component {
       else editor_->setTopLeftPosition(m.getX() + juce::jmax(0, (m.getWidth() - editor_->getWidth()) / 2), m.getY());
     }
   }
-  static constexpr int kHead = 36;
+  static constexpr int kHead = 36, kInfoW = 26;
 
  private:
   juce::Rectangle<int> meterArea() const { auto r = getLocalBounds().withTrimmedTop(kHead).reduced(10); return r.removeFromLeft(juce::jmin(meterW_, r.getWidth() - 14)); }
@@ -272,11 +309,14 @@ class MeterDock : public juce::Component {
   std::unique_ptr<juce::AudioProcessorEditor> editor_;
   bool live_ = false;
   double lastEditorResize_ = 0;
-  juce::TextButton load_, toolsBtn_;
+  juce::TextButton load_, toolsBtn_, viewBtn_;
+  HitMeterView dark_;
+  InfoDot info_;
+  bool darkOn_ = false;
   std::array<juce::TextButton, 7> mon_;
   ColumnSplitter meterSplit_;
   SuiteArea suite_;
-  int meterW_ = 440;
+  int meterW_ = 1341;
 };
 
 }  // namespace ui

@@ -92,12 +92,15 @@ const std::vector<ToolSet::Info>& ToolSet::registry() {
 
 ToolSet::ToolSet(AppCtx& ctx) : ctx_(ctx) {
   auto known = [](const juce::String& id) { for (auto& i : registry()) if (id == i.id) return true; return false; };
-  for (auto& id : juce::StringArray::fromTokens(ctx_.props.getValue("tools.suite", "stereo,rta,loudness"), ",", ""))
+  for (auto& id : juce::StringArray::fromTokens(ctx_.props.getValue("tools.suite", "stereo,notes,loudness,bandphase,reference"), ",", ""))
     if (known(id) && std::find(suite_.begin(), suite_.end(), id) == suite_.end()) suite_.push_back(id);
-  for (auto& id : juce::StringArray::fromTokens(ctx_.props.getValue("tools.listen"), ",", ""))
+  for (auto& id : juce::StringArray::fromTokens(ctx_.props.getValue("tools.listen", "rta,target,tonal,bandphase,headroom,history,spectrogram,earbreak,stereo,loudness,reference,notes"), ",", ""))
     if (known(id) && std::find(listen_.begin(), listen_.end(), id) == listen_.end()) listen_.push_back(id);
   for (auto& i : registry())  // tools added in newer versions go to the end
     if (std::find(listen_.begin(), listen_.end(), juce::String(i.id)) == listen_.end()) listen_.push_back(i.id);
+  // default widths of the default suite
+  for (auto& [id, w] : std::initializer_list<std::pair<const char*, int>>{{"stereo", 332}, {"notes", 166}, {"loudness", 198}, {"bandphase", 160}, {"reference", 166}})
+    widths_[id] = w;
   for (auto& i : registry()) { const int w = ctx_.props.getIntValue(juce::String("tools.w.") + i.id, 0); if (w > 0) widths_[i.id] = w; }
   minimised_ = juce::StringArray::fromTokens(ctx_.props.getValue("tools.min"), ",", "");
 }

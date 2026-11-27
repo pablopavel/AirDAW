@@ -12,21 +12,21 @@ class Theme : public juce::ChangeBroadcaster {
 
   // --- user settings (persisted) ---
   float hue = 37.f;   // accent hue in degrees; 37 = the mockup's amber
-  float glow = 1.f;   // 0 Off, 0.5 Soft, 1 Normal, 1.6 Strong, 2.4 Max
+  float glow = 1.6f;  // 0 Off, 0.5 Soft, 1 Normal, 1.6 Strong (default), 2.4 Max
   int scalePct = 100; // 100..200 in steps of 25
   // Display-panel options. Values are the mockup's option ids (see Theme.cpp).
-  juce::String panel = "oled", faceplate = "brushed", tint = "charcoal", corners = "normal", knobs = "chrome",
-               faders = "chrome", vuFace = "cream", readouts = "accent", typeface = "modern", trimMat = "wood",
+  juce::String panel = "oled", faceplate = "matte", tint = "charcoal", corners = "sharp", knobs = "ivory",
+               faders = "cream", vuFace = "cream", readouts = "accent", typeface = "industrial", trimMat = "wood",
                species = "walnut", grain = "fine", trimWidth = "normal";
-  juce::String inserts = "cards";  // insert panel look: "cards" (the original) or "rack" (500-series modules)
+  juce::String inserts = "rack";  // insert panel look: "cards" (the original) or "rack" (500-series modules)
   // Buttons: "console" (coloured console caps in a bezel), "toggle" (strip switches as bat-handle toggles), "classic"
   // (the original flat keys).
-  juce::String buttons = "console";
-  bool screws = false, trim = true, pixelShift = true;
+  juce::String buttons = "classic";
+  bool screws = true, trim = true, pixelShift = true;
 
   void load(juce::PropertiesFile& p);
   void save(juce::PropertiesFile& p) const;
-  void resetLook();                                   // the Studio look, 100% scale, pixel shift on
+  void resetLook();  // the Studio look (the default), 100% scale, pixel shift on, rack inserts, classic buttons
   void changed() { tile_ = {}; sendChangeMessage(); }
 
   // Generic option access for the Display panel. Keys: hue, glow, panel, fp, tint, rd, knob, fd, vu, lcd, font,

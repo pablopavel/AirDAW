@@ -58,6 +58,7 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   void collectTakes();
   void chooseMeterPlugin();
   void loadMeter(const juce::File& vst3, bool quiet = false);
+  int findMeter(airdaw::Engine& e) const;  // the master slot holding the Hit Record Meter, -1: none
   void openPluginWindow(int channelId, int slot);
   void updateDeviceStatus();
   bool requireAudio(const char* what);
@@ -131,8 +132,8 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   void midiChanged();
   void showMidiMappings();
 
-  int dockHeight_ = 330;
-  int dockHeightIns_ = 0;  // the meter dock's height while the insert panel is open (0: what the panel leaves)
+  int dockHeight_ = 504;
+  int dockHeightIns_ = 469;  // the meter dock's height while the insert panel is open (0: what the panel leaves)
   bool dockShown_ = true;
   juce::File sessionFile_;  // empty = unsaved "Untitled"
   std::unique_ptr<airdaw::AutoSaver> autoSaver_;
@@ -149,5 +150,6 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   std::unique_ptr<juce::FileLogger> log_;  // %APPDATA%/AirDAW/AirDAW.log: startup, devices, MIDI (diagnostics)
   bool reconnecting_ = false;
   int tick_ = 0;
+  std::unique_ptr<juce::Component> testOverlay_;  // test hook (meter-info)
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

@@ -47,7 +47,7 @@ class InsertPanel : public juce::Component {
   void show(int channelId, int slot);
   void close();
   // Reorders a chain (drag and drop); open/closed card state follows each plugin.
-  void moveInsert(int channelId, int from, int to);
+  void moveInsert(int channelId, int from, int to, bool quiet = false);  // quiet: no footer note
   int channel() const { return ch_; }
   bool isOpen(int channelId, int slot) const;
   void sync();  // ~15x/s: knob values, rebuild if the chain changed
@@ -76,6 +76,7 @@ class InsertPanel : public juce::Component {
   juce::TextButton close1_, close2_;  // a plain X at each end (like the takes bar)
   bool showOld_ = false;
   bool rack_ = false;  // Display > Hardware > Inserts: Cards (default) or Rack
+  int addAt_ = 0;      // the add card's place among the cards (by slot)
 };
 
 }  // namespace ui

@@ -48,6 +48,7 @@ class Vst3Insert : public airdaw::InsertProcessor {
 
   const std::string& name() const override { return name_; }
   std::string sessionId() const override { return "vst3:" + path_; }
+  const std::string& path() const { return path_; }
   int numParams() const override { return (int)params_.size(); }
   const std::vector<airdaw::FxParamInfo>& params() const override { return params_; }
   void setParam(int i, float v) override { if (auto* p = param(i)) p->setValueNotifyingHost(v); }

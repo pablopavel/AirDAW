@@ -4,13 +4,14 @@
 #include <memory>
 #include <vector>
 #include "airdaw/analysis.h"
+#include "HitMeter.h"
 
 namespace ui {
 
 class AnalysisHub {
  public:
   explicit AnalysisHub(double sampleRate)
-      : sr_(sampleRate), loud_(sampleRate), bands_(sampleRate), stereo_(sampleRate) { scope_.assign(kScope * 2, 0.f); }
+      : sr_(sampleRate), loud_(sampleRate), bands_(sampleRate), stereo_(sampleRate), hit_(sampleRate) { scope_.assign(kScope * 2, 0.f); }
 
   // Master audio (interleaved stereo). Integrated loudness / LRA / DR only accumulate while `playing`.
   void feed(const float* il, size_t frames, bool playing) {
@@ -22,7 +23,10 @@ class AnalysisHub {
       scope_[2 * scopePos_] = il[2 * i]; scope_[2 * scopePos_ + 1] = il[2 * i + 1];
       scopePos_ = (scopePos_ + 1) % kScope;
     }
+    hit_.process(il, frames);  // the Hit Record Meter's dark view (same measurements as the plugin)
   }
+
+  HitMeterAnalyzer* hitMeter() { return &hit_; }
   void refresh() { last_ = loud_.read(); }  // ~15x/s: the readout is cheap to copy, read() is not free
   void resetProgramme() { loud_.resetIntegrated(); last_ = loud_.read(); }
   void resetPeaks() { loud_.resetPeaks(); last_ = loud_.read(); }
@@ -48,6 +52,7 @@ class AnalysisHub {
   airdaw::LoudnessMeter loud_;
   airdaw::BandAnalyzer bands_;
   airdaw::StereoBandMeter stereo_;
+  HitMeterAnalyzer hit_;
   airdaw::LoudnessReadout last_;
   std::vector<float> scope_;
   size_t scopePos_ = 0;

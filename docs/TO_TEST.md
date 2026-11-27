@@ -26,6 +26,27 @@ Last updated: 2026-11-27
       remembered separately from the height without the insert panel.
 - [ ] Dragging the dividers between reference tools: no tool slides off the right end; the last tool stops at its minimum width.
 
+## Hit Record Meter (new)
+- [ ] The meter is always the last master insert: add effects to the master and they go before it (the add card sits
+      in front of the meter); drag the meter or another module around and the meter goes back to the end.
+- [ ] A project saved with the meter in an earlier master slot: on opening, the meter moves to the end, the other
+      effects keep their order, and there is only one meter.
+- [ ] "Dark view" in the meter dock header: the Hit Record Meter drawn dark (same layout, scales, dots, beam lines,
+      letter grades, score and advice as the plugin; the scale, rules and labels in the accent). Compare it with the
+      plugin's own display on the same music: the dots and grades should match. Click the view to freeze it,
+      double-click to start over. Below about 370 px tall it shows the compact layout (tone colour and big grade),
+      like the plugin. Remembered after a restart; works without the plugin loaded.
+
+- [ ] The (i) after "HIT RECORD METER" opens a plain-words guide (what each band measures, how to move each readout,
+      the letters, tone bar and hints, tips); it scrolls and closes when you click elsewhere.
+
+## New default view (new)
+- [ ] On a fresh install (or after Display > Reset) the look is today's: amber, strong glow, matte faceplate, sharp
+      corners, ivory knobs, cream faders, Industrial type, screws, rack inserts, classic buttons. The eras and the
+      other classic looks are unchanged.
+- [ ] Fresh settings also start with the meter dock at 504 px (469 px with the insert panel open), the dark meter view
+      on and 1341 px wide, and the reference suite Stereo field, Listening notes, Loudness, Band phase, Reference A/B.
+
 ## Removing tracks (new)
 - [ ] Right-click a track's name: Rename…, Show inserts, Remove track…. Remove asks first (it says how many takes leave the project).
 - [ ] After removing: the strip is gone, the count on "+ Add track" drops, the track's takes no longer play, its inserts are unloaded.
