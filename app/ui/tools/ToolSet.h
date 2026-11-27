@@ -1,8 +1,9 @@
 // Reference-suite / Listen tools: one shared set. Each tool lives in a ToolCard; ToolSet owns every card and
 // remembers where it is shown:
-//   reference suite (meter dock)  - the tools the user picked, in order, with their widths
+//   reference suite (meter dock)  - the tools the user pinned, in order, with their widths (the main view and
+//                                   Listen mode each have their own pinned tools and widths)
 //   Listen mode row               - every other tool, rearrangeable and minimisable
-// A tool is in exactly one of the two places. All of this is saved in the app settings.
+// In each view a tool is in exactly one of the two places. All of this is saved in the app settings.
 #pragma once
 #include <map>
 #include <memory>
@@ -53,15 +54,16 @@ class ToolSet {
   struct Info { const char* id; const char* title; };
   static const std::vector<Info>& registry();
   ToolCard& card(const juce::String& id);           // created on first use
-  const std::vector<juce::String>& suite() const { return suite_; }
+  // The pinned tools (the reference suite) of the view showing: the main view and Listen mode each have their own.
+  const std::vector<juce::String>& suite() const { return listenView_ ? suiteListen_ : suite_; }
   std::vector<juce::String> listenOrder() const;    // every tool not in the suite, in the user's order
   bool inSuite(const juce::String& id) const;
   void addToSuite(const juce::String& id, int index = -1);
   void removeFromSuite(const juce::String& id, int listenIndex = -1);
   void moveInListen(const juce::String& id, int index);
   void toggleMinimised(const juce::String& id);
-  // Widths are kept apart for the main view and Listen mode (each view keeps its own sizes); Listen mode starts
-  // from the main view's widths until a tool is resized there.
+  // Widths and the pinned tools are kept apart for the main view and Listen mode (each view keeps its own); Listen
+  // mode starts from the main view's until changed there.
   int width(const juce::String& id) const;
   void setWidth(const juce::String& id, int w);
   void setListenView(bool on) { listenView_ = on; }
@@ -71,7 +73,8 @@ class ToolSet {
   void save();
   AppCtx& ctx_;
   std::map<juce::String, std::unique_ptr<ToolCard>> cards_;
-  std::vector<juce::String> suite_, listen_;
+  std::vector<juce::String> suite_, suiteListen_, listen_;
+  std::vector<juce::String>& active() { return listenView_ ? suiteListen_ : suite_; }
   std::map<juce::String, int> widths_, widthsListen_;
   bool listenView_ = false;
   juce::StringArray minimised_;

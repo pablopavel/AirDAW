@@ -9,9 +9,11 @@ Last updated: 2026-11-27
 - [ ] Sync: the reference plays, stops and jumps with the song.
 - [ ] Each project remembers its own reference (Full Test1 picks up the one used before; a new project starts without one).
 
-## Tool sizes per view (new)
+## Tools per view (new)
 - [ ] Resize the reference suite tools (and the meter column) in the main view, switch to Listen mode and resize them
       there: each view keeps its own sizes, also after a restart. Listen mode starts from the main view's sizes.
+- [ ] Pin different tools in each view (+ Tools, the x on a card, or drag between the suite and the Listen row): the
+      main view and Listen mode keep their own pinned tools, also after a restart. Listen starts with the main view's.
 
 ## Metronome defaults (new)
 - [ ] Set the click sound, beats per bar, count-in and click level (Audio settings, or the Click key's right-click menu),

@@ -1317,6 +1317,7 @@ void MainComponent::runScenario(const juce::String& nameIn) {
   if (name == "ambient-rec") deck_.previewAmbient(2);
   if (name == "keys-lit") e->transport().loopOn = true;  // test hook: an engaged transport key with keys on both sides
   if (name == "nodock") { dockShown_ = false; }
+  if (name == "pin-views") { setListen(true); tools_.addToSuite("history", 0); tools_.removeFromSuite("stereo", 0); setListen(false); }  // test hook: Listen's pins don't touch the main view
   if (name == "arrange") {  // the same calls the drag-and-drop makes: history into the suite, RTA out, Target minimised
     setListen(true);
     tools_.addToSuite("history", 1);

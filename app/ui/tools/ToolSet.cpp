@@ -94,6 +94,10 @@ ToolSet::ToolSet(AppCtx& ctx) : ctx_(ctx) {
   auto known = [](const juce::String& id) { for (auto& i : registry()) if (id == i.id) return true; return false; };
   for (auto& id : juce::StringArray::fromTokens(ctx_.props.getValue("tools.suite", "stereo,notes,loudness,bandphase,reference"), ",", ""))
     if (known(id) && std::find(suite_.begin(), suite_.end(), id) == suite_.end()) suite_.push_back(id);
+  if (ctx_.props.containsKey("tools.suiteListen")) {
+    for (auto& id : juce::StringArray::fromTokens(ctx_.props.getValue("tools.suiteListen"), ",", ""))
+      if (known(id) && std::find(suiteListen_.begin(), suiteListen_.end(), id) == suiteListen_.end()) suiteListen_.push_back(id);
+  } else suiteListen_ = suite_;
   for (auto& id : juce::StringArray::fromTokens(ctx_.props.getValue("tools.listen", "rta,target,tonal,bandphase,headroom,history,spectrogram,earbreak,stereo,loudness,reference,notes"), ",", ""))
     if (known(id) && std::find(listen_.begin(), listen_.end(), id) == listen_.end()) listen_.push_back(id);
   for (auto& i : registry())  // tools added in newer versions go to the end
@@ -127,17 +131,19 @@ std::vector<juce::String> ToolSet::listenOrder() const {
   for (auto& id : listen_) if (!inSuite(id)) v.push_back(id);
   return v;
 }
-bool ToolSet::inSuite(const juce::String& id) const { return std::find(suite_.begin(), suite_.end(), id) != suite_.end(); }
+bool ToolSet::inSuite(const juce::String& id) const { const auto& s = suite(); return std::find(s.begin(), s.end(), id) != s.end(); }
 
 void ToolSet::addToSuite(const juce::String& id, int index) {
-  suite_.erase(std::remove(suite_.begin(), suite_.end(), id), suite_.end());
-  if (index < 0 || index > (int)suite_.size()) index = (int)suite_.size();
-  suite_.insert(suite_.begin() + index, id);
+  auto& su = active();
+  su.erase(std::remove(su.begin(), su.end(), id), su.end());
+  if (index < 0 || index > (int)su.size()) index = (int)su.size();
+  su.insert(su.begin() + index, id);
   save();
 }
 
 void ToolSet::removeFromSuite(const juce::String& id, int listenIndex) {
-  suite_.erase(std::remove(suite_.begin(), suite_.end(), id), suite_.end());
+  auto& su = active();
+  su.erase(std::remove(su.begin(), su.end(), id), su.end());
   if (listenIndex >= 0) moveInListen(id, listenIndex);
   save();
 }
@@ -148,7 +154,7 @@ void ToolSet::moveInListen(const juce::String& id, int index) {
   row.erase(std::remove(row.begin(), row.end(), id), row.end());
   index = juce::jlimit(0, (int)row.size(), index);
   row.insert(row.begin() + index, id);
-  for (auto& s : suite_) row.push_back(s);  // suite tools keep a place in the full order (when they come back)
+  for (auto& s : active()) row.push_back(s);  // suite tools keep a place in the full order (when they come back)
   listen_ = row;
   save();
 }
@@ -178,6 +184,8 @@ void ToolSet::updateAll(const AnalysisHub& hub) {
 
 void ToolSet::save() {
   juce::StringArray s; for (auto& x : suite_) s.add(x);
+  juce::StringArray sl; for (auto& x : suiteListen_) sl.add(x);
+  ctx_.props.setValue("tools.suiteListen", sl.joinIntoString(","));
   juce::StringArray l; for (auto& x : listen_) l.add(x);
   ctx_.props.setValue("tools.suite", s.joinIntoString(","));
   ctx_.props.setValue("tools.listen", l.joinIntoString(","));
