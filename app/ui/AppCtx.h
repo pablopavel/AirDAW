@@ -64,6 +64,7 @@ struct AppCtx {
   std::function<void(const juce::String&)> note;              // short message in the footer
   std::function<void(int channelId, int slot)> showInserts;   // open the insert panel (slot -1: just the chain)
   std::function<void(int track)> removeTrack;                 // asks, then clears the track and hides its strip
+  std::function<void(int track)> duplicateTrack;              // a copy (audio, inserts, settings) right after it
   std::function<bool(int channelId, int slot)> isCardOpen;    // insert card expanded in the panel
   std::function<int()> insertPanelChannel;                    // the channel the insert panel shows (-1: closed)
   std::function<void(int channelId, int slot)> openPluginWindow;  // a hosted VST3's own editor window

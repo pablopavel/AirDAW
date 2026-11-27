@@ -123,6 +123,7 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
   void restoreProjectReference(bool adoptGlobal);  // also restores which tracks were removed
   void removeTrack(int track);        // asks, then clearAndHideTrack
   void clearAndHideTrack(int track);
+  void duplicateTrack(int track);     // a copy with its own copies of the take files, placed right after it
   void pumpAnalysis(airdaw::Engine& e);
   std::unique_ptr<juce::TooltipWindow> tooltips_;
   // MIDI Learn

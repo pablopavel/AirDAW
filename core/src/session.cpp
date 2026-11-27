@@ -29,6 +29,49 @@ static std::string relPath(const std::string& p, const std::string& base) {
   return (!ec && !r.empty() && *r.begin() != "..") ? r.generic_u8string() : p;
 }
 
+static JVal channelJVal(Engine& e, int id, const std::string& baseDir) {
+  Channel& c = chan(e, id);
+  JVal j = JVal::obj();
+  j.set("id", JVal::num(id)).set("name", JVal::str(c.name)).set("gainDb", JVal::num(c.gainDb)).set("trimDb", JVal::num(c.trimDb))
+   .set("pan", JVal::num(c.pan)).set("mute", JVal::boolean(c.mute)).set("solo", JVal::boolean(c.solo)).set("route", JVal::num(c.route))
+   .set("stereo", JVal::boolean(c.stereo)).set("armed", JVal::boolean(c.armed)).set("monitor", JVal::boolean(c.monitor))
+   .set("polarity", JVal::boolean(c.polarity)).set("inputL", JVal::num(c.inputL)).set("inputR", JVal::num(c.inputR))
+   .set("inputMix", JVal::boolean(c.inputMix))
+   .set("chainMix", JVal::num(c.chainMix));
+  JVal ins = JVal::arr();
+  for (int s = 0; s < kMaxInserts; ++s)
+    if (auto* fx = e.insertAt(id, s)) {
+      JVal f = JVal::obj(); f.set("slot", JVal::num(s)).set("effect", JVal::str(fx->sessionId())).set("bypass", JVal::boolean(fx->bypassed())).set("parallel", JVal::boolean(fx->parallel()));
+      JVal ps = JVal::arr(); for (int p = 0; p < fx->numParams(); ++p) ps.push(JVal::num(fx->getParam(p)));
+      f.set("params", ps);
+      std::string st = fx->saveState(); if (!st.empty()) f.set("state", JVal::str(st));
+      ins.push(f);
+    }
+  j.set("inserts", ins);
+  if (id < kMaxTracks) {
+    JVal tk = JVal::arr(); int active = -1; const Take* cur = c.take.load();
+    for (int i = 0; i < e.numTakes(id); ++i) {
+      const Take* x = e.takeAt(id, i); if (x == cur) active = i;
+      JVal q = JVal::obj(); q.set("path", JVal::str(relPath(x->path, baseDir))).set("start", JVal::num((double)x->start));
+      if (x->keep) q.set("keep", JVal::boolean(true));
+      tk.push(q);
+    }
+    j.set("takes", tk).set("activeTake", JVal::num(active));
+    if (const Comp* cp = e.comp(id)) {  // sections refer to takes by their index in "takes"
+      JVal cj = JVal::obj(), secs = JVal::arr();
+      for (auto& s : cp->sections)
+        for (int i = 0; i < e.numTakes(id); ++i)
+          if (e.takeAt(id, i) == s.take) {
+            JVal q = JVal::obj(); q.set("take", JVal::num(i)).set("from", JVal::num((double)s.from)).set("to", JVal::num((double)s.to));
+            secs.push(q); break;
+          }
+      cj.set("silenceOutside", JVal::boolean(cp->silenceOutside)).set("sections", secs);
+      j.set("comp", cj);
+    }
+  }
+  return j;
+}
+
 std::string sessionToJson(Engine& e, const std::string& baseDir) {
   JVal root = JVal::obj();
   root.set("format", JVal::str("airdaw-session")).set("version", JVal::num(1)).set("sampleRate", JVal::num(e.sampleRate()));
@@ -54,49 +97,55 @@ std::string sessionToJson(Engine& e, const std::string& baseDir) {
     root.set("app", app);
   }
   JVal chs = JVal::arr();
-  for (int id : allIds()) {
-    Channel& c = chan(e, id);
-    JVal j = JVal::obj();
-    j.set("id", JVal::num(id)).set("name", JVal::str(c.name)).set("gainDb", JVal::num(c.gainDb)).set("trimDb", JVal::num(c.trimDb))
-     .set("pan", JVal::num(c.pan)).set("mute", JVal::boolean(c.mute)).set("solo", JVal::boolean(c.solo)).set("route", JVal::num(c.route))
-     .set("stereo", JVal::boolean(c.stereo)).set("armed", JVal::boolean(c.armed)).set("monitor", JVal::boolean(c.monitor))
-     .set("polarity", JVal::boolean(c.polarity)).set("inputL", JVal::num(c.inputL)).set("inputR", JVal::num(c.inputR))
-     .set("chainMix", JVal::num(c.chainMix));
-    JVal ins = JVal::arr();
-    for (int s = 0; s < kMaxInserts; ++s)
-      if (auto* fx = e.insertAt(id, s)) {
-        JVal f = JVal::obj(); f.set("slot", JVal::num(s)).set("effect", JVal::str(fx->sessionId())).set("bypass", JVal::boolean(fx->bypassed())).set("parallel", JVal::boolean(fx->parallel()));
-        JVal ps = JVal::arr(); for (int p = 0; p < fx->numParams(); ++p) ps.push(JVal::num(fx->getParam(p)));
-        f.set("params", ps);
-        std::string st = fx->saveState(); if (!st.empty()) f.set("state", JVal::str(st));
-        ins.push(f);
-      }
-    j.set("inserts", ins);
-    if (id < kMaxTracks) {
-      JVal tk = JVal::arr(); int active = -1; const Take* cur = c.take.load();
-      for (int i = 0; i < e.numTakes(id); ++i) {
-        const Take* x = e.takeAt(id, i); if (x == cur) active = i;
-        JVal q = JVal::obj(); q.set("path", JVal::str(relPath(x->path, baseDir))).set("start", JVal::num((double)x->start));
-        if (x->keep) q.set("keep", JVal::boolean(true));
-        tk.push(q);
-      }
-      j.set("takes", tk).set("activeTake", JVal::num(active));
-      if (const Comp* cp = e.comp(id)) {  // sections refer to takes by their index in "takes"
-        JVal cj = JVal::obj(), secs = JVal::arr();
-        for (auto& s : cp->sections)
-          for (int i = 0; i < e.numTakes(id); ++i)
-            if (e.takeAt(id, i) == s.take) {
-              JVal q = JVal::obj(); q.set("take", JVal::num(i)).set("from", JVal::num((double)s.from)).set("to", JVal::num((double)s.to));
-              secs.push(q); break;
-            }
-        cj.set("silenceOutside", JVal::boolean(cp->silenceOutside)).set("sections", secs);
-        j.set("comp", cj);
-      }
-    }
-    chs.push(j);
-  }
+  for (int id : allIds()) chs.push(channelJVal(e, id, baseDir));
   root.set("channels", chs);
   return root.dump();
+}
+
+static void applyChannel(Engine& e, int id, const JVal& j, const std::string& baseDir, std::vector<std::string>& warnings) {
+  Channel& c = chan(e, id);
+  c.name = j.text("name", c.name); c.gainDb = (float)j.num("gainDb", 0); c.trimDb = (float)j.num("trimDb", 0);
+  c.pan = (float)j.num("pan", 0); c.mute = j.flag("mute", false); c.solo = j.flag("solo", false);
+  c.route = (int)j.num("route", 0); c.stereo = j.flag("stereo", c.stereo.load()); c.armed = j.flag("armed", false);
+  c.monitor = j.flag("monitor", true); c.polarity = j.flag("polarity", false); c.chainMix = std::clamp((float)j.num("chainMix", 1.0), 0.f, 1.f);
+  c.inputL = (int)j.num("inputL", -1); c.inputR = (int)j.num("inputR", -1); c.inputMix = j.flag("inputMix", false);
+  if (auto* ins = j.get("inserts")) for (auto& f : ins->a) {
+    int slot = (int)f.num("slot", -1); std::string name = f.text("effect");
+    bool made;
+    if (name.find(':') != std::string::npos) {  // hosted plugin, e.g. "vst3:/path/Meter.vst3"
+      std::unique_ptr<InsertProcessor> p = e.insertFactory() ? e.insertFactory()(name, e.sampleRate()) : nullptr;
+      made = p && e.setInsertProcessor(id, slot, std::move(p));
+    } else made = e.setInsert(id, slot, name);
+    if (!made) { warnings.push_back("plugin '" + name + "' on " + c.name + " could not be loaded"); continue; }
+    if (auto* fx = e.insertAt(id, slot)) {
+      fx->setBypass(f.flag("bypass", false));
+      fx->setParallel(f.flag("parallel", false));
+      std::string st = f.text("state");
+      if (!st.empty()) fx->loadState(st);
+      else if (auto* ps = f.get("params")) for (size_t p = 0; p < ps->a.size() && (int)p < fx->numParams(); ++p) fx->setParam((int)p, (float)ps->a[p].n);
+    }
+  }
+  if (id < kMaxTracks) {
+    std::vector<int> mapIdx;  // saved take index -> loaded index (a missing file shifts later ones)
+    if (auto* tk = j.get("takes")) for (auto& q : tk->a) {
+      std::string p = q.text("path"); if (!P(p).is_absolute()) p = S(P(baseDir) / P(p));
+      int idx = e.addTake(id, p, (int64_t)q.num("start", 0));
+      if (idx < 0) warnings.push_back("missing take: " + p);
+      else e.setTakeKeep(id, idx, q.flag("keep", false));
+      mapIdx.push_back(idx);
+    }
+    int saved = (int)j.num("activeTake", -1);
+    e.setActiveTake(id, saved >= 0 && saved < (int)mapIdx.size() ? mapIdx[saved] : -1);
+    if (auto* cj = j.get("comp")) {
+      if (auto* secs = cj->get("sections"))
+        for (auto& q : secs->a) {
+          const int k = (int)q.num("take", -1);
+          if (k >= 0 && k < (int)mapIdx.size() && mapIdx[(size_t)k] >= 0)
+            e.setCompSection(id, (int64_t)q.num("from", 0), (int64_t)q.num("to", 0), e.takeAt(id, mapIdx[(size_t)k]));
+        }
+      if (cj->flag("silenceOutside", false)) e.setCompSilenceOutside(id, true);
+    }
+  }
 }
 
 SessionResult saveSession(Engine& e, const std::string& path) {
@@ -151,54 +200,25 @@ SessionResult loadSession(Engine& e, const std::string& path) {
   if (chs) for (auto& j : chs->a) {
     int id = (int)j.num("id", -1);
     if (!(id >= 0 && id < kMaxTracks) && !(id >= 100 && id < 100 + kNumBuses) && id != 200) continue;
-    Channel& c = chan(e, id);
-    c.name = j.text("name", c.name); c.gainDb = (float)j.num("gainDb", 0); c.trimDb = (float)j.num("trimDb", 0);
-    c.pan = (float)j.num("pan", 0); c.mute = j.flag("mute", false); c.solo = j.flag("solo", false);
-    c.route = (int)j.num("route", 0); c.stereo = j.flag("stereo", c.stereo.load()); c.armed = j.flag("armed", false);
-    c.monitor = j.flag("monitor", true); c.polarity = j.flag("polarity", false); c.chainMix = std::clamp((float)j.num("chainMix", 1.0), 0.f, 1.f);
-    c.inputL = (int)j.num("inputL", -1); c.inputR = (int)j.num("inputR", -1);
-    if (auto* ins = j.get("inserts")) for (auto& f : ins->a) {
-      int slot = (int)f.num("slot", -1); std::string name = f.text("effect");
-      bool made;
-      if (name.find(':') != std::string::npos) {  // hosted plugin, e.g. "vst3:/path/Meter.vst3"
-        std::unique_ptr<InsertProcessor> p = e.insertFactory() ? e.insertFactory()(name, e.sampleRate()) : nullptr;
-        made = p && e.setInsertProcessor(id, slot, std::move(p));
-      } else made = e.setInsert(id, slot, name);
-      if (!made) { r.warnings.push_back("plugin '" + name + "' on " + c.name + " could not be loaded"); continue; }
-      if (auto* fx = e.insertAt(id, slot)) {
-        fx->setBypass(f.flag("bypass", false));
-        fx->setParallel(f.flag("parallel", false));
-        std::string st = f.text("state");
-        if (!st.empty()) fx->loadState(st);
-        else if (auto* ps = f.get("params")) for (size_t p = 0; p < ps->a.size() && (int)p < fx->numParams(); ++p) fx->setParam((int)p, (float)ps->a[p].n);
-      }
-    }
-    if (id < kMaxTracks) {
-      std::vector<int> mapIdx;  // saved take index -> loaded index (a missing file shifts later ones)
-      if (auto* tk = j.get("takes")) for (auto& q : tk->a) {
-        std::string p = q.text("path"); if (!P(p).is_absolute()) p = S(P(baseDir) / P(p));
-        int idx = e.addTake(id, p, (int64_t)q.num("start", 0));
-        if (idx < 0) r.warnings.push_back("missing take: " + p);
-        else e.setTakeKeep(id, idx, q.flag("keep", false));
-        mapIdx.push_back(idx);
-      }
-      int saved = (int)j.num("activeTake", -1);
-      e.setActiveTake(id, saved >= 0 && saved < (int)mapIdx.size() ? mapIdx[saved] : -1);
-      if (auto* cj = j.get("comp")) {
-        if (auto* secs = cj->get("sections"))
-          for (auto& q : secs->a) {
-            const int k = (int)q.num("take", -1);
-            if (k >= 0 && k < (int)mapIdx.size() && mapIdx[(size_t)k] >= 0)
-              e.setCompSection(id, (int64_t)q.num("from", 0), (int64_t)q.num("to", 0), e.takeAt(id, mapIdx[(size_t)k]));
-          }
-        if (cj->flag("silenceOutside", false)) e.setCompSilenceOutside(id, true);
-      }
-    }
+    applyChannel(e, id, j, baseDir, r.warnings);
   }
   r.ok = true; return r;
 }
 
 // ---------------- auto-save ----------------
+std::string channelToJson(Engine& e, int id, const std::string& baseDir) { return channelJVal(e, id, baseDir).dump(); }
+
+SessionResult channelFromJson(Engine& e, int id, const std::string& json, const std::string& baseDir) {
+  SessionResult r;
+  if (!(id >= 0 && id < kMaxTracks) && !(id >= 100 && id < 100 + kNumBuses) && id != 200) { r.error = "no such channel"; return r; }
+  JVal j; if (!JVal::parse(json, j) || j.type != JVal::Obj) { r.error = "not a channel"; return r; }
+  // the channel starts fresh: its inserts, takes and comp are replaced, not added to
+  for (int s = 0; s < kMaxInserts; ++s) if (e.insertAt(id, s)) e.setInsert(id, s, "");
+  if (id < kMaxTracks) { e.clearComp(id); e.clearTakeList(id); }
+  applyChannel(e, id, j, baseDir, r.warnings);
+  r.ok = true; return r;
+}
+
 void AutoSaver::configure(const AutoSaveSettings& s) {
   s_ = s; s_.intervalSec = std::clamp(s_.intervalSec, 30, 3600); s_.keep = std::clamp(s_.keep, 1, 100);
 }

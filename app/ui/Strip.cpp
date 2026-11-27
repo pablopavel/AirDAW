@@ -56,17 +56,21 @@ void MonitorButton::paintButton(juce::Graphics& g, bool over, bool down) {
 Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
   // a click on the name does nothing by itself: drag it to move the strip, double-click to rename (Inserts opens the chain)
   plate_.onRename = [this](const juce::String& n) { if (auto* e = ctx_.engine()) if (auto* c = channelOf(*e, id_)) c->name = n.toStdString(); };
-  plate_.onMenu = [this] {  // right-click the name: rename, inserts, and (tracks) remove
+  plate_.onMenu = [this] {  // right-click the name: rename, inserts, and (tracks) duplicate / remove
     juce::Component::SafePointer<Strip> sp(this);  // made here: MSVC can't capture `this` into the nested lambda's init
     juce::PopupMenu m;
     m.addItem(1, juce::String(juce::CharPointer_UTF8("Rename\xe2\x80\xa6")));
     m.addItem(2, "Show inserts");
-    if (id_ < airdaw::kMaxTracks) { m.addSeparator(); m.addItem(3, juce::String(juce::CharPointer_UTF8("Remove track\xe2\x80\xa6"))); }
+    if (id_ < airdaw::kMaxTracks) {
+      m.addItem(4, "Duplicate track");
+      m.addSeparator(); m.addItem(3, juce::String(juce::CharPointer_UTF8("Remove track\xe2\x80\xa6")));
+    }
     m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&plate_), [sp](int r) {
       if (!sp) return;
       if (r == 1) sp->plate_.startRename();
       else if (r == 2) sp->ctx_.showInserts(sp->id_, -1);
       else if (r == 3 && sp->ctx_.removeTrack) sp->ctx_.removeTrack(sp->id_);
+      else if (r == 4 && sp->ctx_.duplicateTrack) sp->ctx_.duplicateTrack(sp->id_);
     });
   };
   plate_.onDragOut = [this] {
@@ -93,6 +97,7 @@ Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
       auto& c = e->track(id_);
       const bool st = !c.stereo.load();
       if (st) { const int l = c.inputL.load(); c.inputR = (l >= 0 && l + 1 < numInputs(ctx_)) ? l + 1 : -1; }
+      c.inputMix = false;
       c.stereo = st;
     };
     in_.onClick = [this] { chooseInput(); };
@@ -104,8 +109,8 @@ Strip::Strip(AppCtx& ctx, int id) : ctx_(ctx), id_(id) {
       auto& c = e->track(id_);
       if (!c.armed.load() && c.inputL.load() < 0) {  // no input chosen yet: use In 1 (In 1/2 for stereo)
         const bool st = c.stereo.load() && numInputs(ctx_) > 1;
-        c.inputL = 0; c.inputR = st ? 1 : -1;
-        ctx_.note(juce::String(c.name) + ": input set to " + (st ? "In 1/2" : "In 1") + " (change it with the In button)");
+        c.inputL = 0; c.inputR = st ? 1 : -1; c.inputMix = false;
+        ctx_.note(juce::String(c.name) + ": input set to " + (st ? "In 1+2" : "In 1") + " (change it with the In button)");
       }
       c.armed = !c.armed.load();
     };
@@ -138,16 +143,27 @@ void Strip::chooseInput() {
   auto* e = ctx_.engine(); if (!e) return;
   auto& c = e->track(id_);
   const int n = numInputs(ctx_); const bool st = c.stereo.load();
+  const int l = c.inputL.load(), rr = c.inputR.load();
+  const bool pair = l >= 0 && rr == l + 1 && (st || c.inputMix.load());
   juce::PopupMenu m;
-  m.addSectionHeader(st ? "Stereo input" : "Mono input");
-  m.addItem(1, "None", true, c.inputL.load() < 0);
-  if (st) { for (int i = 0; i + 1 < n; i += 2) m.addItem(10 + i, "In " + juce::String(i + 1) + "/" + juce::String(i + 2), true, c.inputL.load() == i); }
-  else for (int i = 0; i < n; ++i) m.addItem(10 + i, "In " + juce::String(i + 1), true, c.inputL.load() == i);
+  m.addItem(1, "None", true, l < 0);
+  // A pair: on a stereo track the first input left and the second right; on a mono track the two mixed into one.
+  // One input: a mono track's input; on a stereo track it is heard on both sides.
+  auto pairs = [&] {
+    m.addSectionHeader(st ? "Two inputs, left / right" : "Two inputs mixed to mono");
+    for (int i = 0; i + 1 < n; i += 2) m.addItem(100 + i, "In " + juce::String(i + 1) + "+" + juce::String(i + 2), true, pair && l == i);
+  };
+  auto singles = [&] {
+    m.addSectionHeader(st ? "One input on both sides" : "One input");
+    for (int i = 0; i < n; ++i) m.addItem(10 + i, "In " + juce::String(i + 1), true, l == i && !pair);
+  };
+  if (st) { pairs(); singles(); } else { singles(); if (n > 1) pairs(); }
   m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&in_), [this, st](int r) {
     auto* e2 = ctx_.engine(); if (!e2 || r == 0) return;
     auto& ch = e2->track(id_);
-    if (r == 1) { ch.inputL = -1; ch.inputR = -1; return; }
-    ch.inputL = r - 10; ch.inputR = st ? r - 9 : -1;
+    if (r == 1) { ch.inputL = -1; ch.inputR = -1; ch.inputMix = false; return; }
+    if (r >= 100) { ch.inputL = r - 100; ch.inputR = r - 99; ch.inputMix = !st; return; }
+    ch.inputMix = false; ch.inputL = r - 10; ch.inputR = -1;
   });
 }
 
@@ -189,9 +205,9 @@ void Strip::sync() {
   plate_.setName2(c.name);
   if (isTrack(id_)) {
     chn_.setButtonText(c.stereo.load() ? "Stereo" : "Mono"); chn_.setToggleState(true, juce::dontSendNotification);
-    const int l = c.inputL.load();
-    in_.setButtonText(l < 0 ? juce::String("In -") : c.stereo.load() && c.inputR.load() >= 0
-                          ? "In " + juce::String(l + 1) + "/" + juce::String(c.inputR.load() + 1) : "In " + juce::String(l + 1));
+    const int l = c.inputL.load(), ir = c.inputR.load();
+    const bool two = ir >= 0 && (c.stereo.load() || c.inputMix.load());
+    in_.setButtonText(l < 0 ? juce::String("In -") : two ? "In " + juce::String(l + 1) + "+" + juce::String(ir + 1) : "In " + juce::String(l + 1));
     const int rt = c.route.load();
     route_.setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x86\x92 ")) + (rt == 0 ? "Master" : "Bus " + juce::String(rt)));
     r_.setToggleState(c.armed.load(), juce::dontSendNotification);

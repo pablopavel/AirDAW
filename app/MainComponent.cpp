@@ -2,6 +2,7 @@
 #include "ui/FullScreen.h"
 #include "Vst3Insert.h"
 #include "airdaw/render.h"
+#include "airdaw/session.h"
 #include <map>
 #include <thread>
 
@@ -71,6 +72,7 @@ MainComponent::MainComponent(bool snapshotMode) : snapshotMode_(snapshotMode) {
     inserts_.show(ch, slot);
   };
   ctx_.removeTrack = [this](int t) { removeTrack(t); };
+  ctx_.duplicateTrack = [this](int t) { duplicateTrack(t); };
   mixer_.onRemovedChanged = [this] { setProjectValue("removedTracks", mixer_.removedTracks()); };
   mixer_.onOrderChanged = [this] { setProjectValue("stripOrder", mixer_.stripOrder()); };
   ctx_.isCardOpen = [this](int ch, int slot) { return inserts_.isOpen(ch, slot); };
@@ -1026,7 +1028,7 @@ void MainComponent::clearAndHideTrack(int t) {
   if (ctx_.viewTrack == t) ctx_.viewTrack = -1;
   auto& c = e->track(t);
   c.armed = false; c.audition = false; c.monitor = true; c.mute = false; c.solo = false; c.polarity = false;
-  c.inputL = -1; c.inputR = -1; c.stereo = false; c.route = (int)airdaw::Route::Master;
+  c.inputL = -1; c.inputR = -1; c.inputMix = false; c.stereo = false; c.route = (int)airdaw::Route::Master; c.chainMix = 1.f;
   c.gainDb = 0.f; c.trimDb = 0.f; c.pan = 0.f;
   for (int s = 0; s < airdaw::kMaxInserts; ++s) e->setInsert(t, s, "");
   e->clearComp(t);
@@ -1034,6 +1036,39 @@ void MainComponent::clearAndHideTrack(int t) {
   c.name = "TRACK " + std::to_string(t + 1);
   mixer_.removeTrack(t);
   note("Removed " + name);
+  resized();
+}
+
+// Duplicating a track: everything the project saves about it (settings, inserts with their settings / plugin state,
+// takes, comp) goes onto a free track placed right after it. Its takes get their own copies of the recorded files, so
+// deleting takes on one track never takes audio away from the other. Not armed or soloed.
+void MainComponent::duplicateTrack(int src) {
+  auto* e = bridge_.engine(); if (!e || src < 0 || src >= airdaw::kMaxTracks) return;
+  if (e->transport().recording.load()) { note("Stop recording before duplicating a track"); return; }
+  const int dst = mixer_.claimTrack();
+  if (dst < 0) { note("No free track to duplicate onto (" + juce::String(airdaw::kMaxTracks) + " in use)"); return; }
+  juce::var v = juce::JSON::parse(juce::String(airdaw::channelToJson(*e, src)));  // take paths absolute (no base folder)
+  auto* o = v.getDynamicObject();
+  if (o == nullptr) { note("Could not duplicate the track"); mixer_.removeTrack(dst); return; }
+  const juce::String name = juce::String(e->track(src).name) + " copy";
+  o->setProperty("id", dst); o->setProperty("name", name); o->setProperty("armed", false); o->setProperty("solo", false);
+  int copied = 0, failed = 0;
+  if (auto* takes = o->getProperty("takes").getArray())
+    for (auto& t : *takes)
+      if (auto* to = t.getDynamicObject()) {
+        const juce::File f(to->getProperty("path").toString());
+        if (!f.existsAsFile()) continue;  // a missing take stays missing (the load reports it)
+        const auto copy = f.getSiblingFile(f.getFileNameWithoutExtension() + " copy" + f.getFileExtension()).getNonexistentSibling(false);
+        if (f.copyFileTo(copy)) { to->setProperty("path", copy.getFullPathName()); ++copied; } else ++failed;
+      }
+  const auto res = airdaw::channelFromJson(*e, dst, juce::JSON::toString(v, true).toStdString());
+  mixer_.moveStrip(dst, src, true);
+  mixer_.sync();
+  juce::String msg = "Duplicated " + juce::String(e->track(src).name) + " as " + name;
+  if (copied > 0) msg << " (" << copied << (copied == 1 ? " take copied)" : " takes copied)");
+  if (failed > 0) msg << "; " << failed << " take file(s) could not be copied: they are shared with the original";
+  if (!res.warnings.empty()) msg << "; " << juce::String(res.warnings.front());
+  note(msg);
   resized();
 }
 
@@ -1209,6 +1244,7 @@ void MainComponent::runScenario(const juce::String& nameIn) {
     for (int s = 0; s < 12; ++s) e->setInsert(0, s, fx[s]);
     T().inserts = "rack"; inserts_.show(0, -1);
   }
+  if (name == "duplicate") { e->track(4).inputL = 0; e->track(4).inputR = 1; e->track(4).inputMix = true; duplicateTrack(4); }  // test hook: Bass DI (In 1+2) copied after itself
   if (name == "strip-order") { mixer_.moveStrip(0, 3, true); mixer_.moveStrip(102, 100, false); }  // test hook: Kick after OH R, Bus 3 first
   if (name == "parallel") {  // test hook: ToTape8 in parallel with Density3 on Bass DI, the chain at 60 % wet
     if (auto* fx = e->insertAt(4, 2)) fx->setParallel(true);

@@ -711,6 +711,29 @@ static void testTakeLists() {
   Engine e2(SR); auto r = loadSession(e2, dir + "/b.airdaw");
   CHECK(r.ok && r.warnings.empty() && e2.numTakes(0) == 1 && e2.takeAt(0, 0)->l.size() == 5000, "moved take reloads (warnings=%zu)", r.warnings.size());
   std::printf("take lists: replaced on load/new, no duplicates, playback after reload, moved files follow\n");
+  // Duplicating a track: one channel to JSON and onto another track (settings, insert and its knobs, takes).
+  e.setInsert(0, 0, "ToTape8"); e.track(0).trimDb = 3.f; e.track(0).inputL = 0; e.track(0).inputR = 1; e.track(0).inputMix = true;
+  if (auto* fx = e.insertAt(0, 0)) fx->setParam(0, 0.25f);
+  auto dr = channelFromJson(e, 5, channelToJson(e, 0));
+  CHECK(dr.ok && e.numTakes(5) == 1 && e.takeAt(5, 0)->l.size() == 5000 && e.track(5).take.load() == e.takeAt(5, 0), "duplicate: takes");
+  CHECK(e.insertAt(5, 0) && std::fabs(e.insertAt(5, 0)->getParam(0) - 0.25f) < 1e-6f, "duplicate: insert and its settings");
+  CHECK(e.track(5).trimDb.load() == 3.f && e.track(5).inputMix.load() && e.track(5).inputR.load() == 1, "duplicate: settings");
+  CHECK(e.numTakes(0) == 1 && e.insertAt(0, 0), "duplicate: the original is untouched");
+  std::printf("duplicate track: settings, inserts with their knobs, takes\n");
+}
+
+// A mono track fed by two inputs ("In 1+2"): their average; the flag off, the first input only.
+static void testInputMix() {
+  { Rig r; auto& t = r.e.track(0); t.inputL = 0; t.inputR = 1; t.inputMix = true; t.pan = -1.f;
+    float pl, pr; r.run(30, 0.5f, pl, pr);  // input 2 silent: half of input 1
+    CHECK(std::fabs(pl - 0.25f) < 0.01f, "In 1+2 mixed: L=%f (want 0.25)", pl); }
+  { Rig r; auto& t = r.e.track(0); t.inputL = 0; t.inputR = 1; t.inputMix = false; t.pan = -1.f;
+    float pl, pr; r.run(30, 0.5f, pl, pr);  // a left-over second input on a mono track is ignored
+    CHECK(std::fabs(pl - 0.5f) < 0.01f, "mono, mix off: L=%f (want 0.5)", pl); }
+  { Rig r; auto& t = r.e.track(0); t.inputL = 1; t.inputR = 0; t.inputMix = true; t.pan = -1.f;
+    float pl, pr; r.run(30, 0.5f, pl, pr);  // either order
+    CHECK(std::fabs(pl - 0.25f) < 0.01f, "In 2+1 mixed: L=%f", pl); }
+  std::printf("input mix: two inputs averaged on a mono track, off = first input only\n");
 }
 
 int main() {
@@ -816,6 +839,7 @@ int main() {
   // 13b. Metronome: clicks on the beat grid, accent on beat 1, output only (never recorded), count-in
   testMetronome();
   testTakeLists();
+  testInputMix();
   testMonitoringAndLayering();
   testRecordingPaths();
   testInsertReorder();

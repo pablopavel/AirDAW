@@ -15,6 +15,12 @@ SessionResult saveSession(Engine& e, const std::string& path);
 // Applies a session to the engine. Missing plugins/takes become warnings, not failures.
 SessionResult loadSession(Engine& e, const std::string& path);
 
+// One channel (id: track 0.., bus 100.., master 200) as it is saved in a session: settings, inserts with their
+// parameters / plugin state, and (tracks) takes and comp. Take paths are relative to baseDir when inside it.
+std::string channelToJson(Engine& e, int id, const std::string& baseDir = {});
+// Puts such a channel on `id`, replacing its settings, inserts, takes and comp (UI thread). Used to duplicate a track.
+SessionResult channelFromJson(Engine& e, int id, const std::string& json, const std::string& baseDir = {});
+
 struct AutoSaveSettings {
   bool enabled = false;
   int intervalSec = 300;  // 30 s .. 1 h

@@ -22,6 +22,8 @@ class Mixer : public juce::Component {
   // Removed tracks: their strips are hidden (the track itself is cleared by the caller). "Add track" brings back the
   // lowest removed slot first. The list is saved per project (onRemovedChanged / setRemovedTracks).
   void removeTrack(int t);
+  // A free track for a new one (a removed slot first, else the next unused one), now shown; -1 when all are in use.
+  int claimTrack();
   void setRemovedTracks(const juce::var& list);
   juce::var removedTracks() const;
   std::function<void()> onRemovedChanged;

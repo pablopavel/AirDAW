@@ -539,8 +539,12 @@ void Engine::processTrack(int ti, const SegCtx& c) {
       wr[i] = ok ? (tStereo ? tk->r[(size_t)p] : wl[i]) : 0.f;
     }
   } else {
-    if (readInput) std::memcpy(wl, c.in[il] + c.done, n * sizeof(float)); else std::fill_n(wl, n, 0.f);
     int ir = t.inputR.load(std::memory_order_relaxed);
+    const bool mix = readInput && !stereo && ir >= 0 && ir < c.nIn && t.inputMix.load(std::memory_order_relaxed);
+    if (mix) {  // mono from two inputs: their average
+      const float* a = c.in[il] + c.done; const float* b = c.in[ir] + c.done;
+      for (int i = 0; i < n; ++i) wl[i] = 0.5f * (a[i] + b[i]);
+    } else if (readInput) std::memcpy(wl, c.in[il] + c.done, n * sizeof(float)); else std::fill_n(wl, n, 0.f);
     if (readInput && stereo && ir >= 0 && ir < c.nIn) std::memcpy(wr, c.in[ir] + c.done, n * sizeof(float));
     else std::memcpy(wr, wl, n * sizeof(float));
     if (rec) writer_->push(ti, wl, wr, n, stereo ? 2 : 1);

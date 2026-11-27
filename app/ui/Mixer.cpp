@@ -86,6 +86,13 @@ void Mixer::resized() {
   relayout();
 }
 
+int Mixer::claimTrack() {
+  for (int t = 0; t < shown_; ++t)
+    if (removed_[(size_t)t]) { removed_[(size_t)t] = false; relayout(); if (onRemovedChanged) onRemovedChanged(); return t; }
+  if (shown_ < airdaw::kMaxTracks) { ++shown_; relayout(); return shown_ - 1; }
+  return -1;
+}
+
 void Mixer::removeTrack(int t) {
   if (t < 0 || t >= airdaw::kMaxTracks || removed_[(size_t)t]) return;
   removed_[(size_t)t] = true;

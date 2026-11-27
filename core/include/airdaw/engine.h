@@ -111,6 +111,9 @@ struct Channel {
   std::atomic<bool> monitor{true};
   std::atomic<bool> audition{false};
   std::atomic<int> inputL{-1}, inputR{-1};  // hardware input index, -1 none
+  // Mono tracks only: true = inputL and inputR mixed into the one channel (e.g. "In 1+2", each at half level so a
+  // source on both inputs keeps its level). Off: a mono track hears inputL alone (inputR is then ignored).
+  std::atomic<bool> inputMix{false};
   Meter meter;
   std::array<InsertProcessor*, kMaxInserts> insert{};  // audio-thread-owned pointers
   std::atomic<float> chainMix{1.f};  // insert chain wet / dry: 1 = the chain's output only, 0 = the signal before it

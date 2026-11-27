@@ -6,24 +6,18 @@ When something works, it is removed from this list; when it doesn't, it gets a n
 Last updated: 2026-11-27
 
 ## Controls, inserts and layout (new)
-- [ ] Menu keys in the deck light in the accent while held down (Project, Plugins and Tap too); Listen / Meters / Display /
-      MIDI Learn / Plugins stay lit when on, Project while its menu is open. No square glow round a lit key.
-- [ ] Display > Hardware > Buttons: Console (coloured caps, M amber, S blue, monitor green, T violet, R red, dim when
-      off), Toggles (strip M / S / monitor / T / R as bat-handle switches with a label and LED; Settings tick boxes as switches),
-      Classic (the old keys, now the default). Each switch still toggles and still answers MIDI Learn.
-- [ ] Knobs: Chrome, Knurled, Skirted, Bakelite, Soft touch, Ivory, Gold (gain knobs and insert-card knobs). Faders: Chrome,
-      Black, Console grey, Cream, Red, Wood (grooved caps with a soft shadow).
-- [ ] Typefaces: Modern, Industrial, Condensed, Grotesque, Humanist, Engraved, Typewriter, Tape label all look different;
-      nothing important is cut off with the wider ones.
-- [ ] Each strip (and the master) has one INSERTS button: the number of plugins on the right, LED lit while one runs,
-      outlined while the insert panel shows that channel, the plugin list in its tooltip; click opens the panel.
-- [ ] More than 8 inserts on one channel (up to 32): load 10 or more, they all process, save and reopen keeps them all.
-      Reordering a long chain by drag still works.
-- [ ] Insert panel: a plain X at the top left (beside the name) and one at the right (centred in its column, halfway
-      down); no "AIRDAW 500 / SLOTS" text on the rack rail.
 - [ ] With the insert panel open, the meter dock stays (when the window has room) and its divider resizes it; that height is
       remembered separately from the height without the insert panel.
 - [ ] Dragging the dividers between reference tools: no tool slides off the right end; the last tool stops at its minimum width.
+
+## Inputs and duplicating (new)
+- [ ] In menu: a mono track lists In 1, In 2... and In 1+2 (both inputs mixed into the one channel, each at half level);
+      a stereo track lists In 1+2 (1 left, 2 right) and single inputs (heard on both sides). The button shows "In 1+2".
+      Record on a mono track with In 1+2: the take has both inputs. Saved with the project.
+- [ ] Right-click a track's name > Duplicate track: a "<name> copy" track appears right after it with the same settings,
+      inserts (and their knob settings / plugin state), chain mix, takes and comp; not armed or soloed. Its takes are
+      copies of the files ("... copy.wav" next to the originals), so deleting takes on one never touches the other.
+      Save, reopen: both tracks are there. With all 24 tracks in use it says so.
 
 ## Hit Record Meter (new)
 - [ ] The meter is always the last master insert: add effects to the master and they go before it (the add card sits
@@ -46,17 +40,15 @@ Last updated: 2026-11-27
       The first plugin's ∥ is greyed out; a bypassed plugin drops out of its group. Saved with the project.
 - [ ] Hit Record Meter now measures after the master fader (move the master fader: its peaks move with it, like the
       other meters and the dark view). The master's chain mix does not include the meter.
-- [ ] The insert panel's left X now sits beside the channel name.
 
 ## Full screen (new)
-- [ ] AirDAW opens full screen and stays full screen when you click a window on another monitor. Esc leaves it (after closing an open Display / Plugins / insert panel first); the Full key
+- [ ] AirDAW opens full screen. Esc leaves it (after closing an open Display / Plugins / insert panel first); the Full key
       toggles it. Leaving it gives the normal window back.
 - [ ] The Full key is an icon only: corners pointing out when windowed, pointing in when full screen. The Display key is
       a gear icon only (still lit while the Display panel is open). Both keys are narrow; the other keys share the row.
 
 ## Tempo, click and tempo map (new)
-- [ ] Tap key: tapping still sets the tempo; hold it and drag up / down to change the tempo in whole BPM steps (Shift: 0.1);
-      the mouse wheel changes it by 1 BPM (Shift: 0.1). After a drag or scroll the next taps start fresh.
+- [ ] Tap key: tapping still sets the tempo; Shift + drag gives 0.1 BPM steps; the mouse wheel changes it by 1 BPM (Shift: 0.1). After a drag or scroll the next taps start fresh.
 - [ ] Click sounds: Beep (as before), Woodblock, Clave, Cowbell, Stick, Hi-hat, Soft; beat 1 of each bar accented. Choose
       them in Audio settings > Click sound, or right-click the Click key. Saved with the project.
 - [ ] Bar ruler above the song overview: bar numbers, a marker for bar 1 (the metronome's tempo) and one per change.
