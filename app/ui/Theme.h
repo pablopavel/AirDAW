@@ -98,6 +98,9 @@ class Theme : public juce::ChangeBroadcaster {
                                            bool hover, bool enabled = true) const;
   // Bat-handle toggle switch in `r` (lever down = on) with a small LED in `led` colour above it.
   void drawToggleSwitch(juce::Graphics& g, juce::Rectangle<float> r, bool on, juce::Colour led, bool hover) const;
+  // A 1 px highlight just inside the top edge of a rounded key, following its corners (a straight hairline would poke
+  // out past round corners), fading out by the middle.
+  void drawTopRim(juce::Graphics& g, juce::Rectangle<float> r, float corner, juce::Colour col) const;
 
   static juce::Font uiFont(float h, bool bold = false);
   static juce::Font monoFont(float h, bool bold = true);

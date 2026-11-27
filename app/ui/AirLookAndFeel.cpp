@@ -152,8 +152,8 @@ void AirLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, co
     const bool on = b.getToggleState() || down, pressed = on;  // lit while on, and while held down
     auto k = r.withTrimmedBottom(4.f);
     const float kc = T().rad(4.f);
-    if (!pressed) { g.setColour(juce::Colour(0xff070708)); g.fillRoundedRectangle(k.translated(0, 2), kc);
-                    g.setColour(juce::Colours::black.withAlpha(0.7f)); g.fillRoundedRectangle(k.translated(0, 4), kc); }
+    if (!pressed) { g.setColour(juce::Colours::black.withAlpha(0.5f)); g.fillRoundedRectangle(k.translated(0, 3), kc);
+                    g.setColour(juce::Colours::black.withAlpha(0.35f)); g.fillRoundedRectangle(k.translated(0, 1.5f), kc); }
     else k = k.translated(0, 3);
     auto& t = T();
     if (on) {
@@ -167,9 +167,13 @@ void AirLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, co
     }
     g.fillRoundedRectangle(k, kc);
     g.setColour(juce::Colour(on ? 0x1f000000 : 0x2a000000));
-    for (float y = k.getY() + 3.f; y < k.getBottom(); y += 4.f) g.fillRect(k.getX() + 1.f, y, k.getWidth() - 2.f, 1.f);
-    g.setColour(juce::Colour(on ? 0xccffffff : 0x6effffff)); g.drawHorizontalLine((int)k.getY() + 1, k.getX() + 3, k.getRight() - 3);
-    g.setColour(juce::Colours::black); g.drawRoundedRectangle(k, kc, 1.f);
+    {  // fine grooves across the cap, kept inside its corners
+      juce::Graphics::ScopedSaveState ss(g);
+      juce::Path kp; kp.addRoundedRectangle(k.reduced(1.f), juce::jmax(0.5f, kc - 1.f)); g.reduceClipRegion(kp);
+      for (float y = k.getY() + 3.f; y < k.getBottom(); y += 4.f) g.fillRect(k.getX() + 1.f, y, k.getWidth() - 2.f, 1.f);
+    }
+    T().drawTopRim(g, k, kc, juce::Colour(on ? 0xccffffff : 0x6effffff));
+    g.setColour(juce::Colours::black.withAlpha(0.6f)); g.drawRoundedRectangle(k.reduced(0.5f), juce::jmax(0.5f, kc - 0.5f), 1.f);
     return;
   }
   if (down) r = r.translated(0.f, 1.f);
@@ -178,16 +182,16 @@ void AirLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, co
     juce::Colour top, bot, txt, glow; litColours(kind, top, bot, txt, glow);
     g.setGradientFill(juce::ColourGradient(top, r.getX(), r.getY(), bot, r.getX(), r.getBottom(), false));
     g.fillRoundedRectangle(r, corner);
-    g.setColour(juce::Colour(0x66ffffff)); g.drawHorizontalLine((int)r.getY() + 1, r.getX() + 2, r.getRight() - 2);
+    T().drawTopRim(g, r, corner, juce::Colour(0x66ffffff));
   } else {
-    g.setColour(juce::Colour(0xcc000000)); g.fillRoundedRectangle(r.translated(0.f, 2.f), corner);  // drop shadow
+    g.setColour(juce::Colour(0x55000000)); g.fillRoundedRectangle(r.translated(0.f, 1.5f), corner);  // drop shadow
     const bool en = b.isEnabled();
     g.setGradientFill(juce::ColourGradient(juce::Colour(over && en ? 0xff47474b : 0xff3c3c3f), r.getX(), r.getY(),
                                            juce::Colour(over && en ? 0xff2d2d30 : 0xff262628), r.getX(), r.getBottom(), false));
     g.fillRoundedRectangle(r, corner);
-    g.setColour(juce::Colour(0x14ffffff)); g.drawHorizontalLine((int)r.getY() + 1, r.getX() + 2, r.getRight() - 2);
+    T().drawTopRim(g, r, corner, juce::Colour(0x1effffff));
   }
-  g.setColour(juce::Colours::black); g.drawRoundedRectangle(r, corner, 1.f);
+  g.setColour(juce::Colours::black.withAlpha(0.6f)); g.drawRoundedRectangle(r.reduced(0.5f), juce::jmax(0.5f, corner - 0.5f), 1.f);
 }
 
 juce::Font AirLookAndFeel::getTextButtonFont(juce::TextButton& b, int) {

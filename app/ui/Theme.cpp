@@ -525,8 +525,8 @@ juce::Rectangle<float> Theme::drawConsoleButton(juce::Graphics& g, juce::Rectang
   }
   const float rb = juce::jmin(rad(4.f) + 1.f, r.getWidth() * 0.5f, r.getHeight() * 0.5f);
   // bezel: the recessed housing the cap sits in
-  g.setColour(juce::Colours::black); g.fillRoundedRectangle(r, rb);
-  g.setGradientFill(juce::ColourGradient(juce::Colour(0xff030303), 0.f, r.getY(), juce::Colour(0xff1c1c1f), 0.f, r.getBottom(), false));
+  g.setColour(juce::Colours::black.withAlpha(0.55f)); g.fillRoundedRectangle(r, rb);
+  g.setGradientFill(juce::ColourGradient(juce::Colour(0xff0a0a0b), 0.f, r.getY(), juce::Colour(0xff1c1c1f), 0.f, r.getBottom(), false));
   g.fillRoundedRectangle(r.reduced(1.f), juce::jmax(0.5f, rb - 1.f));
   const float inset = juce::jlimit(1.5f, 3.f, r.getHeight() * 0.1f);
   auto c = r.reduced(inset);
@@ -560,16 +560,19 @@ juce::Rectangle<float> Theme::drawConsoleButton(juce::Graphics& g, juce::Rectang
                                            0.f, c.getY() + c.getHeight() * 0.48f, false));
     g.fillRect(c.withHeight(c.getHeight() * 0.48f));
   }
-  {  // a thin highlight along the top rim, following the curve (a straight hairline stuck out on round caps)
-    juce::Graphics::ScopedSaveState ss(g);
-    juce::Path cp; cp.addRoundedRectangle(c, cr); g.reduceClipRegion(cp);
-    juce::Path rim; rim.addRoundedRectangle(c.reduced(0.5f).translated(0.f, 1.f), juce::jmax(0.5f, cr - 0.5f));
-    g.setColour(juce::Colours::white.withAlpha(on ? 0.4f : 0.14f));
-    g.saveState(); g.reduceClipRegion(c.withHeight(c.getHeight() * 0.5f).toNearestInt());
-    g.strokePath(rim, juce::PathStrokeType(1.f)); g.restoreState();
-  }
-  g.setColour(juce::Colours::black.withAlpha(0.75f)); g.drawRoundedRectangle(c, cr, 1.f);
+  drawTopRim(g, c, cr, juce::Colours::white.withAlpha(on ? 0.4f : 0.14f));
+  g.setColour(juce::Colours::black.withAlpha(0.45f)); g.drawRoundedRectangle(c.reduced(0.5f), juce::jmax(0.5f, cr - 0.5f), 1.f);
   return c;
+}
+
+void Theme::drawTopRim(juce::Graphics& g, juce::Rectangle<float> r, float corner, juce::Colour col) const {
+  const float cr = juce::jmin(corner, r.getWidth() * 0.5f, r.getHeight() * 0.5f);
+  juce::Graphics::ScopedSaveState ss(g);
+  juce::Path clip; clip.addRoundedRectangle(r, cr); g.reduceClipRegion(clip);
+  g.reduceClipRegion(r.withHeight(r.getHeight() * 0.5f).getSmallestIntegerContainer());
+  juce::Path rim; rim.addRoundedRectangle(r.reduced(1.f).translated(0.f, 0.5f), juce::jmax(0.5f, cr - 1.f));
+  g.setGradientFill(juce::ColourGradient(col, 0.f, r.getY(), col.withAlpha(0.f), 0.f, r.getY() + r.getHeight() * 0.5f, false));
+  g.strokePath(rim, juce::PathStrokeType(1.f));
 }
 
 void Theme::drawToggleSwitch(juce::Graphics& g, juce::Rectangle<float> r, bool on, juce::Colour led, bool hover) const {
