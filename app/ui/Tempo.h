@@ -51,7 +51,7 @@ class TempoEditor : public juce::Component {
  public:
   TempoEditor(AppCtx& ctx, int bar) : ctx_(ctx), bar_(bar) {
     bpm_.setSliderStyle(juce::Slider::IncDecButtons); bpm_.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 64, 26);
-    bpm_.setRange(20.0, 400.0, 0.1);
+    bpm_.setRange(20.0, 400.0, 1.0);
     for (int b = 1; b <= 16; ++b) beats_.addItem(juce::String(b) + "/4", b);
     if (auto* e = ctx_.engine()) { const auto t = TempoEdit::at(*e, bar_); bpm_.setValue(t.bpm, juce::dontSendNotification); beats_.setSelectedId(t.beatsPerBar, juce::dontSendNotification); }
     bpm_.onValueChange = [this] { apply(); }; beats_.onChange = [this] { apply(); };
@@ -122,7 +122,7 @@ class TempoList : public juce::Component {
       barS.setSliderStyle(juce::Slider::IncDecButtons); barS.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 44, 24);
       barS.setRange(2, 999, 1); barS.setValue(c.bar, juce::dontSendNotification);
       bpm.setSliderStyle(juce::Slider::IncDecButtons); bpm.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 56, 24);
-      bpm.setRange(20.0, 400.0, 0.1); bpm.setValue(c.bpm, juce::dontSendNotification);
+      bpm.setRange(20.0, 400.0, 1.0); bpm.setValue(c.bpm, juce::dontSendNotification);
       for (int b = 1; b <= 16; ++b) beats.addItem(juce::String(b) + "/4", b);
       beats.setSelectedId(c.beatsPerBar, juce::dontSendNotification);
       del.setButtonText(juce::String(juce::CharPointer_UTF8("\xe2\x9c\x95"))); del.getProperties().set("noUpper", true);

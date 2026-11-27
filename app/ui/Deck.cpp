@@ -224,14 +224,14 @@ Deck::Deck(AppCtx& ctx) : ctx_(ctx) {
   keys_.onKey = [this](TransportKeys::Key k) { if (onTransport) onTransport(k); };
   buttons_ = {&tap_, &listen_, &midi_, &plugins_, &projectBtn, &metersBtn, &displayBtn, &full_};
   tap_.setTriggeredOnMouseDown(true);  // the tap lands when the button goes down, not when it is released
-  tap_.setTooltip("Tempo: tap in time (2 taps or more), or hold and drag up / down (Shift: fine), or scroll. Sets bar 1's tempo; "
+  tap_.setTooltip("Tempo: tap in time (2 taps or more), or hold and drag up / down, or scroll (whole BPM). Sets bar 1's tempo; "
                   "changes later in the song are on the overview's bar ruler.");
   tap_.onClick = [this] { ctx_.tapTempo(); };
   tap_.getBpm = [this] { auto* e = ctx_.engine(); return e ? e->metronome().bpm.load() : 120.f; };
   tap_.setBpm = [this](float v) { if (auto* e = ctx_.engine()) e->metronome().bpm = v; };
   tap_.resetTaps = [this] { ctx_.tapper.taps.clear(); };
   keys_.onMenu = [this](TransportKeys::Key k) { if (k == TransportKeys::Click) showClickMenu(); };
-  tap_.setButtonText("Tap 120.0");
+  tap_.setButtonText("Tap 120");
   for (auto* b : buttons_) { addAndMakeVisible(*b); b->getProperties().set("kind", "key"); b->getProperties().set("fontH", 11.0); }
   midi_.setTooltip("MIDI Learn: click a control, then move a knob, fader or pad on your controller. Right-click a control to unmap it.");
   midi_.onClick = [this] { if (onMidi) onMidi(); };
@@ -310,7 +310,7 @@ void Deck::sync() {
     const bool fs = fullscreen::isOn();
     full_.setIcon(fs ? IconKey::Contract : IconKey::Expand);
     full_.setTooltip(fs ? "Leave full screen (or press Esc)" : "Full screen (Esc leaves it)");
-    const auto tt = "Tap " + juce::String(e->metronome().bpm.load(), 1);
+    const auto tt = "Tap " + juce::String(juce::roundToInt(e->metronome().bpm.load()));
     if (tap_.getButtonText() != tt) tap_.setButtonText(tt);
   }
   {  // the light under the transport keys follows its state, easing between levels

@@ -5,17 +5,12 @@ When something works, it is removed from this list; when it doesn't, it gets a n
 
 Last updated: 2026-11-27
 
-## Full screen (new)
-- [ ] Esc leaves full screen straight away, even with a panel open (windowed, Esc closes an open panel).
-- [ ] Menus close each other and on a click elsewhere: open Display, Plugins, Audio settings, MIDI mappings or About
-      plugin, then open another (the first closes) or click anywhere else in AirDAW (it closes). Clicks inside the open
-      panel / window, and in its drop-down lists, keep it open. A plugin's own editor window is not affected.
+## Deck (new)
 - [ ] Deck keys read just Listen, MIDI Learn, Plugins, Project, Meters (no small symbols).
-- [ ] The Full key is an icon only: corners pointing out when windowed, pointing in when full screen. The Display key is
-      a gear icon only (still lit while the Display panel is open). Both keys are narrow; the other keys share the row.
 
 ## Tempo, click and tempo map (new)
-- [ ] Tap key: tapping still sets the tempo; Shift + drag gives 0.1 BPM steps; the mouse wheel changes it by 1 BPM (Shift: 0.1). After a drag or scroll the next taps start fresh.
+- [ ] Tempo is whole BPM everywhere: tapping rounds to a whole number (no .5), drag and wheel move 1 BPM, the key shows
+      "Tap 120"; Audio settings and the tempo-change editors step by 1. After a drag or scroll the next taps start fresh.
 - [ ] Click sounds: Beep (as before), Woodblock, Clave, Cowbell, Stick, Hi-hat, Soft; beat 1 of each bar accented. Choose
       them in Audio settings > Click sound, or right-click the Click key. Saved with the project.
 - [ ] Bar ruler above the song overview: bar numbers, a marker for bar 1 (the metronome's tempo) and one per change.

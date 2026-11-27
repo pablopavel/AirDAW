@@ -82,9 +82,9 @@ struct AppCtx {
   // One tap: sets the metronome tempo once there are two taps or more.
   void tapTempo() {
     auto* e = engine(); if (!e) return;
-    const double bpm = tapper.tap(juce::Time::getMillisecondCounterHiRes());
-    if (bpm > 0.0) e->metronome().bpm = (float)bpm;
-    if (note) note(bpm > 0.0 ? "Tempo " + juce::String(bpm, 1) + " BPM (tap)" : juce::String("Tap tempo: keep tapping"));
+    double bpm = tapper.tap(juce::Time::getMillisecondCounterHiRes());
+    if (bpm > 0.0) { bpm = juce::jlimit(20.0, 400.0, std::round(bpm)); e->metronome().bpm = (float)bpm; }  // whole BPM
+    if (note) note(bpm > 0.0 ? "Tempo " + juce::String((int)bpm) + " BPM (tap)" : juce::String("Tap tempo: keep tapping"));
   }
   std::function<void()> layoutChanged;                        // a panel changed its preferred size
   std::function<bool(const char*)> requireAudio;              // false + explanation if no audio is running

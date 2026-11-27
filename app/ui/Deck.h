@@ -44,7 +44,7 @@ class IconKey : public juce::TextButton {
   Icon icon_;
 };
 
-// Tap tempo key: tap in time, or hold and drag up / down or scroll (1 BPM steps; Shift: 0.1), to set the tempo.
+// Tap tempo key: tap in time, or hold and drag up / down or scroll (1 BPM steps), to set the tempo. Whole BPM only.
 class TapButton : public juce::TextButton {
  public:
   std::function<float()> getBpm;
@@ -54,21 +54,17 @@ class TapButton : public juce::TextButton {
   void mouseDrag(const juce::MouseEvent& e) override {
     const int dy = -e.getDistanceFromDragStartY();
     if (!dragging_ && std::abs(dy) > 4) { dragging_ = true; if (resetTaps) resetTaps(); }
-    if (dragging_) {  // 6 px per step: 1 BPM, Shift 0.1 BPM (like the wheel)
-      const float step = e.mods.isShiftDown() ? 0.1f : 1.f;
-      const float base = e.mods.isShiftDown() ? startBpm_ : std::round(startBpm_);
-      set(base + step * (float)(dy / 6));
-    }
+    if (dragging_) set(std::round(startBpm_) + (float)(dy / 6));  // 6 px per BPM
   }
   void mouseUp(const juce::MouseEvent& e) override { if (dragging_ && resetTaps) resetTaps(); dragging_ = false; juce::TextButton::mouseUp(e); }
   void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override {
     const float d = std::abs(w.deltaY) > std::abs(w.deltaX) ? w.deltaY : -w.deltaX;
     if (d == 0.f || !getBpm) return;
     if (resetTaps) resetTaps();
-    set(getBpm() + (d > 0.f ? 1.f : -1.f) * (e.mods.isShiftDown() ? 0.1f : 1.f));
+    set(std::round(getBpm()) + (d > 0.f ? 1.f : -1.f));
   }
  private:
-  void set(float v) { if (setBpm) setBpm(juce::jlimit(20.f, 400.f, std::round(v * 10.f) / 10.f)); }
+  void set(float v) { if (setBpm) setBpm(juce::jlimit(20.f, 400.f, std::round(v))); }  // whole BPM
   bool dragging_ = false;
   float startBpm_ = 120.f;
 };

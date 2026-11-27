@@ -17,7 +17,7 @@ class SettingsContent : public juce::Component, private juce::Timer {
     tone_.setButtonText("Test tone on track 1 (440 Hz, -15 dBFS)");
     tone_.onClick = [this] { ctx_.bridge.testTone = tone_.getToggleState(); if (tone_.getToggleState()) ctx_.requireAudio("Test tone"); };
     bpm_.setSliderStyle(juce::Slider::IncDecButtons); bpm_.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 60, 26);
-    bpm_.setRange(20.0, 400.0, 0.5);
+    bpm_.setRange(20.0, 400.0, 1.0);
     tap_.setButtonText("Tap"); tap_.setTriggeredOnMouseDown(true);
     tap_.setTooltip("Tap in time (2 taps or more) to set the tempo");
     tap_.onClick = [this] { ctx_.tapTempo(); sync(); };
