@@ -325,8 +325,6 @@ void MasterStrip::paint(juce::Graphics& g) {
   auto r = getLocalBounds().toFloat();
   t.drawBrush(g, r);
   g.setColour(juce::Colours::black); g.fillRect(0, 0, 2, getHeight());
-  g.setGradientFill(juce::ColourGradient(t.am().withAlpha(t.glowAlpha(0.11f)), 0, 0, juce::Colours::transparentBlack, 24, 0, false));
-  g.fillRect(2, 0, 24, getHeight());
 }
 
 void MasterStrip::resized() {

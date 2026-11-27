@@ -517,25 +517,31 @@ void Theme::drawFaderCap(juce::Graphics& g, juce::Rectangle<float> cap) const {
 // ---------------------------------------------------------------- console buttons, toggle switches
 juce::Rectangle<float> Theme::drawConsoleButton(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour cap, bool on, bool pressed,
                                                 bool hover, bool enabled) const {
-  const float cr = rad(4.f);
+  // Bezel and cap share one centre of curvature (the cap's radius is the bezel's less the inset), so the ring between
+  // them is even all the way round, also when Round corners turn small keys into circles.
+  {  // fully rounded and nearly square (Round corners on the small strip keys): a true circle, not a squashed oval
+    const float m = juce::jmin(r.getWidth(), r.getHeight());
+    if (rad(4.f) + 1.f >= m * 0.5f && std::abs(r.getWidth() - r.getHeight()) < m * 0.4f) r = r.withSizeKeepingCentre(m, m);
+  }
+  const float rb = juce::jmin(rad(4.f) + 1.f, r.getWidth() * 0.5f, r.getHeight() * 0.5f);
   // bezel: the recessed housing the cap sits in
-  g.setColour(juce::Colours::black); g.fillRoundedRectangle(r, cr + 1.f);
+  g.setColour(juce::Colours::black); g.fillRoundedRectangle(r, rb);
   g.setGradientFill(juce::ColourGradient(juce::Colour(0xff030303), 0.f, r.getY(), juce::Colour(0xff1c1c1f), 0.f, r.getBottom(), false));
-  g.fillRoundedRectangle(r.reduced(1.f), cr);
-  g.setColour(juce::Colours::white.withAlpha(0.07f)); g.drawHorizontalLine((int)r.getBottom() - 1, r.getX() + cr, r.getRight() - cr);
+  g.fillRoundedRectangle(r.reduced(1.f), juce::jmax(0.5f, rb - 1.f));
   const float inset = juce::jlimit(1.5f, 3.f, r.getHeight() * 0.1f);
   auto c = r.reduced(inset);
+  const float cr = juce::jmin(juce::jmax(juce::jmin(rad(4.f), 1.5f), rb - inset), c.getWidth() * 0.5f, c.getHeight() * 0.5f);
   juce::Colour face = cap;
   if (!enabled) face = face.withMultipliedSaturation(0.4f).withMultipliedBrightness(0.8f);
   if (hover && enabled && !on) face = face.brighter(0.18f);
   if (pressed) c = c.withTrimmedTop(1.f);
   else {  // the cap stands up: its lower edge shows as a darker skirt
+    g.setColour(face.darker(1.2f)); g.fillRoundedRectangle(c, cr);
     c = c.withTrimmedBottom(1.5f);
-    g.setColour(face.darker(1.2f)); g.fillRoundedRectangle(c.translated(0.f, 1.5f), cr);
   }
   if (on && glow > 0.f) {  // lit from behind: a little light spills into the bezel round the cap (kept inside the bezel)
     juce::Graphics::ScopedSaveState ss(g);
-    juce::Path bz; bz.addRoundedRectangle(r.reduced(1.f), cr); g.reduceClipRegion(bz);
+    juce::Path bz; bz.addRoundedRectangle(r.reduced(1.f), juce::jmax(0.5f, rb - 1.f)); g.reduceClipRegion(bz);
     drawGlow(g, c, cap, inset * 2.2f, 0.45f, cr);
   }
   juce::ColourGradient fg(face.brighter(on ? 0.45f : 0.2f), 0.f, c.getY(), face.darker(on ? 0.25f : 0.45f), 0.f, c.getBottom(), false);
@@ -554,7 +560,14 @@ juce::Rectangle<float> Theme::drawConsoleButton(juce::Graphics& g, juce::Rectang
                                            0.f, c.getY() + c.getHeight() * 0.48f, false));
     g.fillRect(c.withHeight(c.getHeight() * 0.48f));
   }
-  g.setColour(juce::Colours::white.withAlpha(on ? 0.45f : 0.16f)); g.drawHorizontalLine((int)c.getY() + 1, c.getX() + cr, c.getRight() - cr);
+  {  // a thin highlight along the top rim, following the curve (a straight hairline stuck out on round caps)
+    juce::Graphics::ScopedSaveState ss(g);
+    juce::Path cp; cp.addRoundedRectangle(c, cr); g.reduceClipRegion(cp);
+    juce::Path rim; rim.addRoundedRectangle(c.reduced(0.5f).translated(0.f, 1.f), juce::jmax(0.5f, cr - 0.5f));
+    g.setColour(juce::Colours::white.withAlpha(on ? 0.4f : 0.14f));
+    g.saveState(); g.reduceClipRegion(c.withHeight(c.getHeight() * 0.5f).toNearestInt());
+    g.strokePath(rim, juce::PathStrokeType(1.f)); g.restoreState();
+  }
   g.setColour(juce::Colours::black.withAlpha(0.75f)); g.drawRoundedRectangle(c, cr, 1.f);
   return c;
 }
